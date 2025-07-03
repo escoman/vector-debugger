@@ -1,0 +1,7 @@
+display_name = "Vector-06C"
+authors = "svofski"
+supported_extensions = "rom|r0m|fdd|edd|wav"
+corename = "v06x"
+manufacturer = "USSR"
+categories = "Emulator"
+systemname = "Vector-06C"
