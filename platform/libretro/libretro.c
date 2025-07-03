@@ -304,7 +304,7 @@ static void update_input(void)
     }
 
     Emulator_SetJoysticks(state[0], state[1]);
-    log_cb(RETRO_LOG_DEBUG, "state0=%02x state1=%02x\n", state[0], state[1]);
+    //log_cb(RETRO_LOG_DEBUG, "state0=%02x state1=%02x\n", state[0], state[1]);
 }
 
 
@@ -483,28 +483,38 @@ bool retro_load_game_special(unsigned type, const struct retro_game_info *info, 
 
 size_t retro_serialize_size(void)
 {
-    return 0;
+    size_t sz = Emulator_ExportState(NULL, 0);
+    log_cb(RETRO_LOG_DEBUG, "retro_serialize_size: %I64u\n", sz);
+    return sz;
 }
 
-bool retro_serialize(void *data_, size_t size)
+bool retro_serialize(void *data, size_t size)
 {
-    return false;
+    size_t sz = Emulator_ExportState(data, size);
+    log_cb(RETRO_LOG_DEBUG, "retro_serialize: set size=%I64u result size=%I64u\n", size, sz);
+    return sz <= size;
 }
 
-bool retro_unserialize(const void *data_, size_t size)
+bool retro_unserialize(const void *data, size_t size)
 {
-    return false;
+    bool res =  Emulator_RestoreState(data, size);
+    log_cb(RETRO_LOG_DEBUG, "retro_unserialize: size=%I64u result=%d\n", size, res);
+    return res;
 }
 
 void *retro_get_memory_data(unsigned id)
 {
-    (void)id;
+    if (id == RETRO_MEMORY_SYSTEM_RAM) {
+        return Emulator_GetMemory();
+    }
     return NULL;
 }
 
 size_t retro_get_memory_size(unsigned id)
 {
-    (void)id;
+    if (id == RETRO_MEMORY_SYSTEM_RAM) {
+        return Emulator_GetMemSize();
+    }
     return 0;
 }
 

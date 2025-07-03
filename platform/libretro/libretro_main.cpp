@@ -183,30 +183,34 @@ extern "C" void Emulator_Reset(int blkvvod)
                 Board::ResetMode::BLKVVOD : Board::ResetMode::BLKSBR);
 }
 
-//extern "C" JNIEXPORT jbyteArray JNICALL
-//Java_com_svofski_v06x_cpp_Emulator_ExportState(JNIEnv * env, jobject) {
-//    std::vector<uint8_t> state;
-//    lator.save_state(state);
-//    jbyteArray out_state = env->NewByteArray(state.size());
-//
-//    jbyte * jbytes = env->GetByteArrayElements(out_state, NULL);
-//    std::copy(state.begin(), state.end(), jbytes);
-//
-//    env->ReleaseByteArrayElements(out_state, jbytes, JNI_COMMIT);
-//
-//    return out_state;
-//}
-//
-//extern "C" JNIEXPORT jboolean JNICALL
-//Java_com_svofski_v06x_cpp_Emulator_RestoreState(JNIEnv * env, jobject, jbyteArray in_state) {
-//    jsize size = env->GetArrayLength(in_state);
-//    jbyte * jbytes = env->GetByteArrayElements(in_state, NULL);
-//
-//    std::vector<uint8_t> state((uint8_t *)jbytes, (uint8_t *)jbytes + size);
-//    jboolean result = lator.restore_state(state);
-//
-//    env->ReleaseByteArrayElements(in_state, jbytes, JNI_ABORT);
-//
-//    return result;
-//}
+// export to data if data_sz <= state.size()
+// return state.size()
+// call with data_sz == 0 to measure state size
+extern "C" size_t Emulator_ExportState(uint8_t *data, size_t data_sz)
+{
+    std::vector<uint8_t> state;
+    lator.save_state(state);
 
+    if (state.size() <= data_sz) {
+        std::copy(state.begin(), state.end(), data);
+    }
+
+
+    return state.size();
+}
+
+extern "C" bool Emulator_RestoreState(const void *data, size_t data_sz)
+{
+    std::vector<uint8_t> state((uint8_t*)data, (uint8_t*)data + data_sz);
+    return lator.restore_state(state);
+}
+
+extern "C" size_t Emulator_GetMemSize()
+{
+    return memory.buffer_size();
+}
+
+extern "C" void * Emulator_GetMemory()
+{
+    return (void *)memory.buffer();
+}

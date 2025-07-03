@@ -21,6 +21,10 @@ void Emulator_KeyUp(int scancode);
 void Emulator_LoadAsset(const uint8_t *data, size_t data_sz, int kind, int org);
 void Emulator_Reset(int blkvvod);
 void Emulator_SetJoysticks(int joy0e, int joy0f);
+size_t Emulator_ExportState(uint8_t *data, size_t data_sz);
+bool Emulator_RestoreState(const void *data, size_t data_sz);
+size_t Emulator_GetMemSize(void);
+void * Emulator_GetMemory(void);
 
 #ifdef __cplusplus
 }
