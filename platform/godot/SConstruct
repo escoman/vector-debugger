@@ -11,7 +11,7 @@ if Platform() == 'windows':
 
 # Define our options
 opts.Add(EnumVariable('target', "Compilation target", 'debug', ['d', 'debug', 'r', 'release']))
-opts.Add(EnumVariable('platform', "Compilation platform", '', ['', 'windows', 'cross-mingw', 'cross-mingw64', 'nuwen-mingw64', 'x11', 'linux', 'osx']))
+opts.Add(EnumVariable('platform', "Compilation platform", '', ['', 'windows', 'cross-mingw', 'cross-mingw64', 'nuwen-mingw64', 'x11', 'linux', 'osx', 'web']))
 opts.Add(EnumVariable('p', "Compilation target, alias for 'platform'", '', ['', 'windows', 'cross-mingw', 'x11', 'linux', 'osx']))
 opts.Add(BoolVariable('use_llvm', "Use the LLVM / Clang compiler", 'no'))
 opts.Add(PathVariable('target_path', 'The path where the lib is installed.', 'v06x/bin/'))
@@ -146,6 +146,39 @@ elif env['platform'] == "nuwen-mingw64":
     #    env.Append(CCFLAGS = ['-EHsc', '-D_DEBUG', '-MDd'])
     #else:
     #    env.Append(CCFLAGS = ['-O2', '-EHsc', '-DNDEBUG', '-MD'])
+elif env['platform'] == "web":
+    # Use generic POSIX build toolchain for Emscripten.
+    #custom_tools = ["cc", "c++", "ar", "link", "textfile", "zip"]
+    env['CXX']='em++'
+    env['CC']='emcc'
+    env.Append(LINKFLAGS = ['-static'])
+    env['target_path'] += 'web/'
+    env.Append(CCFLAGS = ["-s", "SIDE_MODULE=2"])
+    env.Append(LINKFLAGS = ["-s", "SIDE_MODULE=2"])
+    env.Append(CCFLAGS = ["-s", "EXPORT_ALL=1"])
+    env.Append(LINKFLAGS = ["-s", "EXPORT_ALL=1"])
+
+    env.Append(CCFLAGS = ["-s", "LINKABLE"])
+    env.Append(LINKFLAGS = ["-s", "LINKABLE"])
+    env.Append(CCFLAGS = ["-s", "TOTAL_MEMORY=1024MB"])
+    env.Append(LINKFLAGS = ["-s", "TOTAL_MEMORY=1024MB"])
+    #env["ENV"]["EMCC_FORCE_STDLIBS"] = "libc,libc++,libc++abi"
+    # This makes sure to keep the session environment variables on windows,
+    # that way you can run scons in a vs 2017 prompt and it will find all the required tools
+    env.Append(ENV = os.environ)
+
+    if env['target'] in ('debug', 'd'):
+        env.Append(CXXFLAGS = ['-std=c++17'])
+        env.Append(CCFLAGS = ['-DWITHOUT_COREDSP=1']) 
+        env.Append(CCFLAGS = ['-fPIC', '-g3','-Og'])
+    else:
+        env.Append(CXXFLAGS = ['-std=c++17'])
+        env.Append(CCFLAGS = ['-fPIC', '-g','-O3'])
+        env.Append(CCFLAGS = ['-DWITHOUT_COREDSP=1']) # scalar implementation of fir is fine, at least on desktop
+        #env.Append(LINKFLAGS = ['-s']) # strip binary in release version
+
+    #env['SHLIBSUFFIX'] = '.wasm'
+
 
 # make sure our binding library is properly includes
 env.Append(CPPPATH=['.', godot_headers_path,

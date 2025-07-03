@@ -147,6 +147,12 @@ extern "C" void Emulator_LoadAsset(const uint8_t *data, size_t data_sz, int kind
     }
 }
 
+extern "C" void Emulator_SetJoysticks(int joy0e, int joy0f)
+{
+    lator.set_joysticks((int)joy0e, (int)joy0f);
+}
+
+
 //// dir or fdd
 //godot_variant V06X_Mount(godot_object* p_instance, void* p_method_data,
 //  void* p_user_data, int p_num_args, godot_variant** p_args)

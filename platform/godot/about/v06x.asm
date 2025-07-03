@@ -37,9 +37,9 @@ Restart:
 		sta hscroll_x0
 	        sta vscroll_y0
 		
-	
-		mvi c, $ff
-		call cls8000
+	        call cls
+		;mvi c, $ff
+		;call cls8000
 		
 		;mvi e, $80
 		;mvi a, $ff
@@ -295,7 +295,14 @@ vcolumn_sp      .equ .+1
                 ei
                 ret
                 
-
+cls:            mvi c, $ff
+                call cls8000
+                ;ret
+                lxi h,  $a000
+                mvi a, 0
+                sta cls_cond + 1
+                mvi c, 0
+                jmp cls80_1
                 
 cls8000
 		lxi h, $8000

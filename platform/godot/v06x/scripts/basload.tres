@@ -138,5 +138,5 @@ else {
 
     keytyper.types([
         "F12", 50,
-        "C","L","O","A","D","\001Left Shift","2","2","\002Left Shift","Return"])
+        "C","L","O","A","D","\001Left Shift","2","2","\002Left Shift","Return", 100, "R","U","N","Return"])
 }

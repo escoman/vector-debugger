@@ -203,9 +203,9 @@ def hook_2b60()
 }
 
 // (not really) close file
-def hook_2b8e()
+def hook_1b4f()
 {
-    puts("close file")
+    puts("close file (1b4f)")
     basfile_loaded = false
     if (cas_write_mode == 1 && cas_write_stream.size() > 0) {
         puts("have cas_write_stream to offload, size=" + to_string(cas_write_stream.size()))
@@ -229,15 +229,15 @@ def wavloaded_func(dummy)
 // basic read byte 0x2b05
 global signature_2b05 = [0xc5, 0xd5, 0x0e, 0x00, 0x57, 0xdb, 0x01]
 
-// basic close file 0x2b8e
-global signature_2b8e = [0xc5, 0x06, 0x00, 0x3a, 0x20, 0x3c]
+// basic close file (relay clack) 0x1b4f
+global signature_1b4f = [0x3e, 0xe6, 0xcd, 0x5e, 0x2b]
 
 // basic write byte 0x2b60
 global signature_2b60 = [0xc5, 0xd5, 0xf5, 0x57, 0x0e, 0x08]
 
 global hooks = [to_string(0x2b05): [signature_2b05, hook_2b05],
              to_string(0x2b60): [signature_2b60, hook_2b60],
-             to_string(0x2b8e): [signature_2b8e, hook_2b8e]]
+             to_string(0x1b4f): [signature_1b4f, hook_1b4f]]
 
 def breakfunc(dummy)
 {

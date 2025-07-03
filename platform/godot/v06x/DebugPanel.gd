@@ -443,7 +443,7 @@ func code_panel_menu_id_pressed(id):
 		CODE_PANEL_MENU_ID.REMOVE_ALL_WPS:
 			del_all_watchpoints()
 			
-func _physics_process(delta):
+func _physics_process(_delta):
 	if not main.debug_is_ui_break() and main.debug_is_break():
 		main.debug_set_ui_break(true)
 		var pc = get_reg_pc()
@@ -685,5 +685,5 @@ func _on_wp_value_size_pressed():
 	else:
 		wp_value_size.text = "byte"
 
-func _on_trace_log_filter_item_selected(index):
+func _on_trace_log_filter_item_selected(_index):
 	trace_log_update(true)

@@ -47,7 +47,7 @@ void Board::init_bootrom(const uint8_t* src, size_t size)
 #if !defined(_MSC_VER)
     std::vector<uint8_t> userboot = util::load_binfile(Options.bootromfile);
     if (userboot.size() > 0) {
-        printf("User bootrom: %s (%lu bytes)\n", Options.bootromfile.c_str(),
+        printf("User bootrom: %s (%I64u bytes)\n", Options.bootromfile.c_str(),
           userboot.size());
         this->boot = userboot;
     } else
@@ -57,15 +57,15 @@ void Board::init_bootrom(const uint8_t* src, size_t size)
         for (unsigned i = 0; i < size; ++i) {
             this->boot[i] = src[i];
         }
-        printf("init_bootrom: size=%lu\n", this->boot.size());
+        printf("init_bootrom: size=%I64u\n", this->boot.size());
     }
 }
 
 void Board::set_bootrom(const std::vector<uint8_t>& bootbytes)
 {
-    printf("Board::set_bootrom bootbytes.size()=%lu\n", bootbytes.size());
+    printf("Board::set_bootrom bootbytes.size()=%I64u\n", bootbytes.size());
     this->boot = bootbytes;
-    printf("Board::set_bootrom boot.size()=%lu\n", boot.size());
+    printf("Board::set_bootrom boot.size()=%I64u\n", boot.size());
 }
 
 void Board::reset(Board::ResetMode mode)
@@ -663,7 +663,7 @@ std::string Board::remove_breakpoint(int type, int addr, int kind)
             Breakpoint needle(addr, kind);
             auto& v = this->breakpoints;
             v.erase(std::remove(v.begin(), v.end(), needle), v.end());
-            printf("deleted breakpoint @%04x, kind=%d, total %lu\n", addr, kind,
+            printf("deleted breakpoint @%04x, kind=%d, total %I64u\n", addr, kind,
               v.size());
         }
             return "OK";

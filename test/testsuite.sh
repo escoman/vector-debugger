@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e
+#set -e
 
 [ ! -z "$BUILDDIR" ] || BUILDDIR=../build
 [ ! -z "$V06X" ] || V06X=v06x

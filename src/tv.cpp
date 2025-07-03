@@ -1,7 +1,7 @@
 #include <string>
 #include <inttypes.h>
 #include "globaldefs.h"
-#if !defined(__ANDROID_NDK__) && !defined(__GODOT__)
+#if !defined(__ANDROID_NDK__) && !defined(__GODOT__) && !defined(__LIBRETRO__)
 #include "SDL.h"
 #include "SDL_opengl.h"
 #include "icon.h"
@@ -45,7 +45,7 @@ TV::~TV()
 
 int TV::probe()
 {
-#if !defined(__ANDROID_NDK__) && !defined(__GODOT__)
+#if !defined(__ANDROID_NDK__) && !defined(__GODOT__) && !defined(__LIBRETRO__)
     static int display_in_use = 0; /* Only using first display */
 
     int i, display_mode_count;
@@ -86,7 +86,7 @@ void TV::init()
     if (Options.novideo) {
         return;
     }
-#if !defined(__ANDROID_NDK__) && !defined(__GODOT__)
+#if !defined(__ANDROID_NDK__) && !defined(__GODOT__) && !defined(__LIBRETRO__)
 
     SDL_Init(SDL_INIT_VIDEO);
 #if 0
@@ -110,7 +110,7 @@ void TV::init()
 
 void TV::init_regular()
 {
-#if !defined(__ANDROID_NDK__) && !defined(__GODOT__)
+#if !defined(__ANDROID_NDK__) && !defined(__GODOT__) && !defined(__LIBRETRO__)
     int window_options = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
     int renderer_options = SDL_RENDERER_ACCELERATED;
     if (Options.vsync) {
@@ -303,7 +303,7 @@ void TV::handle_window_event(SDL_Event & event)
 
 void TV::toggle_fullscreen()
 {
-#if !defined(__ANDROID_NDK__) && !defined(__GODOT__)
+#if !defined(__ANDROID_NDK__) && !defined(__GODOT__) && !defined(__LIBRETRO__)
     int windowflags = SDL_GetWindowFlags(this->window);
 #if __MACOSX__
     /* on mac only this works */
@@ -336,7 +336,7 @@ void TV::save_frame(std::string path)
 }
 
 uint32_t* TV::pixels() const {
-#if !defined(__ANDROID_NDK__) && !defined(__GODOT__)
+#if !defined(__ANDROID_NDK__) && !defined(__GODOT__) && !defined(__LIBRETRO__)
     if (!this->bmp) {
         int pitch;
         SDL_LockTexture(this->texture[this->texture_n], NULL, 
@@ -348,7 +348,7 @@ uint32_t* TV::pixels() const {
 
 void TV::render_with_blend(int src_alpha)
 {
-#if !defined(__ANDROID_NDK__) && !defined(__GODOT__)
+#if !defined(__ANDROID_NDK__) && !defined(__GODOT__) && !defined(__LIBRETRO__)
     if (Options.opengl) {
         printf("render_with_blend not supported on opengl");
         return;
@@ -384,7 +384,7 @@ void TV::render_single()
 
 void TV::render_single_regular()
 {
-#if !defined(__ANDROID_NDK__) && !defined(__GODOT__)
+#if !defined(__ANDROID_NDK__) && !defined(__GODOT__) && !defined(__LIBRETRO__)
     /* render single frame */
     int t = this->texture_n;
     SDL_UnlockTexture(this->texture[t]);
@@ -477,7 +477,7 @@ void TV::render(int executed)
                 if (executed) render_single();
             }
         }
-#if !defined(__ANDROID_NDK__) && !defined(__GODOT__)
+#if !defined(__ANDROID_NDK__) && !defined(__GODOT__) && !defined(__LIBRETRO__)
         /* it is actually better to call SDL_RenderPresent
          * because it maintains the pace. Otherwise we use 100% CPU
          * when stopped in debugger. */

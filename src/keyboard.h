@@ -7,7 +7,7 @@
 
 // TODO: the two parts are nearly identical, see if they can be merged
 
-#if !defined(__ANDROID_NDK__) && !defined(__GODOT__)
+#if !defined(__ANDROID_NDK__) && !defined(__GODOT__) && !defined(__LIBRETRO__)
 
 /* SDL keyboard */
 
@@ -230,7 +230,7 @@ private:
     }
 };
 
-#elif defined(__ANDROID_NDK__) || defined(__GODOT__)
+#elif defined(__ANDROID_NDK__) || defined(__GODOT__) || defined(__LIBRETRO__)
 
 #include "event.h"
 

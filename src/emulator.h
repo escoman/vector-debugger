@@ -1,4 +1,4 @@
-#if !defined(__ANDROID__) && !defined(__GODOT__)
+#if !defined(__ANDROID__) && !defined(__GODOT__) && !defined(__LIBRETRO__)
 #include "SDL.h"
 
 #include <boost/thread.hpp>
@@ -51,7 +51,7 @@ private:
 
     Board & board;
 
-#if !defined(__ANDROID__) && !defined(__GODOT__)
+#if !defined(__ANDROID__) && !defined(__GODOT__) && !defined(__LIBRETRO__)
     boost::thread thread;
     boost::sync_queue<threadevent> ui_to_engine_queue;
     boost::sync_priority_queue<threadevent> engine_to_ui_queue;
@@ -73,7 +73,7 @@ private:
 #endif
 
 private:
-#if !defined(__ANDROID__) && !defined(__GODOT__)
+#if !defined(__ANDROID__) && !defined(__GODOT__) && !defined(__LIBRETRO__)
     void threadfunc();
     void handle_threadevent(threadevent & ev);
     void handle_render(threadevent & event, bool & stopping);

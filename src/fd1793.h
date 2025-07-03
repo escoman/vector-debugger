@@ -400,7 +400,7 @@ public:
         if (!this->isReady()) {
             return false;
         }
-        this->tracksPerSide = (this->dsk->size() >> 10) / 2 * FDD_NSECTORS;
+        this->tracksPerSide = (this->dsk->size() >> 10) / (2 * FDD_NSECTORS);
         this->numHeads = 2;
         this->sectorSize = 1024;
         this->sectorsPerTrack = 5;
@@ -480,6 +480,7 @@ public:
     //
     FD1793() : _dsksel(0)
     {
+        LINGER_BEFORE = 0;
         LINGER_AFTER = 2;
         _lingertime = 3;
         _stepdir = 1;

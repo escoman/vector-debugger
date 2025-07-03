@@ -53,8 +53,39 @@ static void fallback_log(enum retro_log_level level, const char *fmt, ...)
 
 static retro_environment_t environ_cb;
 
+///* Callback type passed in RETRO_ENVIRONMENT_SET_KEYBOARD_CALLBACK.
+// * Called by the frontend in response to keyboard events.
+// * down is set if the key is being pressed, or false if it is being released.
+// * keycode is the RETROK value of the char.
+// * character is the text character of the pressed key. (UTF-32).
+// * key_modifiers is a set of RETROKMOD values or'ed together.
+// *
+// * The pressed/keycode state can be indepedent of the character.
+// * It is also possible that multiple characters are generated from a
+// * single keypress.
+// * Keycode events should be treated separately from character events.
+// * However, when possible, the frontend should try to synchronize these.
+// * If only a character is posted, keycode should be RETROK_UNKNOWN.
+// *
+// * Similarily if only a keycode event is generated with no corresponding
+// * character, character should be 0.
+// */
+//typedef void (RETRO_CALLCONV *retro_keyboard_event_t)(bool down, unsigned keycode,
+//      uint32_t character, uint16_t key_modifiers);
+
+
+void RETRO_CALLCONV retro_keyboard_event(bool down, unsigned keycode, uint32_t character, uint16_t key_modifiers)
+{
+    if (log_cb) {
+        log_cb(RETRO_LOG_DEBUG, "retro_keyboard_event: down=%d keycode=%d char=%d modifiers=$%04x\n",
+                down, keycode, character, key_modifiers);
+    }
+}
+
 void retro_init(void)
 {
+    log_cb(RETRO_LOG_INFO, "retro_init:\n");
+
     frame_buf = (uint8_t*)malloc(VIDEO_PIXELS * sizeof(uint32_t));
     audio_buf = (int16_t*)malloc(SAMPLES_PER_FRAME * 2 * sizeof(int16_t));
     float_audio_buf = (float*)malloc(SAMPLES_PER_FRAME * 2 * sizeof(float));
@@ -67,7 +98,8 @@ void retro_init(void)
         snprintf(retro_base_directory, sizeof(retro_base_directory), "%s", dir);
     }
 
-    log_cb(RETRO_LOG_INFO, "retro_init:\n");
+    static struct retro_keyboard_callback keyboard_callback = {retro_keyboard_event};
+    environ_cb(RETRO_ENVIRONMENT_SET_KEYBOARD_CALLBACK, &keyboard_callback);
 }
 
 void retro_deinit(void)
@@ -155,14 +187,47 @@ void retro_set_environment(retro_environment_t cb)
             log_cb(RETRO_LOG_INFO, "retro_set_environment: using fallback log\n");
     }
 
-    static const struct retro_controller_description controllers[] = {
-        { "Nintendo DS", RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 0) },
+    // why not start without a game
+    bool no_rom = true;
+    environ_cb(RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME, &no_rom);
+
+//
+//    static const struct retro_controller_description controllers[] = {
+//        { "Nintendo DS", RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 0) },
+//    };
+//
+//    static const struct retro_controller_info ports[] = {
+//        { controllers, 1 },
+//        { NULL, 0 },
+//    };
+
+    static const struct retro_controller_description port_user[] = {
+        { "None",              RETRO_DEVICE_NONE },
+        { "Joystick",          RETRO_DEVICE_JOYPAD },
+        { 0 },
     };
 
-    static const struct retro_controller_info ports[] = {
-        { controllers, 1 },
-        { NULL, 0 },
+    static const struct retro_controller_description port_kbd[] = {
+        { "Keyboard",         RETRO_DEVICE_KEYBOARD },
+        { "Joystick",          RETRO_DEVICE_JOYPAD },
+        { 0 },
     };
+
+    static struct retro_controller_info ports[] =
+    {
+        {
+            .types = port_kbd,
+            .num_types = 2
+        },
+        {
+            .types = port_user,
+            .num_types = 3
+        },
+        {
+            NULL, 0
+        }
+    };
+
 
     environ_cb(RETRO_ENVIRONMENT_SET_CONTROLLER_INFO, (void*)ports);
 
@@ -200,9 +265,46 @@ void retro_reset(void)
     Emulator_Reset(BLKVVOD);
 }
 
+static uint8_t keydown[350];
+
 static void update_input(void)
 {
+    input_poll_cb();
 
+    //if (game_data && framectr > 2) {
+    //}
+    //
+    for (int key = 0; key < 350; ++key)  // Safe key range
+    {
+        if (input_state_cb(0, RETRO_DEVICE_KEYBOARD, 0, key))
+        {
+            if (!keydown[key]) {
+                Emulator_KeyDown(key);
+                keydown[key] = 1;
+            }
+            //fprintf(stderr, "Key RETROK_%d pressed\n", key);
+        }
+        else if (keydown[key]) {
+            keydown[key] = 0;
+            Emulator_KeyUp(key);
+        }
+    }
+
+    // sticks
+    uint8_t state[2];
+    for (int pad = 0; pad < 2; ++pad) {
+        state[pad] = 0xff; 
+                                    //port device              index  id
+        state[pad] &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT) << 0);
+        state[pad] &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT) << 1);
+        state[pad] &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP) << 2);
+        state[pad] &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN) << 3);
+        state[pad] &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A) << 6);
+        state[pad] &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B) << 7);
+    }
+
+    Emulator_SetJoysticks(state[0], state[1]);
+    log_cb(RETRO_LOG_DEBUG, "state0=%02x state1=%02x\n", state[0], state[1]);
 }
 
 
@@ -253,6 +355,7 @@ void shit_audio()
 }
 
 
+
 void retro_run(void)
 {
     update_input();
@@ -261,10 +364,6 @@ void retro_run(void)
     if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &updated) && updated)
         check_variables();
 
-    input_poll_cb();
-
-    //if (game_data && framectr > 2) {
-    //}
 
     cadence_pos = (cadence_pos + 1) % 6;
     if (cadence_pos == 1) {
@@ -286,17 +385,26 @@ void retro_run(void)
 
 }
 
+        // port, device, index, id, description 
+#define DESCRIPTOR_BLOCK(user) \
+        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT,  "Left" },\
+        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP,    "Up" },\
+        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN,  "Down" },\
+        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT, "Right" },\
+        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B,     "B" },\
+        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A,     "A" },\
+        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START, "Reset (F12, BLK+SBR)" },\
+        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_SELECT,"F1" }
+
 bool retro_load_game(const struct retro_game_info *info)
 {
-    struct retro_input_descriptor desc[] = {
-        { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT,  "Left" },
-        { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP,    "Up" },
-        { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN,  "Down" },
-        { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT, "Right" },
-        { 0 },
+    struct retro_input_descriptor descriptors[] = {
+        DESCRIPTOR_BLOCK(0),
+        DESCRIPTOR_BLOCK(1),
+        { 0 }
     };
 
-    environ_cb(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, desc);
+    environ_cb(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, descriptors);
 
     enum retro_pixel_format fmt = RETRO_PIXEL_FORMAT_XRGB8888;
     if (!environ_cb(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &fmt))
@@ -312,7 +420,6 @@ bool retro_load_game(const struct retro_game_info *info)
         Emulator_Reset(BLKVVOD);
         return true;
     }
-
 
     if (environ_cb(RETRO_ENVIRONMENT_GET_GAME_INFO_EXT, &info_ext) &&
             info_ext && (info_ext->file_in_archive ? info_ext->archive_file : info_ext->full_path)) {

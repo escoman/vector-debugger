@@ -5,7 +5,7 @@
 #include "memory.h"
 #include "vio.h"
 #include "board.h"
-#if !defined(__ANDROID_NDK__) && !defined(__GODOT__)
+#if !defined(__ANDROID_NDK__) && !defined(__GODOT__) && !defined(__LIBRETRO__)
 #include "SDL.h"
 #endif
 
@@ -72,7 +72,7 @@ void create_timer()
         /* Used in tests, event loop kick-spins itself without timers. */
         return;
     }
-#if !defined(__ANDROID_NDK__) && !defined(__GODOT__)
+#if !defined(__ANDROID_NDK__) && !defined(__GODOT__) && !defined(__LIBRETRO__)
     if (Options.nosound) {
         printf("create_timer(): nosound is set, will use SDL timer for frames\n");
         SDL_Init(SDL_INIT_TIMER);

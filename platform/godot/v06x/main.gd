@@ -14,6 +14,7 @@ const CAS : int = 12 # encapsulated BAS file
 const MIX_SAMPLERATE : int = 48000
 
 const V06X = preload("res://bin/v06x.gdns")
+#const V06X = preload("res://V06XStub.gd")
 onready var v06x : V06X = V06X.new()
 
 var texture : ImageTexture
@@ -95,6 +96,7 @@ func updateTexture(buttmap : PoolByteArray):
 	textureImage.data.data = buttmap
 	texture.set_data(textureImage)
 
+
 func _ready():
 	debug_panel.main = self
 	
@@ -169,6 +171,8 @@ func _ready():
 	install_basic_hooks() # generic basic hooks
 	
 	about_label.material = null # undemanding default material
+	
+	print("main.ready done")
 
 func _notification(what):
 	if what == MainLoop.NOTIFICATION_WM_QUIT_REQUEST:
@@ -189,7 +193,7 @@ func _on_joy_connection_changed(device_id, connected):
 		gamepad_label.name2 = Input.get_joy_name(device_id)
 		gamepad_label.enabled2 = connected
 
-func refresh_files(item):
+func refresh_files(_item):
 	$FileDialog._update_file_list()
 
 func poll_joy(cur_joy):
@@ -200,7 +204,7 @@ func poll_joy(cur_joy):
 		| (int(Input.is_joy_button_pressed(cur_joy, JOY_XBOX_A)) << 6) \
 		| (int(Input.is_joy_button_pressed(cur_joy, JOY_XBOX_B)) << 7))
 		
-func _physics_process(delta):
+func _physics_process(_delta):
 	if debug_ui_break:
 		return
 	
@@ -229,13 +233,13 @@ func _physics_process(delta):
 		Engine.target_fps = 50
 		Engine.iterations_per_second = 50
 	else:
-		Engine.target_fps = 200
-		Engine.iterations_per_second = 200
+		Engine.target_fps = 400
+		Engine.iterations_per_second = 400
 	
 
 # it's impossible to tell where exactly the drop happens,
 # mouse coordinates are all over the place
-func _on_files_dropped(files: PoolStringArray, screen: int):
+func _on_files_dropped(files: PoolStringArray, _screen: int):
 	if files.size() > 0:
 		dialog_device = 0
 		_on_FileDialog_file_selected(files[0])
@@ -246,7 +250,7 @@ func _on_load_asset_pressed(which: int):
 	dialog_device = which
 	$FileDialog.current_dir = loadedFileDir[dialog_device]
 	$FileDialog.window_title = titles[dialog_device]
-	$FileDialog.filters = ["*.rom,*.r0m,*.vec,*.bin,*.fdd,*.wav,*.bas,*.cas,*.asc"]
+	$FileDialog.filters = ["*.rom,*.r0m,*.vec,*.bin,*.fdd,*.edd,*.wav,*.bas,*.cas,*.asc"]
 	if dialog_device == DialogDevice.B:
 		$FileDialog.filters = ["*.fdd"]
 	elif dialog_device == DialogDevice.BOOT:
@@ -443,8 +447,8 @@ func _on_FileDialog_popup_hide():
 # check when a script requires opening a file dialog, e.g. a basic hook
 func script_check_file_dialog():
 	var requested: bool
-	var path: String
-	var mode: String
+	var path: String = ""
+	var mode: String = ""
 	requested = v06x.IsFileDialogRequested(path, mode)
 	if requested:
 		# Open FileDialog, the emulator is in paused state meanwhile
@@ -572,7 +576,7 @@ func load_state():
 	if file.file_exists("user://v06x.savestate"):
 		file.open("user://v06x.savestate", File.READ)
 		var buffer = file.get_buffer(file.get_len())
-		var res = v06x.RestoreState(buffer)
+		var _res = v06x.RestoreState(buffer)
 
 	load_config()
 	debug_panel.load_debug()

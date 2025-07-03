@@ -1,6 +1,6 @@
 #include <iostream>
 #include <string>
-#if !defined(__ANDROID_NDK__) && !defined(__GODOT__)
+#if !defined(__ANDROID_NDK__) && !defined(__GODOT__) && !defined(__LIBRETRO__)
 #include "boost/program_options.hpp"
 #include "boost/filesystem.hpp"
 #include "boost/property_tree/ptree.hpp"
@@ -22,7 +22,7 @@ _options Options =
     .eddfile = {},
     .max_frame = -1,
     .vsync = false,
-#if defined(__ANDROID__) || defined(__GODOT__)
+#if defined(__ANDROID__) || defined(__GODOT__) || defined(__LIBRETRO__)
     .novideo = true,
 #else
     .novideo = false,
@@ -39,7 +39,7 @@ _options Options =
     .nofilter = false,
 };
 
-#if !defined(__ANDROID_NDK__) && !defined(__GODOT__)
+#if !defined(__ANDROID_NDK__) && !defined(__GODOT__) && !defined(__LIBRETRO__)
 
 void options(int argc, char ** argv)
 {
