@@ -34,9 +34,11 @@
 #ifndef I8080_H
 #define I8080_H
 
+#include <cstdint>
+
 namespace i8080cpu {
 extern void i8080_init(void);
-int i8080_instruction(int * report_opcode);
+int i8080_instruction();
 int i8080_execute(int opcode);
 bool i8080_iff();   /* Inner interrupt enable flag, not the same as INTE */
 int i8080_cycles(void); /* Return number of cycles taken by the last instr */
@@ -67,6 +69,8 @@ extern void i8080_setreg_h(int h);
 extern void i8080_setreg_l(int l);
 extern void i8080_setreg_f(int f);
 extern void i8080_setreg_sp(int sp);
+extern uint8_t last_opcode;
+extern int trace_enable;
 }
 
 #include <vector>

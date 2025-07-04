@@ -96,9 +96,9 @@ void Board::reset(Board::ResetMode mode)
     }
 
     this->interrupt(false);
-    last_opcode = 0;
+    i8080cpu::last_opcode = 0;
     total_v_cycles = 0;
-    i8080_init();
+    i8080cpu::i8080_init();
 }
 
 void Board::interrupt(bool on)
@@ -112,10 +112,10 @@ bool Board::check_interrupt()
 {
     if (this->irq && i8080_iff()) {
         this->interrupt(false); // lower INTE which clears INT request on D65.2
-        if (this->last_opcode == 0x76) {
-            i8080_jump(i8080_pc() + 1);
+        if (i8080cpu::last_opcode == 0x76) {
+            i8080cpu::i8080_jump(i8080cpu::i8080_pc() + 1);
         }
-        this->instr_time += i8080_execute(0xff); // rst7
+        this->instr_time += i8080cpu::i8080_execute(0xff); // rst7
 
         return true;
     }
@@ -197,12 +197,12 @@ void Board::single_step(bool update_screen)
         this->instr_time = 0;
     }
 
-    auto v_cycles = i8080_instruction(&this->last_opcode);
+    auto v_cycles = i8080cpu::i8080_instruction();
     total_v_cycles += v_cycles;
     this->instr_time += v_cycles;
 
     int commit_time = -1, commit_time_pal = -1;
-    if (this->last_opcode == 0xd3) {
+    if (i8080cpu::last_opcode == 0xd3) {
         commit_time = (this->instr_time - 4) << 2;
         commit_time_pal = commit_time - 20;
     }

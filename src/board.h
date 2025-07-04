@@ -36,7 +36,6 @@ class Board
     int between;
     int instr_time;
     size_t total_v_cycles;
-    int last_opcode;
     int frame_no;
 
     const int* cadence_frames;

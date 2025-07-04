@@ -35,6 +35,16 @@
 #include "i8080_hal.h"
 #include <stdio.h>
 
+#ifdef __ESP32__
+#include "esp_attr.h"
+#else
+#define IRAM_ATTR
+#define DRAM_ATTR
+#endif
+
+// if enabled, call i8080_hal_io_output before the next i8080_execute()
+#define I8080_OUT_DELAYED  1
+
 #define RD_BYTE(addr) i8080_hal_memory_read_byte(addr)
 #define RD_OPCODE(addr) i8080_hal_memory_read_byte(addr, true)
 #define RD_WORD(addr) i8080_hal_memory_read_word(addr,false)
@@ -271,15 +281,28 @@ struct i8080 {
 
 #define PARITY(reg) parity_table[(reg)]
 
+DRAM_ATTR
 static struct i8080 cpu;
-
+DRAM_ATTR
 static uns32 work32;
+DRAM_ATTR
 static uns16 work16;
+DRAM_ATTR
 static uns8 work8;
+DRAM_ATTR
 static int index;
+DRAM_ATTR
 static uns8 carry, add;
+DRAM_ATTR
+uns8 last_opcode;
 
-int parity_table[] = {
+#if I8080_OUT_DELAYED
+DRAM_ATTR
+static int delayed_out_port;
+#endif
+
+DRAM_ATTR
+uint8_t parity_table[] = {
     1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1,
     0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0,
     0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0,
@@ -298,8 +321,11 @@ int parity_table[] = {
     1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1,
 };
 
-int half_carry_table[] = { 0, 0, 1, 0, 1, 0, 1, 1 };
-int sub_half_carry_table[] = { 0, 1, 1, 1, 0, 0, 0, 1 };
+DRAM_ATTR
+uint8_t half_carry_table[] = { 0, 0, 1, 0, 1, 0, 1, 1 };
+
+DRAM_ATTR
+uint8_t sub_half_carry_table[] = { 0, 1, 1, 1, 0, 0, 0, 1 };
 
 void i8080_init(void) {
     C_FLAG = 0;
@@ -312,8 +338,12 @@ void i8080_init(void) {
     UN5_FLAG = 0;
 
     PC = 0;
+    #if I8080_OUT_DELAYED
+    delayed_out_port = -1;
+    #endif
 }
 
+IRAM_ATTR
 static void i8080_store_flags(void) {
     if (S_FLAG) F |= F_NEG;      else F &= ~F_NEG;
     if (Z_FLAG) F |= F_ZERO;     else F &= ~F_ZERO;
@@ -325,6 +355,7 @@ static void i8080_store_flags(void) {
     F &= ~F_UN5;   // UN5_FLAG is always 0.
 }
 
+IRAM_ATTR
 static void i8080_retrieve_flags(void) {
     S_FLAG = F & F_NEG      ? 1 : 0;
     Z_FLAG = F & F_ZERO     ? 1 : 0;
@@ -333,8 +364,21 @@ static void i8080_retrieve_flags(void) {
     C_FLAG = F & F_CARRY    ? 1 : 0;
 }
 
+int trace_enable = 0;
+
+// this is a real life saver, otherwise instruction decoder is very slow
+#pragma GCC optimize("jump-tables")
+
+IRAM_ATTR
 int i8080_execute(int opcode) {
-    //printf("pc=%04x instr=%02x\n", PC, opcode);
+    #if I8080_OUT_DELAYED
+    if (delayed_out_port >= 0) {
+        i8080_hal_io_output(delayed_out_port, A);
+        delayed_out_port = -1;
+    }
+    #endif
+
+    //if (trace_enable) printf("pc=%04x i=%02x A=%02x BC=%04x\n", PC, opcode, A, BC);
     int cpu_cycles; (void)cpu_cycles;
     int v_cycles;
     switch (opcode) {
@@ -1646,7 +1690,11 @@ int i8080_execute(int opcode) {
         case 0xD3:            /* out port8 */
             cpu_cycles = 10;
             v_cycles = 12;
+            #if I8080_OUT_DELAYED
+            delayed_out_port = RD_BYTE(PC++);
+            #else
             i8080_hal_io_output(RD_BYTE(PC++), A);
+            #endif
             break;
 
         case 0xD4:            /* cnc addr */
@@ -2002,110 +2050,135 @@ int i8080_execute(int opcode) {
 #endif
 }
 
-int i8080_instruction(int * report_opcode) {
-    *report_opcode = RD_OPCODE(PC++);
-    return i8080_execute(*report_opcode);
+IRAM_ATTR
+int i8080_instruction() {
+    last_opcode = RD_OPCODE(PC++);
+    return i8080_execute(last_opcode);
 }
 
+IRAM_ATTR
 void i8080_jump(int addr) {
     PC = addr & 0xffff;
 }
 
+IRAM_ATTR
 int i8080_pc(void) {
     return PC;
 }
 
+IRAM_ATTR
 int i8080_regs_bc(void) {
     return BC;
 }
 
+IRAM_ATTR
 int i8080_regs_de(void) {
     return DE;
 }
 
+IRAM_ATTR
 int i8080_regs_hl(void) {
     return HL;
 }
 
+IRAM_ATTR
 int i8080_regs_sp(void) {
     return SP;
 }
 
+IRAM_ATTR
 int i8080_regs_a(void) {
     return A;
 }
 
+IRAM_ATTR
 int i8080_regs_b(void) {
     return B;
 }
 
+IRAM_ATTR
 int i8080_regs_c(void) {
     return C;
 }
 
+IRAM_ATTR
 int i8080_regs_d(void) {
     return D;
 }
 
+IRAM_ATTR
 int i8080_regs_e(void) {
     return E;
 }
 
+IRAM_ATTR
 int i8080_regs_h(void) {
     return H;
 }
 
+IRAM_ATTR
 int i8080_regs_l(void) {
     return L;
 }
 
+IRAM_ATTR
 int i8080_regs_f(void) {
     i8080_store_flags();
     return F;
 }
 
+IRAM_ATTR
 bool i8080_iff(void) {
     return IFF;
 }
 
 /* setters */
+IRAM_ATTR
 void i8080_setreg_a(int a) {
     A = a;
 }
 
+IRAM_ATTR
 void i8080_setreg_b(int b) {
     B = b;
 }
 
+IRAM_ATTR
 void i8080_setreg_c(int c) {
      C = c;
 }
 
+IRAM_ATTR
 void i8080_setreg_d(int d) {
      D = d;
 }
 
+IRAM_ATTR
 void i8080_setreg_e(int e) {
      E = e;
 }
 
+IRAM_ATTR
 void i8080_setreg_h(int h) {
      H = h;
 }
 
+IRAM_ATTR
 void i8080_setreg_l(int l) {
      L = l;
 }
 
+IRAM_ATTR
 void i8080_setreg_f(int f) {
      F = f;
 }
 
+IRAM_ATTR
 void i8080_setreg_sp(int sp) {
      SP = sp;
 }
 
-
+IRAM_ATTR
 int i8080_cycles(void) {
     return CPU_CYCLES;
 }
