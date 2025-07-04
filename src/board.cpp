@@ -88,10 +88,10 @@ void Board::reset(Board::ResetMode mode)
             break;
         case ResetMode::LOADROM:
             this->memory.detach_boot();
-            i8080_jump(Options.pc);
-            i8080_setreg_sp(0xc300);
+            i8080cpu::i8080_jump(Options.pc);
+            i8080cpu::i8080_setreg_sp(0xc300);
             printf("Board::reset() detached boot, pc=%04x sp=%04x\n",
-              i8080_pc(), i8080_regs_sp());
+              i8080cpu::i8080_pc(), i8080cpu::i8080_regs_sp());
             break;
     }
 
@@ -229,7 +229,7 @@ void Board::single_step(bool update_screen)
      *  test: vst MovR=1d37, MovM=1d36, C*-N=0e9b)
      */
     if (this->filler.irq) {
-        int thresh = i8080_cycles();
+        int thresh = v_cycles; //i8080_cycles();
         /* Adjust threshold of the last M-cycle of long instructions */
         /* test: vst */
         switch (thresh) {

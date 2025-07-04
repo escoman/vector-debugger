@@ -29,7 +29,7 @@ AYWrapper aw(ay);
 Soundnik soundnik(tw, aw);
 IO io(memory, keyboard, timer, fdc, ay, tape_player);//Options.nofdc ? fdc_dummy : fdc);
 TV tv;
-PixelFiller filler(memory, io, tv);
+PixelFiller filler(memory, &io, &tv);
 Debug debug(&memory);
 Board board(memory, io, filler, soundnik, tv, tape_player, debug);
 Emulator lator(board);

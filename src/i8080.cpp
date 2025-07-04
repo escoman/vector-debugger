@@ -43,7 +43,7 @@
 #endif
 
 // if enabled, call i8080_hal_io_output before the next i8080_execute()
-#define I8080_OUT_DELAYED  1
+#define I8080_OUT_DELAYED  0
 
 #define RD_BYTE(addr) i8080_hal_memory_read_byte(addr)
 #define RD_OPCODE(addr) i8080_hal_memory_read_byte(addr, true)

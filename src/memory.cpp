@@ -52,6 +52,8 @@ uint32_t Memory::bigram_select(uint32_t addr, bool stackrq) const
     } else if ((map & 0x80) && (addr >= 0xe000) && (addr <= 0xffff)) {
         return addr + this->page_map;
     }
+
+    return addr;
 }
 
 uint32_t Memory::tobank(uint32_t a)
