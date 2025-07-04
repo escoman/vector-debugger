@@ -2,7 +2,7 @@
 #include "filler.h"
 
 // TODO: fix neon shimmering
-#undef __ARM_NEON
+//#undef __ARM_NEON
 
 PixelFiller::PixelFiller(Memory & _mem, IO & _io, TV & _tv): 
     memory(_mem), io(_io), tv(_tv)

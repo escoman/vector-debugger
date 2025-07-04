@@ -95,6 +95,7 @@ public:
     void export_pixel_bytes(uint8_t * dst);
     void export_audio_frame(float * dst, size_t count);
     size_t pixel_bytes_size();
+    uint32_t * pixels() const { return board.get_tv().pixels(); } 
 #endif
 
 public:

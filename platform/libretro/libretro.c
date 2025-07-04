@@ -86,11 +86,13 @@ void retro_init(void)
 {
     log_cb(RETRO_LOG_INFO, "retro_init:\n");
 
-    frame_buf = (uint8_t*)malloc(VIDEO_PIXELS * sizeof(uint32_t));
+    // frame_buf = (uint8_t*)malloc(VIDEO_PIXELS * sizeof(uint32_t));
+    //
     audio_buf = (int16_t*)malloc(SAMPLES_PER_FRAME * 2 * sizeof(int16_t));
     float_audio_buf = (float*)malloc(SAMPLES_PER_FRAME * 2 * sizeof(float));
 
     Emulator_Init();
+    frame_buf = (uint8_t *)Emulator_GetPixels();
 
     const char *dir = NULL;
     if (environ_cb(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &dir) && dir)
@@ -104,8 +106,8 @@ void retro_init(void)
 
 void retro_deinit(void)
 {
-    free(frame_buf);
-    frame_buf = NULL;
+    //free(frame_buf);
+    //frame_buf = NULL;
 
     free(audio_buf);
     audio_buf = NULL;
@@ -135,14 +137,11 @@ void retro_get_system_info(struct retro_system_info *info)
     memset(info, 0, sizeof(*info));
     info->library_name     = "v06x";
 #ifndef GIT_VERSION
-#define GIT_VERSION ""
+#define GIT_VERSION "_2"
 #endif
     info->library_version  = "0.9" GIT_VERSION;
     info->need_fullpath    = false;
     info->valid_extensions = EXTENSIONS;
-
-    printf("retro_get_system_info, pls don't creash!\n");
-    //log_cb(RETRO_LOG_INFO, "retro_get_system_info:\n");
 }
 
 static retro_video_refresh_t video_cb;
@@ -328,18 +327,11 @@ void record_audio(uint16_t * buf, size_t nframes)
 
 static void convert_audio()
 {
-    //log_cb(RETRO_LOG_DEBUG, "convert_audio: ");
     for (size_t i = 0; i < 2 * SAMPLES_PER_FRAME; ++i) {
         float samp = float_audio_buf[i];
-        //samp = samp < -1.0 ? -1.0 : samp > 1.0 ? 1.0 : samp;
         int16_t isamp = samp * 16384;
         audio_buf[i] = isamp;
-        //audio_buf[i * 2] = isamp;
-        //audio_buf[i * 2 + 1] = isamp;
-        
-        //log_cb(RETRO_LOG_DEBUG, "%d:[%f: %d:%d]", i, samp, audio_buf[i*2], audio_buf[i*2+1]);
     }
-    ////log_cb(RETRO_LOG_DEBUG, "\n");
 }
 
 static int cadence_pos = 0;
@@ -370,11 +362,12 @@ void retro_run(void)
         video_cb(frame_buf, VIDEO_WIDTH, VIDEO_HEIGHT, VIDEO_WIDTH * sizeof(uint32_t));
     }
     else {
-        Emulator_ExecuteFrame(frame_buf, float_audio_buf);
+        Emulator_ExecuteFrame(float_audio_buf);
 
         video_cb(frame_buf, VIDEO_WIDTH, VIDEO_HEIGHT, VIDEO_WIDTH * sizeof(uint32_t));
 
         convert_audio();
+
         audio_batch_cb(audio_buf, SAMPLES_PER_FRAME);
 
         //record_audio(audio_buf, SAMPLES_PER_FRAME);

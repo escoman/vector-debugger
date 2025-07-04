@@ -27,8 +27,10 @@ Debug::Debug(Memory* _memoryP)
         this->write(_addr, _val);
     };
 
+#ifndef NODEBUGGER
     memoryP->debug_onread = read_func;
     memoryP->debug_onwrite = write_func;
+#endif
 }
 
 void Debug::read(

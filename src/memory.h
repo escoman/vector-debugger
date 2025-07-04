@@ -23,19 +23,24 @@ private:
 
     std::vector<uint8_t> bootbytes;
 
+#ifndef NOHEATMAP
     heatmap_t heatmap;
+#endif
 
-    uint32_t tobank(uint32_t a) const;
+    static uint32_t tobank(uint32_t a);
 
 public:
     uint32_t bigram_select(uint32_t addr, bool stackrq) const;
     uint8_t get_byte(uint32_t addr, bool stackrq) const;
     /* virtual addr, physical addr, stackrq, value */
+#ifndef NOSCRIPT
     std::function<void(uint32_t,uint32_t,bool,uint8_t)> onwrite;
     std::function<void(uint32_t,uint32_t,bool,uint8_t)> onread;
-
+#endif
+#ifndef NODEBUGGER
     std::function<void(const uint32_t, const uint8_t, const bool)> debug_onread;
     std::function<void(const uint32_t, const uint8_t)> debug_onwrite;
+#endif
 
 public:
     Memory();
@@ -47,8 +52,10 @@ public:
     void detach_boot();
     uint8_t * buffer();
     size_t buffer_size() const { return sizeof(bytes); }
+#ifndef NOHEATMAP
     heatmap_t& get_heatmap() { return heatmap; }
     void cool_off_heatmap();
+#endif
     void export_bytes(uint8_t * dst, uint32_t addr, uint32_t size) const;
 
     void serialize(std::vector<uint8_t> & to);

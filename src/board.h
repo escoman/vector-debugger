@@ -68,21 +68,26 @@ class Board
     std::vector<Watchpoint> io_watchpoints;
 
   public:
+    std::function<void(void)> onframetimer;
+#ifndef NODEBUGGER
     std::function<void(void)> poll_debugger;
     std::function<void(void)> onbreakpoint = nullptr;
-    std::function<void(void)> onframetimer;
 
     struct
     {
         std::function<void(int)> frame;
         std::function<void(int)> jump;
     } hooks;
+#endif
 
     // a hack to pass return value from io.onread
     int ioread;
 
   private:
+#ifndef NODEBUGGER
     void refresh_watchpoint_listeners(void);
+#endif
+
     void init_bootrom(const uint8_t* src, size_t size);
 
   public:
@@ -121,10 +126,12 @@ class Board
     void write_memory_byte(int addr, int value);
     /* AA FF BB CC DD EE HH LL 00 00 00 00 SS PP
      * 00 00 00 00 00 00 00 00 00 00 PP CC */
+
     std::string read_registers();
     auto read_registers_b() -> const std::vector<int>;
     void write_registers(uint8_t* regs);
     int is_break() const;
+#ifndef NODEBUGGER
     void set_debugging(const bool _debugging);
     void debugger_attached();
     void debugger_detached();
@@ -134,11 +141,14 @@ class Board
     std::string remove_breakpoint(int type, int addr, int kind);
     bool check_breakpoint();
     void check_watchpoint(uint32_t addr, uint8_t value, int how);
+#endif
 
+#ifndef NOSCRIPT
     void script_attached();   // script on, begin checking hooks
     void script_detached();   // script off
     void script_break();      // break execution from script
     void script_continue();   // continue execution from script
+#endif
 
     void serialize(std::vector<uint8_t>& to);
     bool deserialize(std::vector<uint8_t>& from);

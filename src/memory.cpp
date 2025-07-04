@@ -39,21 +39,22 @@ void Memory::control_write(uint8_t w8)
 
 uint32_t Memory::bigram_select(uint32_t addr, bool stackrq) const
 {
-    if (!(this->mode_map || this->mode_stack)) {
+    uint8_t map = this->mode_map;
+    bool stack = this->mode_stack;
+    if (!(map || stack)) {
         return addr;
-    } else if (this->mode_stack && stackrq) {
+    } else if (stack && stackrq) {
         return addr + this->page_stack;
-    } else if ((this->mode_map & 0x20) && (addr >= 0xa000) && (addr <= 0xdfff)) {
+    } else if ((map & 0x20) && (addr >= 0xa000) && (addr <= 0xdfff)) {
         return addr + this->page_map;
-    } else if ((this->mode_map & 0x40) && (addr >= 0x8000) && (addr <= 0x9fff)) {
+    } else if ((map & 0x40) && (addr >= 0x8000) && (addr <= 0x9fff)) {
         return addr + this->page_map;
-    } else if ((this->mode_map & 0x80) && (addr >= 0xe000) && (addr <= 0xffff)) {
+    } else if ((map & 0x80) && (addr >= 0xe000) && (addr <= 0xffff)) {
         return addr + this->page_map;
     }
-    return addr;
 }
 
-uint32_t Memory::tobank(uint32_t a) const
+uint32_t Memory::tobank(uint32_t a)
 {
     return (a & 0x78000) | ((a<<2)&0x7ffc) | ((a>>13)&3);
 }
@@ -68,20 +69,23 @@ uint8_t Memory::read(uint32_t addr, bool stackrq, const bool _is_opcode) const
         value = this->bootbytes[bigaddr];
     } 
     else {
-        phys = this->tobank(bigaddr);
+        phys = Memory::tobank(bigaddr);
         value = this->bytes[phys];
     }
 
+#ifndef NOSCRIPT
     if (this->onread) this->onread(addr, phys, stackrq, value);
+#endif
 
+#ifndef NODEBUGGER
     if (debug_onread) 
     {
         debug_onread(bigaddr, value, _is_opcode);
     }
+#endif
 
     return value;
 }
-
 
 uint8_t Memory::get_byte(uint32_t addr, bool stackrq) const
 {
@@ -93,7 +97,7 @@ uint8_t Memory::get_byte(uint32_t addr, bool stackrq) const
         value = this->bootbytes[bigaddr];
     } 
     else {
-        phys = this->tobank(bigaddr);
+        phys = Memory::tobank(bigaddr);
         value = this->bytes[phys];
     }
 
@@ -103,18 +107,22 @@ uint8_t Memory::get_byte(uint32_t addr, bool stackrq) const
 void Memory::write(uint32_t addr, uint8_t w8, bool stackrq)
 {
     uint32_t bigaddr = this->bigram_select(addr & 0xffff, stackrq);
-    uint32_t phys = this->tobank(bigaddr);
+    uint32_t phys = Memory::tobank(bigaddr);
+#ifndef NOSCRIPT
     if (this->onwrite) {
         this->onwrite(addr, phys, stackrq, w8);
     }
+#endif
     this->bytes[phys] = w8;
-
+#ifndef NOHEATMAP
     if (bigaddr < this->heatmap.size()) {
         //this->heatmap[phys] = std::clamp(this->heatmap[phys] + 64, 0, 255);
         this->heatmap[bigaddr] = 255;
     }
-    
+#endif 
+#ifndef NODEBUGGER
     if (debug_onwrite) debug_onwrite(bigaddr, w8);
+#endif
 }
 
 void Memory::init_from_vector(const vector<uint8_t> & from, uint32_t start_addr)
@@ -130,7 +138,7 @@ void Memory::init_from_vector(const vector<uint8_t> & from, uint32_t start_addr)
     for (unsigned i = 0; i < from.size(); ++i) {
         int addr = start_addr + i;
         //this->write(addr, from[i], false);
-        uint32_t phys = this->tobank(addr);
+        uint32_t phys = Memory::tobank(addr);
         if (phys < sizeof(this->bytes)) {
             this->bytes[phys] = from[i];
         }
@@ -183,6 +191,7 @@ void Memory::deserialize(std::vector<uint8_t>::iterator it, uint32_t size)
     this->bootbytes.assign(it, begin + size);
 }
 
+#ifndef NOHEATMAP
 void Memory::cool_off_heatmap()
 {
     for (auto it = heatmap.begin(); it < heatmap.end(); ++it) {
@@ -196,11 +205,12 @@ void Memory::cool_off_heatmap()
         }
     }
 }
+#endif
 
 void Memory::export_bytes(uint8_t * dst, uint32_t addr, uint32_t size) const
 {
     for (uint32_t i = 0; i < size; ++i) {
-        dst[i] = this->bytes[this->tobank(addr + i)];
+        dst[i] = this->bytes[Memory::tobank(addr + i)];
     }
 }
 

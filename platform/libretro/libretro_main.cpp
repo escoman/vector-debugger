@@ -3,7 +3,7 @@
 #include <iterator>
 
 #include "memory.h"
-#include "io.h"
+#include "vio.h"
 #include "tv.h"
 #include "board.h"
 #include "emulator.h"
@@ -38,6 +38,10 @@ extern "C" int Emulator_Init()
 {
     WavRecorder rec;
     WavRecorder * prec = 0;
+
+#ifdef NOFILTER
+    Options.nofilter = true;
+#endif
 
     if (Options.audio_rec_path.length()) {
         rec.init(Options.audio_rec_path);
@@ -108,11 +112,16 @@ void load_wav(const uint8_t* bytes, size_t size)
     wav.set_bytes(v);
 }
 
-extern "C" int Emulator_ExecuteFrame(uint8_t * pixels, float * samples)
+extern "C" uint32_t * Emulator_GetPixels()
+{
+    return lator.pixels();
+}
+
+extern "C" int Emulator_ExecuteFrame(float * samples)
 {
     lator.execute_frame();
 
-    lator.export_pixel_bytes(pixels);
+    //lator.export_pixel_bytes(pixels);
     lator.export_audio_frame(samples, 2*48000/50);
 
     return 0;

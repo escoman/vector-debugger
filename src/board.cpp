@@ -128,13 +128,14 @@ bool Board::check_interrupt()
 #define DBG_FRM(a, b, bob) {};
 int Board::execute_frame(bool update_screen)
 {
+#ifndef NODEBUGGER
     if (this->hooks.frame)
         this->hooks.frame(this->frame_no);
     if (this->poll_debugger)
         this->poll_debugger();
     if (this->debugger_interrupt || this->script_interrupt)
         return 0;
-
+#endif
     ++this->frame_no;
     this->filler.reset();
     this->irq_carry = false; // imitates cpu waiting after T2 when INTE
@@ -148,6 +149,7 @@ int Board::execute_frame(bool update_screen)
         // DBG_FRM(F1,F2,printf("%05d %04x: ", this->between + this->instr_time,
         // i8080_pc()));
         // script hook
+#ifndef NOSCRIPT        
         if (this->scripting && check_breakpoint()) {
             this->script_interrupt = true;
             if (this->onbreakpoint) {
@@ -159,12 +161,14 @@ int Board::execute_frame(bool update_screen)
                 break;
             }
         }
+#endif
+#ifndef NODEBUGGER
         // debugger
         if (this->debugging && debug.check_break()) {
             this->debugger_interrupt = true;
             break;
         }
-
+#endif
         this->single_step(update_screen);
     }
     // printf("between = %d\n", this->between);
@@ -255,6 +259,7 @@ void Board::single_step(bool update_screen)
     if (this->frame_no > 60) {
         this->tape_player.advance(this->instr_time);
     }
+
     this->soundnik.soundSteps(this->instr_time / 2, this->io.TapeOut(),
       this->io.Covox(), this->tape_player.sample());
 
@@ -497,6 +502,7 @@ int Board::is_break() const
 
 // --- scripting hooks
 
+#ifndef NOSCRIPT
 void Board::script_attached()
 {
     this->scripting = true;
@@ -518,41 +524,55 @@ void Board::script_continue()
 {
     this->script_interrupt = false;
 }
+#endif
 
 // --- new debugger hooks
 
+#ifndef NODEBUGGER
 void Board::set_debugging(const bool _debugging)
 {
     debugging = _debugging;
 }
+#endif
 
+#ifndef NODEBUGGER
 void Board::debugger_attached()
 {
     this->debugging = 1;
     this->debugger_break();
 }
+#endif
 
+#ifndef NODEBUGGER
 void Board::debugger_detached()
 {
     this->debugging = 0;
     this->debugger_continue();
 }
+#endif
 
+#ifndef NODEBUGGER
 void Board::debugger_break()
 {
     this->debugger_interrupt = 1;
 }
+#endif
 
+#ifndef NODEBUGGER
 void Board::debugger_continue()
 {
     this->debugger_interrupt = 0;
 }
+#endif
 
+#ifndef NODEBUGGER
 static bool iospace(uint32_t addr)
 {
     return (addr & 0x80000000) != 0;
 }
+#endif
 
+#ifndef NODEBUGGER
 void Board::check_watchpoint(uint32_t addr, uint8_t value, int how)
 {
     // if (addr == 0x100) {
@@ -571,7 +591,9 @@ void Board::check_watchpoint(uint32_t addr, uint8_t value, int how)
             this->onbreakpoint();
     }
 }
+#endif
 
+#ifndef NODEBUGGER
 void Board::refresh_watchpoint_listeners()
 {
     auto check_wp_read = [this](uint32_t addr, uint32_t phys, bool stack,
@@ -617,7 +639,9 @@ void Board::refresh_watchpoint_listeners()
 
     printf("--- ---\n");
 }
+#endif
 
+#ifndef NODEBUGGER
 std::string Board::insert_breakpoint(int type, int addr, int kind)
 {
     auto add_memory_watchpoint = [this](Watchpoint w) {
@@ -648,7 +672,9 @@ std::string Board::insert_breakpoint(int type, int addr, int kind)
     }
     return ""; // not supported
 }
+#endif
 
+#ifndef NODEBUGGER
 std::string Board::remove_breakpoint(int type, int addr, int kind)
 {
     auto del_memory_watchpoint = [this](Watchpoint w) {
@@ -682,12 +708,15 @@ std::string Board::remove_breakpoint(int type, int addr, int kind)
     }
     return ""; // not supported
 }
+#endif
 
+#ifndef NODEBUGGER
 bool Board::check_breakpoint()
 {
     return std::find(this->breakpoints.begin(), this->breakpoints.end(),
              Breakpoint(i8080_pc(), 1)) != this->breakpoints.end();
 }
+#endif
 
 #include "serialize.h"
 

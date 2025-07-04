@@ -5,8 +5,8 @@ ifneq ($(V),1)
    Q := @
 endif
 
-CXXFLAGS := $(CXXFLAGS) --std=c++17 -DWITHOUT_COREDSP=1
-CFLAGS := $(CFLAGS) -DWITHOUT_COREDSP=1
+CXXFLAGS := $(CXXFLAGS) --std=c++17 -DWITHOUT_COREDSP=1 -DNOSCRIPT=1 -DNODEBUGGER=1 -DNOHEATMAP=1
+CFLAGS := $(CFLAGS) -DWITHOUT_COREDSP=1 -DNOSCRIPT=1 -DNODEBUGGER=1 -DNOHEATMAP=1
 
 ifneq ($(SANITIZER),)
    CFLAGS   := -fsanitize=$(SANITIZER) $(CFLAGS)
@@ -71,8 +71,11 @@ ifeq ($(platform), unix)
    fpic := -fPIC
    SHARED := -shared -Wl,--version-script=$(CORE_DIR)/link.T -Wl,--no-undefined
 else ifeq ($(platform), linux-portable)
+   EXT ?= so
    TARGET := $(TARGET_NAME)_libretro.$(EXT)
-   fpic := -fPIC -nostdlib
+   #fpic := -fPIC -nostdlib
+   fpic := -fPIC
+   NOFILTER := -DNOFILTER -D__ARM_NEON
    SHARED := -shared -Wl,--version-script=$(CORE_DIR)/link.T
 	LIBM :=
 else ifneq (,$(findstring osx,$(platform)))
@@ -133,8 +136,8 @@ $(info $(INCLUDES))
 
 OBJECTS := $(SOURCES_C:.c=.o) $(SOURCES_CXX:.cpp=.o)
 
-CFLAGS   += -Wall -D__LIBRETRO__ $(fpic) $(INCLUDES)
-CXXFLAGS += -Wall -D__LIBRETRO__ $(fpic) $(INCLUDES)
+CFLAGS   += -Wall -D__LIBRETRO__ $(fpic) $(NOFILTER) $(INCLUDES)
+CXXFLAGS += -Wall -D__LIBRETRO__ $(fpic) $(NOFILTER) $(INCLUDES)
 
 all: $(TARGET)
 
