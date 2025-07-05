@@ -198,7 +198,7 @@ int PixelFiller::getColorIndex(int rpixel, bool border) {
 int PixelFiller::fill(int clocks, int commit_time, 
         int commit_time_pal, bool updateScreen) 
 {
-    if (TESTTABLE || commit_time || commit_time_pal || 
+    if (TESTTABLE || commit_time >= 0 || commit_time_pal >= 0 || 
             PixelFiller::raster_line == 22 + 18 || 
             PixelFiller::raster_line == 0 ||
             PixelFiller::raster_line == 311 ||

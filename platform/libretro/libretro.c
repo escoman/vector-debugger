@@ -37,6 +37,8 @@ static float *float_audio_buf;
 
 static FILE * raw_audiof = NULL;
 
+static int blkvvod_delay_frames = 0;
+
 static struct retro_log_callback logging;
 static retro_log_printf_t log_cb;
 static bool use_audio_cb;
@@ -139,7 +141,7 @@ void retro_get_system_info(struct retro_system_info *info)
     memset(info, 0, sizeof(*info));
     info->library_name     = "v06x";
 #ifndef GIT_VERSION
-#define GIT_VERSION "_2"
+#define GIT_VERSION "_3"
 #endif
     info->library_version  = "0.9" GIT_VERSION;
     info->need_fullpath    = false;
@@ -263,10 +265,35 @@ void retro_set_video_refresh(retro_video_refresh_t cb)
 
 void retro_reset(void)
 {
-    Emulator_Reset(BLKVVOD);
+    //Emulator_Reset(BLKVVOD);
+    blkvvod_delay_frames = 20;
 }
 
 static uint8_t keydown[350];
+
+static void key_make(int key)
+{
+    if (!keydown[key]) {
+        Emulator_KeyDown(key);
+        keydown[key] = 1;
+    }
+}
+
+static void key_break(int key)
+{
+    keydown[key] = 0;
+    Emulator_KeyUp(key);
+}
+
+static void joy_key(int button, int key)
+{
+    if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, button)) {
+        key_make(key);
+    }
+    else if (keydown[button]) {
+        key_break(key);
+    }
+}
 
 static void update_input(void)
 {
@@ -279,15 +306,29 @@ static void update_input(void)
     {
         if (input_state_cb(0, RETRO_DEVICE_KEYBOARD, 0, key))
         {
-            if (!keydown[key]) {
-                Emulator_KeyDown(key);
-                keydown[key] = 1;
-            }
-            //fprintf(stderr, "Key RETROK_%d pressed\n", key);
+            key_make(key);
         }
         else if (keydown[key]) {
-            keydown[key] = 0;
-            Emulator_KeyUp(key);
+            key_break(key);
+        }
+    }
+
+    joy_key(RETRO_DEVICE_ID_JOYPAD_SELECT, RETROK_F1);
+    joy_key(RETRO_DEVICE_ID_JOYPAD_START, RETROK_F12);
+
+    joy_key(RETRO_DEVICE_ID_JOYPAD_L, RETROK_F6);           // rus
+    joy_key(RETRO_DEVICE_ID_JOYPAD_L2, RETROK_LSHIFT);      // ss/shift
+    joy_key(RETRO_DEVICE_ID_JOYPAD_R2, RETROK_LCTRL);       // us/ctrl
+    joy_key(RETRO_DEVICE_ID_JOYPAD_R, RETROK_RALT);         // ps
+
+    joy_key(RETRO_DEVICE_ID_JOYPAD_X, RETROK_RETURN);       // vk
+    joy_key(RETRO_DEVICE_ID_JOYPAD_Y, RETROK_SPACE);        // probl
+
+    if (blkvvod_delay_frames) {
+        --blkvvod_delay_frames;
+        if (blkvvod_delay_frames == 0) {
+            //key_make(RETROK_F11); // blk+vvod F11
+            Emulator_Reset(BLKVVOD);
         }
     }
 
@@ -394,7 +435,13 @@ void retro_run(void)
         { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT, "Right" },\
         { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B,     "B" },\
         { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A,     "A" },\
-        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START, "Reset (F12, BLK+SBR)" },\
+        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L,     "РУС" },\
+        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2,     "CC" },\
+        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2,     "УС" },\
+        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R,     "ПС" },\
+        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X,     "ВК" }, \
+        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_Y,     "Space"}, \
+        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START, "Reset (БЛК+СБР)" }, \
         { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_SELECT,"F1" }
 
 bool retro_load_game(const struct retro_game_info *info)
