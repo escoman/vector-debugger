@@ -29,6 +29,7 @@ private:
 
     int outport;
     int outbyte;
+public:
     int palettebyte;
 public:
     std::function<void(int)> onborderchange;
@@ -38,6 +39,8 @@ public:
 
     std::function<int(uint32_t,uint8_t)> onread;
     std::function<void(uint32_t,uint8_t)> onwrite;
+
+    std::function<void(uint8_t,uint32_t)> on_commit_palette;
 
 public:
     IO(Memory & _memory, Keyboard & _keyboard, I8253 & _timer, FD1793 & _fdc, 
@@ -317,7 +320,10 @@ public:
             int g = (w8 & 0x38) >> 3;
             int r = (w8 & 0x07);
 
-            this->palette[index] = rgb2pixelformat(r,g,b);
+            uint32_t rgb = rgb2pixelformat(r,g,b);
+
+            this->palette[index] = rgb;
+            if (on_commit_palette) on_commit_palette(index, rgb);
             //printf("commit palette: %02x = %02x\n", index, this->palette[index]);
             this->palettebyte = -1;
         }

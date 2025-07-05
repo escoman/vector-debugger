@@ -14,6 +14,8 @@
 #include "globaldefs.h"
 #include "libretro_main.h" // Emulator wrapper
 
+#include <valgrind/callgrind.h>
+
 #define VIDEO_WIDTH DEFAULT_SCREEN_WIDTH
 #define VIDEO_HEIGHT DEFAULT_SCREEN_HEIGHT
 #define VIDEO_PIXELS VIDEO_WIDTH * VIDEO_HEIGHT
@@ -350,6 +352,9 @@ void shit_audio()
 
 void retro_run(void)
 {
+    CALLGRIND_START_INSTRUMENTATION;
+    CALLGRIND_TOGGLE_COLLECT;
+
     update_input();
 
     bool updated = false;
@@ -375,6 +380,9 @@ void retro_run(void)
         //shit_audio();
         //audio_batch_cb(audio_buf, 960);
     }
+
+    CALLGRIND_TOGGLE_COLLECT;
+    CALLGRIND_STOP_INSTRUMENTATION;
 
 }
 

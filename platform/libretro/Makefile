@@ -5,8 +5,8 @@ ifneq ($(V),1)
    Q := @
 endif
 
-CXXFLAGS := $(CXXFLAGS) --std=c++17 -DWITHOUT_COREDSP=1 -DNOSCRIPT=1 -DNODEBUGGER=1 -DNOHEATMAP=1
-CFLAGS := $(CFLAGS) -DWITHOUT_COREDSP=1 -DNOSCRIPT=1 -DNODEBUGGER=1 -DNOHEATMAP=1
+CXXFLAGS := $(CXXFLAGS) --std=c++17 -DWITHOUT_COREDSP=1 -DNOSCRIPT=1 -DNODEBUGGER=1 -DNOHEATMAP=1 -g
+CFLAGS := $(CFLAGS) -DWITHOUT_COREDSP=1 -DNOSCRIPT=1 -DNODEBUGGER=1 -DNOHEATMAP=1 -g
 
 ifneq ($(SANITIZER),)
    CFLAGS   := -fsanitize=$(SANITIZER) $(CFLAGS)
@@ -75,7 +75,7 @@ else ifeq ($(platform), linux-portable)
    TARGET := $(TARGET_NAME)_libretro.$(EXT)
    #fpic := -fPIC -nostdlib
    fpic := -fPIC
-   NOFILTER := -DNOFILTER -D__ARM_NEON
+   NOFILTER := -DNOFILTER -D__ARM_NEON -mfpu=neon-fp-armv8 -mneon-for-64bits -mfloat-abi=hard -mcpu=cortex-a53 -funroll-loops
    SHARED := -shared -Wl,--version-script=$(CORE_DIR)/link.T
 	LIBM :=
 else ifneq (,$(findstring osx,$(platform)))

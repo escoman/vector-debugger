@@ -18,9 +18,9 @@ bool PixelFiller::vborder;       // vertical border flag
 bool PixelFiller::visible;       // visible area flag
 int  PixelFiller::bmpofs;         // bitmap offset for current pixel
 int  PixelFiller::border_index;
-int  PixelFiller::first_visible_line;
-int  PixelFiller::center_offset;
-int  PixelFiller::screen_width;
+//int  PixelFiller::first_visible_line;
+//int  PixelFiller::center_offset;
+//int  PixelFiller::screen_width;
 
 bool PixelFiller::brk;
 bool PixelFiller::irq;
@@ -31,6 +31,51 @@ TV * PixelFiller::tv;
 
 // TODO: fix neon shimmering
 //#undef __ARM_NEON
+
+// palette ram
+// index:4 -> {rgb,rgb}
+uint32_t py2[32];
+
+uint32_t py2_512[32];       // mode512 pairs of pixels
+uint32_t py2_256[32];       // mode256 pairs of pixels
+
+void PixelFiller::write_pal(uint8_t adr8, uint32_t rgb)
+{
+    // write 256-pixel pal
+    py2_256[adr8<<1] = rgb;
+    py2_256[(adr8<<1) + 1] = rgb;
+
+    // 512-pixel pal (different odd/even columns)
+    if (adr8 <= 3) {
+        // even columns 0, 2, ...
+        uint8_t adr = adr8 & 0x03;
+        // replicate for every combo of msb in lsb pixel
+        py2_512[(adr + 0x0) << 1] = rgb;
+        py2_512[(adr + 0x4) << 1] = rgb;
+        py2_512[(adr + 0x8) << 1] = rgb;
+        py2_512[(adr + 0xc) << 1] = rgb;
+    }
+    if ((adr8 & 3) == 0) {
+        // odd columns 1, 3, ...
+        uint8_t adr = adr8 & 0x0c;
+        // replicate for every combo of lsb in msb pixel
+        py2_512[((adr + 0x0) << 1) + 1] = rgb;
+        py2_512[((adr + 0x1) << 1) + 1] = rgb;
+        py2_512[((adr + 0x2) << 1) + 1] = rgb;
+        py2_512[((adr + 0x3) << 1) + 1] = rgb;
+    }
+}
+
+void PixelFiller::modechange()
+{
+    if (PixelFiller::mode512) {
+        memcpy(py2, py2_512, sizeof(py2));
+    }
+    else {
+        memcpy(py2, py2_256, sizeof(py2));
+    }
+}
+
 
 PixelFiller::PixelFiller(Memory & _mem, IO * _io, TV * _tv)
 {
@@ -51,16 +96,20 @@ PixelFiller::PixelFiller(Memory & _mem, IO * _io, TV * _tv)
 
     PixelFiller::io->onmodechange = [this](bool mode) {
         PixelFiller::mode512 = mode;
+        modechange();
     };
 
-    fprintf(stderr, "PixelFiller::PixelFiller, pixels=%lx\n", PixelFiller::pixels);
+    PixelFiller::io->on_commit_palette = [this](uint8_t adr8, uint32_t rgb) {
+        PixelFiller::write_pal(adr8, rgb);
+        PixelFiller::modechange();
+    };
 }
 
 void PixelFiller::init()
 {
-    PixelFiller::first_visible_line = 312 - Options.screen_height;
-    PixelFiller::center_offset = Options.center_offset;
-    PixelFiller::screen_width = Options.screen_width;
+    //PixelFiller::first_visible_line = 312 - Options.screen_height;
+    //PixelFiller::center_offset = Options.center_offset;
+    //PixelFiller::screen_width = Options.screen_width;
 }
 
 void PixelFiller::reset()
@@ -198,14 +247,17 @@ int PixelFiller::fill1(int clocks, int commit_time, int commit_time_pal, bool up
         if (PixelFiller::visible) {
             const int bmp_x = PixelFiller::raster_pixel - PixelFiller::center_offset;
             if (bmp_x >= 0 && bmp_x < PixelFiller::screen_width) {
-                if (PixelFiller::mode512) {// && !border -- border A/B alternation, see Cherezov page 7
-                    bmp[PixelFiller::bmpofs++] = PixelFiller::io->Palette(index & 0x03);
-                    bmp[PixelFiller::bmpofs++] = PixelFiller::io->Palette(index & 0x0c);
-                } else {
-                    uint32_t p = PixelFiller::io->Palette(index);
-                    bmp[PixelFiller::bmpofs++] = p;
-                    bmp[PixelFiller::bmpofs++] = p;
-                }
+                //if (PixelFiller::mode512) {// && !border -- border A/B alternation, see Cherezov page 7
+                //    bmp[PixelFiller::bmpofs++] = PixelFiller::io->Palette(index & 0x03);
+                //    bmp[PixelFiller::bmpofs++] = PixelFiller::io->Palette(index & 0x0c);
+                //} else {
+                //    uint32_t p = PixelFiller::io->Palette(index);
+                //    bmp[PixelFiller::bmpofs++] = p;
+                //    bmp[PixelFiller::bmpofs++] = p;
+                //}
+
+                bmp[PixelFiller::bmpofs++] = py2[index << 1];
+                bmp[PixelFiller::bmpofs++] = py2[(index << 1) + 1];
             }
         }
         // 22 vsync + 18 border + 256 picture + 16 border = 312 lines

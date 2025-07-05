@@ -29,15 +29,13 @@ private:
     static bool visible;       // visible area flag
     static int bmpofs;         // bitmap offset for current pixel
     static int border_index;
-    static int first_visible_line;
-    static int center_offset;
-    static int screen_width;
+    static constexpr int center_offset = DEFAULT_CENTER_OFFSET;
+    static constexpr int screen_width = DEFAULT_SCREEN_WIDTH;
+    static constexpr int first_visible_line = 312 - DEFAULT_SCREEN_HEIGHT;
 
 private:
     static IO * io;
     static TV * tv;
-
-    //static int fill1_count, fill2_count;
 
 public:
     static bool brk;
@@ -61,4 +59,7 @@ public:
     static int fill3(int clocks);
     static int fill4(int clocks);
     static void advanceLine(bool updateScreen);
+
+    static void write_pal(uint8_t adr8, uint32_t rgb);
+    static void modechange();
 };
