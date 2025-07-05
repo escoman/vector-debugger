@@ -183,7 +183,7 @@ public:
     {
         this->ayAccu += 7 * instr_time;
         float aysamp = 0;
-        int avg = 0;
+        float avg = 0;
         for (; this->ayAccu >= 96; this->ayAccu -= 96) {
             aysamp += this->ay.step(ena0, ena1, ena2);
             ++avg;

@@ -376,43 +376,12 @@ public:
         counters[1] = CounterUnit();
         counters[2] = CounterUnit();
     }
-};
-
-class TimerWrapper
-{
-private:
-    I8253 & timer;
-    int sound;
-    int average_count;
-    int last_sound;
-public:
-    TimerWrapper(I8253 & _timer) : timer(_timer),
-        sound(0), average_count(0), last_sound(0)
-    {
-    }
-
-    // this is non-canon, but it's very useful when emulator resets timer
-    void reset()
-    {
-        //timer.write(3, 0x36);
-        //timer.write(3, 0x76);
-        //timer.write(3, 0xb6);
-        timer.reset();
-    }
-
-    // step with enable per chan?
-    //
-    int step(int cycles)
-    {
-        this->last_sound = this->timer.Count(cycles) / cycles;
-        return this->last_sound;
-    }
 
     int singlestep(int ena_ch0, int ena_ch1, int ena_ch2)
     {
         int ch0, ch1, ch2;
-        this->timer.Count(1, ch0, ch1, ch2);
-        this->last_sound = ch0 * ena_ch0 + ch1 * ena_ch1 + ch2 * ena_ch2;
-        return this->last_sound;
+        this->Count(1, ch0, ch1, ch2);
+        return ch0 * ena_ch0 + ch1 * ena_ch1 + ch2 * ena_ch2;
     }
 };
+

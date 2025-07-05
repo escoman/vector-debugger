@@ -144,10 +144,9 @@ void Soundnik::soundSteps(int nclk1m5, int tapeout, int covox, int tapein)
     for (int clk = 0; clk < nclk1m5; ++clk) {
         float ay = this->aywrapper.step2(2, aych0, aych1, aych2);
 
-        /* timerwrapper does the stepping of 8253, it must always be called */
-        float soundf = (this->timerwrapper.singlestep(ech0, ech1, ech2)) * Options.volume.timer
+        float soundf = (this->timer.singlestep(ech0, ech1, ech2)) * Options.volume.timer
             + (tapeout + tapein) * Options.volume.beeper
-            + Options.volume.covox * (covox/256.0f)
+            + Options.volume.covox * (covox / 256.0f)
             + Options.volume.ay * ay;
 
         if (!Options.nosound) {
@@ -232,6 +231,6 @@ void Soundnik::sample(float samp)
 
 void Soundnik::reset()
 {
-    this->timerwrapper.reset();
+    this->timer.reset();
     this->aywrapper.reset();
 }

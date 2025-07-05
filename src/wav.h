@@ -242,10 +242,13 @@ public:
         this->frac = 0;
     }
 
-    void advance(int instruction_time)
+    int advance(int instruction_time)
     {
+        int samp = 0;
+
         if (this->loaded) {
             if(this->playhead < this->wav.size()) {
+                samp = wav.sample_at(this->playhead) > 0 ? 1 : 0;
                 if (this->ratio == 0) {
                     this->init();
                 }
@@ -265,6 +268,8 @@ public:
                 }
             }
         }
+
+        return samp;
     }
 
     int sample() const

@@ -256,12 +256,13 @@ void Board::single_step(bool update_screen)
         this->irq |= this->inte;
     }
 
+    int tape_player_sample = 0;
     if (this->frame_no > 60) {
-        this->tape_player.advance(this->instr_time);
+        tape_player_sample = this->tape_player.advance(this->instr_time);
     }
 
     this->soundnik.soundSteps(this->instr_time / 2, this->io.TapeOut(),
-      this->io.Covox(), this->tape_player.sample());
+      this->io.Covox(), tape_player_sample);
 
     /* Edge conditions at the end of screen:
      * if instruction time does not fit within screen time, filler returns

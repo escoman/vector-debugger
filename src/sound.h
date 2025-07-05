@@ -14,7 +14,7 @@
 class Soundnik
 {
 private:
-    TimerWrapper & timerwrapper;
+    I8253 & timer;
     AYWrapper & aywrapper;
 #if !defined(__ANDROID_NDK__) && !defined(__GODOT__) &&!defined(__LIBRETRO__)
     SDL_AudioDeviceID audiodev;
@@ -38,8 +38,7 @@ private:
     WavRecorder * rec;
 
 public:
-    Soundnik(TimerWrapper & tw, AYWrapper & aw) : timerwrapper(tw),
-        aywrapper(aw)
+    Soundnik(I8253 & timer, AYWrapper & aw) : timer(timer), aywrapper(aw)
     {}
 
     void init(WavRecorder * _rec = 0);
