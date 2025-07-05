@@ -75,7 +75,8 @@ else ifeq ($(platform), linux-portable)
    TARGET := $(TARGET_NAME)_libretro.$(EXT)
    #fpic := -fPIC -nostdlib
    fpic := -fPIC
-   NOFILTER := -DNOFILTER -D__ARM_NEON -mfpu=neon-fp-armv8 -mneon-for-64bits -mfloat-abi=hard -mcpu=cortex-a53 -funroll-loops
+   #NOFILTER := -DNOFILTER -D__ARM_NEON -mfpu=neon-fp-armv8 -mneon-for-64bits -mfloat-abi=hard -mcpu=cortex-a53 -funroll-loops
+   NOFILTER := -DNOFILTER -D__ARM_NEON -mcpu=cortex-a53 -funroll-loops
    SHARED := -shared -Wl,--version-script=$(CORE_DIR)/link.T
 	LIBM :=
 else ifneq (,$(findstring osx,$(platform)))
