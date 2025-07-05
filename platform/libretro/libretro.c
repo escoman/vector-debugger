@@ -38,12 +38,15 @@ static float *float_audio_buf;
 static FILE * raw_audiof = NULL;
 
 static int blkvvod_delay_frames = 0;
+static int release_f1_frames = 0;
 
 static struct retro_log_callback logging;
 static retro_log_printf_t log_cb;
 static bool use_audio_cb;
 char retro_base_directory[4096];
 char retro_game_path[4096];
+
+static bool option_have_keyboard = false;
 
 static void fallback_log(enum retro_log_level level, const char *fmt, ...)
 {
@@ -266,32 +269,56 @@ void retro_set_video_refresh(retro_video_refresh_t cb)
 void retro_reset(void)
 {
     //Emulator_Reset(BLKVVOD);
-    blkvvod_delay_frames = 20;
+    blkvvod_delay_frames = 50;
 }
 
 static uint8_t keydown[350];
 
-static void key_make(int key)
+// dev == something not 0, making dev should break
+static void key_make(int key, int dev)
 {
-    if (!keydown[key]) {
-        Emulator_KeyDown(key);
-        keydown[key] = 1;
+    int before = keydown[key];
+    if ((before & dev) == 0) {
+        if (before == 0) {
+            Emulator_KeyDown(key);
+            fprintf(stderr, "KeyDown: %d dev=%d\n", key, dev);
+        }
+
+        keydown[key] |= dev;
     }
 }
 
-static void key_break(int key)
+static void key_break(int key, int dev)
 {
-    keydown[key] = 0;
-    Emulator_KeyUp(key);
+    int before = keydown[key];
+    int after = keydown[key] &= ~dev;
+    if (before && !after) {
+        Emulator_KeyUp(key);
+        fprintf(stderr, "KeyUp: %d dev=%d\n", key, dev);
+    }
 }
 
 static void joy_key(int button, int key)
 {
     if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, button)) {
-        key_make(key);
+        key_make(key, 2);
     }
-    else if (keydown[button]) {
-        key_break(key);
+    else {
+        key_break(key, 2);
+    }
+}
+
+static void poll_keyboard()
+{
+    for (int key = 0; key < 350; ++key)  // Safe key range
+    {
+        if (input_state_cb(0, RETRO_DEVICE_KEYBOARD, 0, key))
+        {
+            key_make(key, 1);
+        }
+        else {
+            key_break(key, 1);
+        }
     }
 }
 
@@ -299,18 +326,8 @@ static void update_input(void)
 {
     input_poll_cb();
 
-    //if (game_data && framectr > 2) {
-    //}
-    //
-    for (int key = 0; key < 350; ++key)  // Safe key range
-    {
-        if (input_state_cb(0, RETRO_DEVICE_KEYBOARD, 0, key))
-        {
-            key_make(key);
-        }
-        else if (keydown[key]) {
-            key_break(key);
-        }
+    if (option_have_keyboard) {
+        poll_keyboard();
     }
 
     joy_key(RETRO_DEVICE_ID_JOYPAD_SELECT, RETROK_F1);
@@ -323,6 +340,13 @@ static void update_input(void)
 
     joy_key(RETRO_DEVICE_ID_JOYPAD_X, RETROK_RETURN);       // vk
     joy_key(RETRO_DEVICE_ID_JOYPAD_Y, RETROK_SPACE);        // probl
+
+    if (release_f1_frames) {
+        if (--release_f1_frames == 0) {
+            key_break(RETROK_F1, 4);
+        }
+    }
+    
 
     if (blkvvod_delay_frames) {
         --blkvvod_delay_frames;
@@ -497,6 +521,8 @@ bool retro_load_game(const struct retro_game_info *info)
     }
     else if (extension && strcasecmp(extension, ".wav") == 0) {
         loadkind = LOADKIND_WAV;
+        key_make(RETROK_F1, 4);
+        release_f1_frames = 200;
     }
 
     Emulator_LoadAsset(info->data, info->size, loadkind, org);
