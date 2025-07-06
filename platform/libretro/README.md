@@ -19,6 +19,11 @@ Build on Raspberry Pi, or on any ARM Linux PC. Alternatively build on wsl2, just
 
 The result is `v06x_libretro.so`.
 
+## Building on Linux
+
+```make V=1```
+
+The result is `v06x_libretro.so`.
 
 # Installing
 
@@ -43,6 +48,11 @@ There's an innumerable amount of variants of those things. I can only describe t
 
 Exit the file manager. Find RetroArch in the game systems menu and launch `retroarch32` (not retroarch!).
 There you'll find Vector-06C in the list of available cores. 
+
+## ES-DE Flatpack on Linux
+
+?? WIP
+
 
 # Troubleshooting
 
