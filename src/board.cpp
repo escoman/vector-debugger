@@ -727,7 +727,9 @@ void Board::serialize(std::vector<uint8_t>& to)
     this->io.serialize(to);
     i8080cpu::serialize(to);
     this->serialize_self(to);
-    this->debug.serialize(to);
+#ifndef NODEBUGGER
+    this->debug.serialize(to); // this is like 8 megabytes of what?
+#endif
 }
 
 void Board::serialize_self(SerializeChunk::stype_t& to) const

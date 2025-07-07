@@ -560,11 +560,15 @@ bool retro_load_game_special(unsigned type, const struct retro_game_info *info, 
     return false;
 }
 
+static size_t serialize_sz = 0;
+
 size_t retro_serialize_size(void)
 {
-    size_t sz = Emulator_ExportState(NULL, 0);
-    log_cb(RETRO_LOG_DEBUG, "retro_serialize_size: %I64u\n", sz);
-    return sz;
+    if (serialize_sz == 0) {
+        serialize_sz = Emulator_ExportState(NULL, 0);
+        log_cb(RETRO_LOG_DEBUG, "retro_serialize_size: %I64u\n", serialize_sz);
+    }
+    return serialize_sz;
 }
 
 bool retro_serialize(void *data, size_t size)
