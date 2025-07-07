@@ -19,6 +19,18 @@ Build on Raspberry Pi, or on any ARM Linux PC. Alternatively build on wsl2, just
 
 The result is `v06x_libretro.so`.
 
+## Building for R36S or RPi (64-bit)
+
+Cross-compile:
+```
+make platform=linux-portable-aarch64 CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++ V=1 $*
+```
+
+Or natively on the device itself:
+```
+make platform=linux-portable-aarch64
+```
+
 ## Building on Linux
 
 ```make V=1```
