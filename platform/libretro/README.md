@@ -34,7 +34,7 @@ You can install the dll from the GUI, but you must copy the `.info` file manuall
 
 ## SBC handhelds and RPi
 
-### R36S with Arkos
+### R36S with Arkos (32-bit)
 
 There's an innumerable amount of variants of those things. I can only describe the one I've got, which seems to be a pretty vanilla R36S with Arkos.
 
@@ -49,10 +49,33 @@ There's an innumerable amount of variants of those things. I can only describe t
 Exit the file manager. Find RetroArch in the game systems menu and launch `retroarch32` (not retroarch!).
 There you'll find Vector-06C in the list of available cores. 
 
+## R36S with Arkos (64-bit)
+
+Refer to the 32-bit section but use aarch64 build and use retroarch without 32.
+
 ## ES-DE Flatpack on Linux
 
-?? WIP
+Create directory ~/ES-DE/custom_systems and create a file called es_systems.xml, or edit existing one:
 
+```
+<systemList>
+  <system>
+    <name>Vector-06c</name>
+    <fullname>Vector-06c</fullname>
+    <path>~/ROMs/vector06c</path>
+    <extension>.rom .r0m .fdd .edd .wav</extension>
+    <command label="v06x_libretro">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/v06x_libretro.so %ROM%</command>
+    <platform>v06x</platform>
+    <theme>v06x</theme>
+  </system>
+</systemList>
+```
+
+Put `v06x_libretro.so` to `~/.var/app/org.libretro.RetroArch/config/retroarch/cores/v06x_libretro.so`
+
+Put Vector-06c roms to `~/ROMs/vector06c`, or your custom location.
+
+Restart ES-DE, Vector-06C should be in the list of systems.
 
 # Troubleshooting
 
