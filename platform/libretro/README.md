@@ -37,6 +37,10 @@ make platform=linux-portable-aarch64
 
 The result is `v06x_libretro.so`.
 
+## Building on macOS (Apple Silicon)
+
+```make ARCHFLAGS="-arch arm64" V=1```
+
 # Installing
 
 ## Windows RetroArch
@@ -88,6 +92,13 @@ Put `v06x_libretro.so` to `~/.var/app/org.libretro.RetroArch/config/retroarch/co
 Put Vector-06c roms to `~/ROMs/vector06c`, or your custom location.
 
 Restart ES-DE, Vector-06C should be in the list of systems.
+
+## macOS RetroArch
+
+```
+cp v06x_libretro.dylib ~/Library/Application\ Support/RetroArch/cores
+cp v06x_libretro.info ~/Library/Application\ Support/RetroArch/info
+```
 
 # Troubleshooting
 
