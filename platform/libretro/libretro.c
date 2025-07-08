@@ -98,7 +98,7 @@ static retro_environment_t environ_cb;
 //typedef void (RETRO_CALLCONV *retro_keyboard_event_t)(bool down, unsigned keycode,
 //      uint32_t character, uint16_t key_modifiers);
 
-
+#if WITH_KEYBOARD_EVENTS
 void RETRO_CALLCONV retro_keyboard_event(bool down, unsigned keycode, uint32_t character, uint16_t key_modifiers)
 {
     if (log_cb) {
@@ -106,6 +106,7 @@ void RETRO_CALLCONV retro_keyboard_event(bool down, unsigned keycode, uint32_t c
                 down, keycode, character, key_modifiers);
     }
 }
+#endif
 
 void retro_init(void)
 {
@@ -123,8 +124,10 @@ void retro_init(void)
         snprintf(retro_base_directory, sizeof(retro_base_directory), "%s", dir);
     }
 
+#if WITH_KEYBOARD_EVENTS
     static struct retro_keyboard_callback keyboard_callback = {retro_keyboard_event};
     environ_cb(RETRO_ENVIRONMENT_SET_KEYBOARD_CALLBACK, &keyboard_callback);
+#endif
 }
 
 void retro_deinit(void)
@@ -247,16 +250,6 @@ void retro_set_environment(retro_environment_t cb)
     // why not start without a game
     bool no_rom = true;
     environ_cb(RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME, &no_rom);
-
-//
-//    static const struct retro_controller_description controllers[] = {
-//        { "Nintendo DS", RETRO_DEVICE_SUBCLASS(RETRO_DEVICE_JOYPAD, 0) },
-//    };
-//
-//    static const struct retro_controller_info ports[] = {
-//        { controllers, 1 },
-//        { NULL, 0 },
-//    };
 
     static const struct retro_controller_description port_1[] = {
         { "Keyboard",         RETRO_DEVICE_KEYBOARD },
@@ -391,8 +384,8 @@ static void update_input(void)
         joy_key(0, RETRO_DEVICE_ID_JOYPAD_START, RETROK_0);    // 0 = start game
     }
     else {
-        joy_key(0, RETRO_DEVICE_ID_JOYPAD_SELECT, RETROK_ESCAPE);
-        joy_key(0, RETRO_DEVICE_ID_JOYPAD_START, RETROK_F12);
+        joy_key(0, RETRO_DEVICE_ID_JOYPAD_SELECT, RETROK_1);
+        joy_key(0, RETRO_DEVICE_ID_JOYPAD_START, RETROK_0);
     }
 
     joy_key(0, RETRO_DEVICE_ID_JOYPAD_L, RETROK_F6);           // rus
