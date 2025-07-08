@@ -50,6 +50,22 @@ char retro_game_path[4096];
 
 static bool option_have_keyboard = false;
 
+// values for control_mapping
+#define CMS_JOYSTICK "joystick"
+#define CMS_ARROWS   "arrows"
+#define CMS_TET2_JUC "tetris2-left"    // JUC;
+#define CMS_TET2_ARR "tetris2-right"   // arrows and home
+
+
+enum {
+    CM_JOYSTICK   = 0,
+    CM_ARROWS     = 1,
+    CM_TET2_JUC   = 2,
+    CM_TET2_ARR   = 3,
+};
+
+int control_mapping[2] = {CM_JOYSTICK, CM_JOYSTICK};
+
 static void fallback_log(enum retro_log_level level, const char *fmt, ...)
 {
     (void)level;
@@ -95,8 +111,6 @@ void retro_init(void)
 {
     log_cb(RETRO_LOG_INFO, "retro_init:\n");
 
-    // frame_buf = (uint8_t*)malloc(VIDEO_PIXELS * sizeof(uint32_t));
-    //
     audio_buf = (int16_t*)malloc(SAMPLES_PER_FRAME * 2 * sizeof(int16_t));
     float_audio_buf = (float*)malloc(SAMPLES_PER_FRAME * 2 * sizeof(float));
 
@@ -115,9 +129,6 @@ void retro_init(void)
 
 void retro_deinit(void)
 {
-    //free(frame_buf);
-    //frame_buf = NULL;
-
     free(audio_buf);
     audio_buf = NULL;
 
@@ -181,6 +192,43 @@ static const struct retro_system_content_info_override content_overrides[] = {
     { NULL, false, false }
 };
 
+
+static void set_core_options()
+{
+    static struct retro_core_option_definition core_options[] = {
+        {
+            "control_mapping_0",
+            "Control Mapping P1",
+            "Select D-Pad mapping",
+            {
+                { CMS_JOYSTICK,   "Joystick" },
+                { CMS_ARROWS,     "Arrow Keys (← ↑ → ↓)" },
+                { CMS_TET2_JUC,   "Tetris2 JUC;" },
+                { CMS_TET2_ARR,   "Tetris2 ←↓→↖" },
+                { NULL, NULL },
+            },
+            "joystick"  // default
+        },
+        {
+            "control_mapping_1",
+            "Control Mapping P2",
+            "Select D-Pad mapping",
+            {
+                { CMS_JOYSTICK,   "Joystick" },
+                { CMS_ARROWS,     "Arrow Keys (← ↑ → ↓)" },
+                { CMS_TET2_JUC,   "Tetris2 JUC;" },
+                { CMS_TET2_ARR,   "Tetris2 ←↓→↖" },
+                { NULL, NULL },
+            },
+            "joystick"  // default
+        },
+        { NULL }
+    };
+
+    environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS, core_options);
+}
+
+
 void retro_set_environment(retro_environment_t cb)
 {
     environ_cb = cb;
@@ -194,6 +242,7 @@ void retro_set_environment(retro_environment_t cb)
         if (log_cb)
             log_cb(RETRO_LOG_INFO, "retro_set_environment: using fallback log\n");
     }
+    log_cb(RETRO_LOG_DEBUG, "retro_set_environment: environ_cb=%I64u\n", environ_cb);
 
     // why not start without a game
     bool no_rom = true;
@@ -209,37 +258,42 @@ void retro_set_environment(retro_environment_t cb)
 //        { NULL, 0 },
 //    };
 
-    static const struct retro_controller_description port_user[] = {
-        { "None",              RETRO_DEVICE_NONE },
-        { "Joystick",          RETRO_DEVICE_JOYPAD },
+    static const struct retro_controller_description port_1[] = {
+        { "Keyboard",         RETRO_DEVICE_KEYBOARD },
+        { "Joystick",         RETRO_DEVICE_JOYPAD },
         { 0 },
     };
 
-    static const struct retro_controller_description port_kbd[] = {
-        { "Keyboard",         RETRO_DEVICE_KEYBOARD },
-        { "Joystick",          RETRO_DEVICE_JOYPAD },
+    static const struct retro_controller_description port_2[] = {
+        { "Keyboard",          RETRO_DEVICE_KEYBOARD },
+        { "Joystick 2",        RETRO_DEVICE_JOYPAD },
         { 0 },
     };
+
 
     static struct retro_controller_info ports[] =
     {
         {
-            .types = port_kbd,
+            .types = port_1,
             .num_types = 2
         },
         {
-            .types = port_user,
-            .num_types = 3
+            .types = port_2,
+            .num_types = 2
         },
         {
             NULL, 0
         }
     };
 
+    if (log_cb) {
+        log_cb(RETRO_LOG_DEBUG, "SET_CONTROLLER_INFO\n");
+    }
 
     environ_cb(RETRO_ENVIRONMENT_SET_CONTROLLER_INFO, (void*)ports);
-
     environ_cb(RETRO_ENVIRONMENT_SET_CONTENT_INFO_OVERRIDE, (void*)content_overrides);
+
+    set_core_options();
 }
 
 void retro_set_audio_sample(retro_audio_sample_t cb)
@@ -300,9 +354,9 @@ static void key_break(int key, int dev)
     }
 }
 
-static void joy_key(int button, int key)
+static void joy_key(int pad, int button, int key)
 {
-    if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, button)) {
+    if (input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, button)) {
         key_make(key, 2);
     }
     else {
@@ -332,16 +386,22 @@ static void update_input(void)
         poll_keyboard();
     }
 
-    joy_key(RETRO_DEVICE_ID_JOYPAD_SELECT, RETROK_F1);
-    joy_key(RETRO_DEVICE_ID_JOYPAD_START, RETROK_F12);
+    if (control_mapping[0] == CM_TET2_JUC || control_mapping[0] == CM_TET2_ARR) {
+        joy_key(0, RETRO_DEVICE_ID_JOYPAD_SELECT, RETROK_1);   // 1 = game type
+        joy_key(0, RETRO_DEVICE_ID_JOYPAD_START, RETROK_0);    // 0 = start game
+    }
+    else {
+        joy_key(0, RETRO_DEVICE_ID_JOYPAD_SELECT, RETROK_ESCAPE);
+        joy_key(0, RETRO_DEVICE_ID_JOYPAD_START, RETROK_F12);
+    }
 
-    joy_key(RETRO_DEVICE_ID_JOYPAD_L, RETROK_F6);           // rus
-    joy_key(RETRO_DEVICE_ID_JOYPAD_L2, RETROK_LSHIFT);      // ss/shift
-    joy_key(RETRO_DEVICE_ID_JOYPAD_R2, RETROK_LCTRL);       // us/ctrl
-    joy_key(RETRO_DEVICE_ID_JOYPAD_R, RETROK_RALT);         // ps
+    joy_key(0, RETRO_DEVICE_ID_JOYPAD_L, RETROK_F6);           // rus
+    joy_key(0, RETRO_DEVICE_ID_JOYPAD_L2, RETROK_LSHIFT);      // ss/shift
+    joy_key(0, RETRO_DEVICE_ID_JOYPAD_R2, RETROK_LCTRL);       // us/ctrl
+    joy_key(0, RETRO_DEVICE_ID_JOYPAD_R, RETROK_RALT);         // ps
 
-    joy_key(RETRO_DEVICE_ID_JOYPAD_X, RETROK_RETURN);       // vk
-    joy_key(RETRO_DEVICE_ID_JOYPAD_Y, RETROK_SPACE);        // probl
+    joy_key(0, RETRO_DEVICE_ID_JOYPAD_X, RETROK_RETURN);       // vk
+    joy_key(0, RETRO_DEVICE_ID_JOYPAD_Y, RETROK_SPACE);        // probl
 
     if (release_f1_frames) {
         if (--release_f1_frames == 0) {
@@ -362,13 +422,43 @@ static void update_input(void)
     uint8_t state[2];
     for (int pad = 0; pad < 2; ++pad) {
         state[pad] = 0xff; 
+
+        if (control_mapping[pad] == CM_JOYSTICK) {
                                     //port device              index  id
-        state[pad] &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT) << 0);
-        state[pad] &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT) << 1);
-        state[pad] &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP) << 2);
-        state[pad] &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN) << 3);
-        state[pad] &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A) << 6);
-        state[pad] &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B) << 7);
+            state[pad] &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT) << 0);
+            state[pad] &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT) << 1);
+            state[pad] &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP) << 2);
+            state[pad] &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN) << 3);
+            state[pad] &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A) << 6);
+            state[pad] &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B) << 7);
+        }
+        else if (control_mapping[pad] == CM_ARROWS) {
+            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_LEFT, RETROK_LEFT);
+            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_RIGHT, RETROK_RIGHT);
+            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_UP, RETROK_UP);
+            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_DOWN, RETROK_DOWN);
+
+            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_A, RETROK_TAB);
+            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_B, RETROK_HOME);
+        }
+        else if (control_mapping[pad] == CM_TET2_JUC) {
+            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_LEFT, RETROK_j);
+            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_RIGHT, RETROK_u);
+            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_UP, RETROK_c);            // rotate "Fire"
+            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_DOWN, RETROK_SEMICOLON);  // drop
+
+            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_A, RETROK_TAB);
+            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_B, RETROK_F1);
+        }
+        else if (control_mapping[pad] == CM_TET2_JUC) {
+            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_LEFT, RETROK_LEFT);
+            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_RIGHT, RETROK_RIGHT);
+            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_UP, RETROK_DOWN);         // rotate "Fire"
+            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_DOWN, RETROK_HOME);       // drop
+
+            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_A, RETROK_TAB);
+            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_B, RETROK_F1);
+        }
     }
 
     Emulator_SetJoysticks(state[0], state[1]);
@@ -378,7 +468,40 @@ static void update_input(void)
 
 static void check_variables(void)
 {
+    char key[] = "control_mapping_0";
 
+    for (int i = 0; i < 2; ++i) {
+
+        key[sizeof(key)-2] = '0' + i;
+
+        if (log_cb)
+            log_cb(RETRO_LOG_DEBUG, "check_variables: i=%d key=\"%s\"\n", i, key);
+
+        unsigned version = 0;
+        if (!environ_cb(RETRO_ENVIRONMENT_GET_CORE_OPTIONS_VERSION, &version)) version = 0;
+
+        struct retro_variable var = { key, NULL };
+        
+        if (version && environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var)) {
+            if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
+                if (strcmp(CMS_JOYSTICK, var.value) == 0) {
+                    control_mapping[i] = CM_JOYSTICK;
+                }
+                else if (strcmp(CMS_ARROWS, var.value) == 0) {
+                    control_mapping[i] = CM_ARROWS;
+                }
+                else if (strcmp(CMS_TET2_JUC, var.value) == 0) {
+                    control_mapping[i] = CM_TET2_JUC;
+                }
+                else if (strcmp(CMS_TET2_ARR, var.value) == 0) {
+                    control_mapping[i] = CM_TET2_ARR;
+                }
+            }
+        }
+    }
+
+    log_cb(RETRO_LOG_INFO, "control_mapping[0]=%d control_mapping[1]=%d\n",
+            control_mapping[0], control_mapping[1]);
 }
 
 static void audio_set_state(bool enable)
