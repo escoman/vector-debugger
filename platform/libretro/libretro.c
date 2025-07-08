@@ -266,7 +266,7 @@ void retro_set_environment(retro_environment_t cb)
 
     static const struct retro_controller_description port_2[] = {
         { "Keyboard",          RETRO_DEVICE_KEYBOARD },
-        { "Joystick 2",        RETRO_DEVICE_JOYPAD },
+        { "Joystick",          RETRO_DEVICE_JOYPAD },
         { 0 },
     };
 
@@ -275,11 +275,11 @@ void retro_set_environment(retro_environment_t cb)
     {
         {
             .types = port_1,
-            .num_types = 2
+            .num_types = 3
         },
         {
             .types = port_2,
-            .num_types = 2
+            .num_types = 3
         },
         {
             NULL, 0
@@ -450,7 +450,7 @@ static void update_input(void)
             joy_key(pad, RETRO_DEVICE_ID_JOYPAD_A, RETROK_TAB);
             joy_key(pad, RETRO_DEVICE_ID_JOYPAD_B, RETROK_F1);
         }
-        else if (control_mapping[pad] == CM_TET2_JUC) {
+        else if (control_mapping[pad] == CM_TET2_ARR) {
             joy_key(pad, RETRO_DEVICE_ID_JOYPAD_LEFT, RETROK_LEFT);
             joy_key(pad, RETRO_DEVICE_ID_JOYPAD_RIGHT, RETROK_RIGHT);
             joy_key(pad, RETRO_DEVICE_ID_JOYPAD_UP, RETROK_DOWN);         // rotate "Fire"
@@ -697,14 +697,14 @@ size_t retro_serialize_size(void)
 bool retro_serialize(void *data, size_t size)
 {
     size_t sz = Emulator_ExportState(data, size);
-    log_cb(RETRO_LOG_DEBUG, "retro_serialize: set size=%I64u result size=%I64u\n", size, sz);
+    //log_cb(RETRO_LOG_DEBUG, "retro_serialize: set size=%I64u result size=%I64u\n", size, sz);
     return sz <= size;
 }
 
 bool retro_unserialize(const void *data, size_t size)
 {
     bool res =  Emulator_RestoreState(data, size);
-    log_cb(RETRO_LOG_DEBUG, "retro_unserialize: size=%I64u result=%d\n", size, res);
+    //log_cb(RETRO_LOG_DEBUG, "retro_unserialize: size=%I64u result=%d\n", size, res);
     return res;
 }
 
