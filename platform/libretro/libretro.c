@@ -53,15 +53,15 @@ static bool option_have_keyboard = false;
 // values for control_mapping
 #define CMS_JOYSTICK "joystick"
 #define CMS_ARROWS   "arrows"
-#define CMS_TET2_JUC "tetris2-left"    // JUC;
-#define CMS_TET2_ARR "tetris2-right"   // arrows and home
+#define CMS_TETRIS2  "tetris2"    // JUC; + arrows and home
+//#define CMS_TET2_ARR "tetris2-right"   // arrows and home
 
 
 enum {
     CM_JOYSTICK   = 0,
     CM_ARROWS     = 1,
-    CM_TET2_JUC   = 2,
-    CM_TET2_ARR   = 3,
+    CM_TETRIS2    = 2,
+//    CM_TET2_ARR   = 3,
 };
 
 int control_mapping[2] = {CM_JOYSTICK, CM_JOYSTICK};
@@ -206,25 +206,25 @@ static void set_core_options()
             {
                 { CMS_JOYSTICK,   "Joystick" },
                 { CMS_ARROWS,     "Arrow Keys (← ↑ → ↓)" },
-                { CMS_TET2_JUC,   "Tetris2 JUC;" },
-                { CMS_TET2_ARR,   "Tetris2 ←↓→↖" },
+                { CMS_TETRIS2,    "Tetris2 JUC; ←↓→↖" },
+                //{ CMS_TET2_ARR,   "Tetris2 ←↓→↖" },
                 { NULL, NULL },
             },
             "joystick"  // default
         },
-        {
-            "control_mapping_1",
-            "Control Mapping P2",
-            "Select D-Pad mapping",
-            {
-                { CMS_JOYSTICK,   "Joystick" },
-                { CMS_ARROWS,     "Arrow Keys (← ↑ → ↓)" },
-                { CMS_TET2_JUC,   "Tetris2 JUC;" },
-                { CMS_TET2_ARR,   "Tetris2 ←↓→↖" },
-                { NULL, NULL },
-            },
-            "joystick"  // default
-        },
+        //{
+        //    "control_mapping_1",
+        //    "Control Mapping P2",
+        //    "Select D-Pad mapping",
+        //    {
+        //        { CMS_JOYSTICK,   "Joystick" },
+        //        { CMS_ARROWS,     "Arrow Keys (← ↑ → ↓)" },
+        //        { CMS_TET2_JUC,   "Tetris2 JUC;" },
+        //        { CMS_TET2_ARR,   "Tetris2 ←↓→↖" },
+        //        { NULL, NULL },
+        //    },
+        //    "joystick"  // default
+        //},
         { NULL }
     };
 
@@ -379,13 +379,9 @@ static void update_input(void)
         poll_keyboard();
     }
 
-    if (control_mapping[0] == CM_TET2_JUC || control_mapping[0] == CM_TET2_ARR) {
+    if (control_mapping[0] == CM_TETRIS2) {
         joy_key(0, RETRO_DEVICE_ID_JOYPAD_SELECT, RETROK_1);   // 1 = game type
         joy_key(0, RETRO_DEVICE_ID_JOYPAD_START, RETROK_0);    // 0 = start game
-    }
-    else {
-        joy_key(0, RETRO_DEVICE_ID_JOYPAD_SELECT, RETROK_1);
-        joy_key(0, RETRO_DEVICE_ID_JOYPAD_START, RETROK_0);
     }
 
     joy_key(0, RETRO_DEVICE_ID_JOYPAD_L, RETROK_F6);           // rus
@@ -434,24 +430,25 @@ static void update_input(void)
             joy_key(pad, RETRO_DEVICE_ID_JOYPAD_A, RETROK_TAB);
             joy_key(pad, RETRO_DEVICE_ID_JOYPAD_B, RETROK_HOME);
         }
-        else if (control_mapping[pad] == CM_TET2_JUC) {
-            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_LEFT, RETROK_j);
-            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_RIGHT, RETROK_u);
-            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_UP, RETROK_c);            // rotate "Fire"
-            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_DOWN, RETROK_SEMICOLON);  // drop
+    }
 
-            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_A, RETROK_TAB);
-            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_B, RETROK_F1);
-        }
-        else if (control_mapping[pad] == CM_TET2_ARR) {
-            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_LEFT, RETROK_LEFT);
-            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_RIGHT, RETROK_RIGHT);
-            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_UP, RETROK_DOWN);         // rotate "Fire"
-            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_DOWN, RETROK_HOME);       // drop
+    // if mapping is tetris2, P1 -> arrows, P2 -> juc;
+    if (control_mapping[0] == CM_TETRIS2) {
+        joy_key(1, RETRO_DEVICE_ID_JOYPAD_LEFT, RETROK_j);
+        joy_key(1, RETRO_DEVICE_ID_JOYPAD_RIGHT, RETROK_u);
+        joy_key(1, RETRO_DEVICE_ID_JOYPAD_UP, RETROK_c);            // rotate "Fire"
+        joy_key(1, RETRO_DEVICE_ID_JOYPAD_DOWN, RETROK_SEMICOLON);  // drop
 
-            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_A, RETROK_TAB);
-            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_B, RETROK_F1);
-        }
+        joy_key(1, RETRO_DEVICE_ID_JOYPAD_A, RETROK_TAB);
+        joy_key(1, RETRO_DEVICE_ID_JOYPAD_B, RETROK_F1);
+
+        joy_key(0, RETRO_DEVICE_ID_JOYPAD_LEFT, RETROK_LEFT);
+        joy_key(0, RETRO_DEVICE_ID_JOYPAD_RIGHT, RETROK_RIGHT);
+        joy_key(0, RETRO_DEVICE_ID_JOYPAD_UP, RETROK_DOWN);         // rotate "Fire"
+        joy_key(0, RETRO_DEVICE_ID_JOYPAD_DOWN, RETROK_HOME);       // drop
+
+        joy_key(0, RETRO_DEVICE_ID_JOYPAD_A, RETROK_TAB);
+        joy_key(0, RETRO_DEVICE_ID_JOYPAD_B, RETROK_F1);
     }
 
     Emulator_SetJoysticks(state[0], state[1]);
@@ -463,7 +460,7 @@ static void check_variables(void)
 {
     char key[] = "control_mapping_0";
 
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < 1; ++i) { // TODO: just one mapping
 
         key[sizeof(key)-2] = '0' + i;
 
@@ -483,11 +480,8 @@ static void check_variables(void)
                 else if (strcmp(CMS_ARROWS, var.value) == 0) {
                     control_mapping[i] = CM_ARROWS;
                 }
-                else if (strcmp(CMS_TET2_JUC, var.value) == 0) {
-                    control_mapping[i] = CM_TET2_JUC;
-                }
-                else if (strcmp(CMS_TET2_ARR, var.value) == 0) {
-                    control_mapping[i] = CM_TET2_ARR;
+                else if (strcmp(CMS_TETRIS2, var.value) == 0) {
+                    control_mapping[i] = CM_TETRIS2;
                 }
             }
         }
