@@ -15,6 +15,7 @@ void Emulator::execute_frame()
         if (this->keydowns[i]) {
             SDL_KeyboardEvent ev;
             ev.keysym.scancode = this->keydowns[i];
+            fprintf(stderr, "Emulator::execute_frame: -> board.handle_keydown(%d)", ev.keysym.scancode);
             board.handle_keydown(ev);
         }
         if (this->keyups[i]) {

@@ -22,7 +22,7 @@
 #define VIDEO_HEIGHT DEFAULT_SCREEN_HEIGHT
 #define VIDEO_PIXELS VIDEO_WIDTH * VIDEO_HEIGHT
 
-#define FPS 50
+#define FPS (12000000.0/4/59904)
 #define SAMPLERATE 48000
 
 #define SAMPLES_PER_FRAME (SAMPLERATE/FPS)
@@ -98,12 +98,20 @@ static retro_environment_t environ_cb;
 //typedef void (RETRO_CALLCONV *retro_keyboard_event_t)(bool down, unsigned keycode,
 //      uint32_t character, uint16_t key_modifiers);
 
+#define WITH_KEYBOARD_EVENTS 1
+
 #if WITH_KEYBOARD_EVENTS
 void RETRO_CALLCONV retro_keyboard_event(bool down, unsigned keycode, uint32_t character, uint16_t key_modifiers)
 {
     if (log_cb) {
         log_cb(RETRO_LOG_DEBUG, "retro_keyboard_event: down=%d keycode=%d char=%d modifiers=$%04x\n",
                 down, keycode, character, key_modifiers);
+    }
+    if (down) {
+        Emulator_KeyDown(keycode);
+    }
+    else {
+        Emulator_KeyUp(keycode);
     }
 }
 #endif
@@ -181,7 +189,7 @@ void retro_get_system_av_info(struct retro_system_av_info *info)
     info->geometry.max_height   = VIDEO_HEIGHT;
     info->geometry.aspect_ratio = 5.f/4.f;
 
-    info->timing.fps = 60; //FPS;//3e6/59904;
+    info->timing.fps = FPS; //FPS;//3e6/59904;
     info->timing.sample_rate = SAMPLERATE;
 }
 
@@ -327,6 +335,7 @@ static uint8_t keydown[350];
 static void key_make(int key, int dev)
 {
     int before = keydown[key];
+    fprintf(stderr, "key_make: key=%d dev=%d before=%d\n", key, dev, before);
     if ((before & dev) == 0) {
         if (before == 0) {
             Emulator_KeyDown(key);
@@ -382,6 +391,10 @@ static void update_input(void)
     if (control_mapping[0] == CM_TETRIS2) {
         joy_key(0, RETRO_DEVICE_ID_JOYPAD_SELECT, RETROK_1);   // 1 = game type
         joy_key(0, RETRO_DEVICE_ID_JOYPAD_START, RETROK_0);    // 0 = start game
+    }
+    else {
+        joy_key(0, RETRO_DEVICE_ID_JOYPAD_SELECT, RETROK_F1);   // F1/tape
+        joy_key(0, RETRO_DEVICE_ID_JOYPAD_START, RETROK_F12);   // F12/blksbr
     }
 
     joy_key(0, RETRO_DEVICE_ID_JOYPAD_L, RETROK_F6);           // rus
@@ -474,6 +487,7 @@ static void check_variables(void)
         
         if (version && environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var)) {
             if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
+                log_cb(RETRO_LOG_INFO, "mapping: %d=%s", i, var.value);
                 if (strcmp(CMS_JOYSTICK, var.value) == 0) {
                     control_mapping[i] = CM_JOYSTICK;
                 }

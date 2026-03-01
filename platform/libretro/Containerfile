@@ -1,0 +1,21 @@
+FROM ubuntu:19.10
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Redirect to old-releases
+RUN sed -i 's|archive.ubuntu.com|old-releases.ubuntu.com|g' /etc/apt/sources.list && \
+    sed -i 's|security.ubuntu.com|old-releases.ubuntu.com|g' /etc/apt/sources.list
+
+RUN apt-get update && \
+    apt-get install -y \
+        build-essential \
+        gcc-aarch64-linux-gnu \
+        g++-aarch64-linux-gnu \
+        make \
+        git \
+        pkg-config \
+        ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work
+CMD ["/bin/bash"]
