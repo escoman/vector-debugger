@@ -1,3 +1,5 @@
+#pragma once
+
 #include "libretro.h"
 
     enum GodotScancodes {

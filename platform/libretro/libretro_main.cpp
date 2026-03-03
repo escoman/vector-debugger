@@ -1,6 +1,6 @@
-#include <iostream>
-#include <fstream>
-#include <iterator>
+//#include <iostream>
+//#include <fstream>
+//#include <iterator>
 
 #include "memory.h"
 #include "vio.h"
@@ -13,9 +13,13 @@
 #include "sound.h"
 #include "ay.h"
 #include "wav.h"
-#include "util.h"
+//#include "util.h"
 
 #include "libretro_main.h"
+#include "vkbd.h"
+
+#include <cstdio>
+#include <cassert>
 
 Memory memory;
 FD1793 fdc;
@@ -32,6 +36,13 @@ PixelFiller filler(memory, &io, &tv);
 Debug debug(&memory);
 Board board(memory, io, filler, soundnik, tv, tape_player, debug);
 Emulator lator(board);
+            
+#include "graphics/Font.h"
+extern Font CodePage866_8x8;
+
+Graphics32 overlay;
+VirtualKeyboard vkbd(overlay);
+bool vkbd_top;
 
 extern "C" int Emulator_Init()
 {
@@ -113,15 +124,30 @@ void load_wav(const uint8_t* bytes, size_t size)
 
 extern "C" uint32_t * Emulator_GetPixels()
 {
-    return lator.pixels();
+    uint32_t * pixeldata = lator.pixels();
+    //overlay.setPixelBuffer(pixeldata);
+    //overlay.setResolution(DEFAULT_SCREEN_WIDTH, DEFAULT_SCREEN_HEIGHT);
+    //overlay.setFont(CodePage866_8x8);
+    vkbd.prepare();
+    vkbd.on_keydown = [](int scancode) {
+        Emulator_KeyDown(scancode);
+    };
+    vkbd.on_keyup = [](int scancode) {
+        Emulator_KeyUp(scancode);
+    };
+    vkbd_top = true;
+
+    return pixeldata;
 }
 
 extern "C" int Emulator_ExecuteFrame(float * samples)
 {
     lator.execute_frame();
-
-    //lator.export_pixel_bytes(pixels);
     lator.export_audio_frame(samples, 2*48000/50);
+
+    if (vkbd.visible) {
+        vkbd.paint();
+    }
 
     return 0;
 }
@@ -157,7 +183,12 @@ extern "C" void Emulator_LoadAsset(const uint8_t *data, size_t data_sz, int kind
 
 extern "C" void Emulator_SetJoysticks(int joy0e, int joy0f)
 {
-    lator.set_joysticks((int)joy0e, (int)joy0f);
+    if (vkbd.visible) {
+        vkbd.set_joysticks(joy0e, joy0f);
+    }
+    else {
+        lator.set_joysticks((int)joy0e, (int)joy0f);
+    }
 }
 
 
@@ -222,3 +253,33 @@ extern "C" void * Emulator_GetMemory()
 {
     return (void *)memory.buffer();
 }
+
+extern "C" void Emulator_ShowVirtualKeyboard(bool show)
+{
+    vkbd.visible = show;
+    if (vkbd.visible) {
+        uint32_t * pixeldata = lator.pixels();
+        if (vkbd_top) {
+            overlay.setPixelBuffer(pixeldata);
+        }
+        else {
+            overlay.setPixelBuffer(pixeldata
+                    + DEFAULT_SCREEN_WIDTH * (DEFAULT_SCREEN_HEIGHT - vkbd.get_height()));
+        }
+        overlay.setResolution(DEFAULT_SCREEN_WIDTH, vkbd.get_height());
+        overlay.setFont(CodePage866_8x8);
+        overlay.autoScroll = false;
+    }
+}
+
+extern "C" bool Emulator_VirtualKeyboardVisible()
+{
+    return vkbd.visible;
+}
+
+extern "C" void Emulator_VirtualKeyboardMove()
+{
+    vkbd_top = !vkbd_top;
+    Emulator_ShowVirtualKeyboard(vkbd.visible);
+}
+

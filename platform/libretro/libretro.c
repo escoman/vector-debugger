@@ -50,6 +50,9 @@ char retro_game_path[4096];
 
 static bool option_have_keyboard = false;
 
+static int vkeys_debounce_count = 0;
+const int vkeys_debounce_frames = 8;
+
 // values for control_mapping
 #define CMS_JOYSTICK "joystick"
 #define CMS_ARROWS   "arrows"
@@ -380,12 +383,50 @@ static void poll_keyboard()
     }
 }
 
+#define SHOW_KEYBOARD_BUTTON RETRO_DEVICE_ID_JOYPAD_L
+#define MOVE_KEYBOARD_BUTTON RETRO_DEVICE_ID_JOYPAD_R
+
+static void get_joystick_bits(int pad, uint8_t* state)
+{
+                                    //port device              index  id
+    *state &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT) << 0);
+    *state &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT) << 1);
+    *state &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP) << 2);
+    *state &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN) << 3);
+    *state &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A) << 6);
+    *state &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B) << 7);
+}
+
 static void update_input(void)
 {
     input_poll_cb();
 
     if (option_have_keyboard) {
         poll_keyboard();
+    }
+
+    if (vkeys_debounce_count == 0) {
+        if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, SHOW_KEYBOARD_BUTTON)) {
+            Emulator_ShowVirtualKeyboard(!Emulator_VirtualKeyboardVisible());
+            vkeys_debounce_count = vkeys_debounce_frames;
+        }
+        else if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, MOVE_KEYBOARD_BUTTON)) {
+            Emulator_VirtualKeyboardMove();
+            vkeys_debounce_count = vkeys_debounce_frames;
+        }
+    }
+    else {
+        if (!input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, SHOW_KEYBOARD_BUTTON) &&
+            !input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, MOVE_KEYBOARD_BUTTON)) {
+            --vkeys_debounce_count;
+        }
+    }
+
+    if (Emulator_VirtualKeyboardVisible()) {
+        uint8_t joy0f_bits = 0xff;
+        get_joystick_bits(0, &joy0f_bits);
+        Emulator_SetJoysticks(joy0f_bits, 0xff);
+        return;
     }
 
     if (control_mapping[0] == CM_TETRIS2) {
@@ -410,7 +451,6 @@ static void update_input(void)
             key_break(RETROK_F1, 4);
         }
     }
-    
 
     if (blkvvod_delay_frames) {
         --blkvvod_delay_frames;
@@ -426,13 +466,7 @@ static void update_input(void)
         state[pad] = 0xff; 
 
         if (control_mapping[pad] == CM_JOYSTICK) {
-                                    //port device              index  id
-            state[pad] &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT) << 0);
-            state[pad] &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT) << 1);
-            state[pad] &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP) << 2);
-            state[pad] &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN) << 3);
-            state[pad] &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A) << 6);
-            state[pad] &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B) << 7);
+            get_joystick_bits(pad, &state[pad]);
         }
         else if (control_mapping[pad] == CM_ARROWS) {
             joy_key(pad, RETRO_DEVICE_ID_JOYPAD_LEFT, RETROK_LEFT);

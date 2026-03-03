@@ -27,6 +27,10 @@ size_t Emulator_GetMemSize(void);
 void * Emulator_GetMemory(void);
 uint32_t * Emulator_GetPixels();  // frame buffer
 
+void Emulator_ShowVirtualKeyboard(bool show);
+bool Emulator_VirtualKeyboardVisible();
+void Emulator_VirtualKeyboardMove();
+
 #ifdef __cplusplus
 }
 #endif

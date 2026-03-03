@@ -1,5 +1,4 @@
 #include "emulator.h"
-#include "util.h"
 
 Emulator::Emulator(Board & borat) : board(borat)
 {
@@ -15,7 +14,6 @@ void Emulator::execute_frame()
         if (this->keydowns[i]) {
             SDL_KeyboardEvent ev;
             ev.keysym.scancode = this->keydowns[i];
-            fprintf(stderr, "Emulator::execute_frame: -> board.handle_keydown(%d)", ev.keysym.scancode);
             board.handle_keydown(ev);
         }
         if (this->keyups[i]) {
@@ -25,12 +23,11 @@ void Emulator::execute_frame()
         }
         this->keydowns[i] = this->keyups[i] = 0;
     }
-    int executed;
     if (Options.vsync && Options.vsync_enable) {
-        executed = board.execute_frame_with_cadence(true, true);
+        board.execute_frame_with_cadence(true, true);
     }
     else {
-        executed = board.execute_frame_with_cadence(true, false);
+        board.execute_frame_with_cadence(true, false);
     }
 }
 

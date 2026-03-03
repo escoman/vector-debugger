@@ -147,6 +147,12 @@ OBJECTS := $(SOURCES_C:.c=.o) $(SOURCES_CXX:.cpp=.o)
 CFLAGS   += -Wall -D__LIBRETRO__ $(fpic) $(NOFILTER) $(INCLUDES)
 CXXFLAGS += -Wall -D__LIBRETRO__ $(fpic) $(NOFILTER) $(INCLUDES)
 
+# Generate dependency files
+DEPFLAGS = -MMD -MP
+CFLAGS   += $(DEPFLAGS)
+CXXFLAGS += $(DEPFLAGS)
+DEPS := $(OBJECTS:.o=.d)
+
 all: $(TARGET)
 
 $(TARGET): $(OBJECTS)
@@ -166,9 +172,11 @@ endif
 	$(Q)$(CXX) $(CXXFLAGS) $(fpic) -c -o $@ $<
 
 clean:
-	rm -f $(OBJECTS) $(TARGET)
+	rm -f $(OBJECTS) $(DEPS) $(TARGET)
 
 .PHONY: clean
 
 print-%:
 	@echo '$*=$($*)'
+
+-include $(DEPS)
