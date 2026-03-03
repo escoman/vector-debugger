@@ -10,6 +10,7 @@ android/build
 *.os
 *.obj
 *.o
+*.d
 .*.fdd
 build-i686-w64-mingw32/*
 test/out/*

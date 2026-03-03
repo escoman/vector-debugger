@@ -22,6 +22,9 @@ namespace colormap {
     inline constexpr uint32_t KEY_TEXT_BROWN = 0x808080;
 
     inline constexpr uint32_t KEY_BORDER_SELECT = 0xffffff;
+
+    inline constexpr uint32_t LED_ON = 0xff4040;
+    inline constexpr uint32_t LED_OFF = 0x401010;
 };
 
 template<std::size_t N>
@@ -47,6 +50,7 @@ class VirtualKeyboard
         bool pressed;
     };
 
+
     int debounce_count = 0;
     static constexpr int debounce_frames = 8;
 
@@ -56,9 +60,12 @@ class VirtualKeyboard
     static constexpr int TOP_BORDER = 1;
     static constexpr int BOTTOM_BORDER = 0;
 
+    static constexpr int LED_RADIUS = 3;
+
+
 public:
-    int unit_w, unit_h;
-    int xgap, ygap;
+    int unit_w, unit_h;   // unit key width and height
+    int xgap, ygap;       // key gap
 
     int select_row, select_col;
     int finger_row, finger_col;
@@ -71,7 +78,7 @@ public:
     std::function<void(int)> on_keydown;
     std::function<void(int)> on_keyup;
 
-    VirtualKeyboard(Graphics32& g) : gfx(g) {
+    VirtualKeyboard(Graphics32& g, bool &ruslat_status) : gfx(g), ruslat_status(ruslat_status) {
         unit_w = 34;
         unit_h = 20;
 
@@ -211,6 +218,8 @@ public:
         for (const key_info_t& ki : key_map) {
             draw_key(ki);
         }
+
+        draw_ruslat();
     }
 
     int get_height() const
@@ -219,6 +228,23 @@ public:
     }
 
 private:
+    void draw_ruslat()
+    {
+        // in the gap
+        //int x = unit_w * 13 + unit_w / 2;
+        //int y = unit_h * 3 / 2;
+
+        int x = unit_w / 3 + 1;
+        int y = unit_h * 4 + unit_h - LED_RADIUS - 3 - ygap + TOP_BORDER;
+
+        if (ruslat_status) {
+            gfx.fillEllipse(x, y, LED_RADIUS * 3 / 2, LED_RADIUS, colormap::LED_ON);
+        }
+        else {
+            gfx.fillEllipse(x, y, LED_RADIUS * 3 / 2, LED_RADIUS, colormap::LED_OFF);
+        }
+    }
+
     key_info_t& selected()
     {
         if ((unsigned)select_row >= NUM_ROWS || (unsigned)select_col >= NUM_COLS) {
@@ -472,6 +498,8 @@ private:
 
 private:
     Graphics32& gfx; 
+    bool& ruslat_status;
+
     int cur_x, cur_y;
 
     std::array<key_info_t, NUM_COLS * NUM_ROWS> key_map;

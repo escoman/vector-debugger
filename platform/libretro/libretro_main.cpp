@@ -40,9 +40,10 @@ Emulator lator(board);
 #include "graphics/Font.h"
 extern Font CodePage866_8x8;
 
-Graphics32 overlay;
-VirtualKeyboard vkbd(overlay);
 bool vkbd_top;
+bool ruslat_status;
+Graphics32 overlay;
+VirtualKeyboard vkbd(overlay, ruslat_status);
 
 extern "C" int Emulator_Init()
 {
@@ -72,13 +73,18 @@ extern "C" int Emulator_Init()
                 Board::ResetMode::BLKVVOD : Board::ResetMode::BLKSBR);
     };
 
-    if (Options.autostart) {
+    ruslat_status = false;
+
+    {
         int seq = 0;
         io.onruslat = [&seq](bool ruslat) {
-            seq = (seq << 1) | (ruslat ? 1 : 0);
-            if ((seq & 15) == 6) {
-                board.reset(Board::ResetMode::BLKSBR);
-                io.onruslat = nullptr;
+            ruslat_status = !ruslat;
+            if (Options.autostart) {
+                seq = (seq << 1) | (ruslat ? 1 : 0);
+                if ((seq & 15) == 6) {
+                    board.reset(Board::ResetMode::BLKSBR);
+                    Options.autostart = false;
+                }
             }
         };
     }
@@ -125,9 +131,6 @@ void load_wav(const uint8_t* bytes, size_t size)
 extern "C" uint32_t * Emulator_GetPixels()
 {
     uint32_t * pixeldata = lator.pixels();
-    //overlay.setPixelBuffer(pixeldata);
-    //overlay.setResolution(DEFAULT_SCREEN_WIDTH, DEFAULT_SCREEN_HEIGHT);
-    //overlay.setFont(CodePage866_8x8);
     vkbd.prepare();
     vkbd.on_keydown = [](int scancode) {
         Emulator_KeyDown(scancode);
