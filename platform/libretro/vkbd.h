@@ -549,12 +549,6 @@ private:
 
         {SDL_SCANCODE_F6, SDL_SCANCODE_TAB, 
             SDL_SCANCODE_SPACE,
-            SDL_SCANCODE_SPACE,
-            SDL_SCANCODE_SPACE,
-            SDL_SCANCODE_SPACE,
-            SDL_SCANCODE_SPACE,
-            SDL_SCANCODE_SPACE,
-            SDL_SCANCODE_SPACE,
             SDL_SCANCODE_LALT, SDL_SCANCODE_BACKSPACE}};
 
     static constexpr int scancodes_num[5][3] = {
