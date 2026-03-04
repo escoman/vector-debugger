@@ -26,6 +26,14 @@ Cross-compile:
 make platform=linux-portable-aarch64 CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++ V=1 $*
 ```
 
+ArkOs on R36S will probably have an older GLIBC version. It is recommended to build using a podman container
+with matching versions of build tools:
+```
+  podman build -t libretro-builder .
+  podman run --rm -it -v $PWD/../..:/work:Z -w /work/platform/libretro libretro-builder ./mk-aarch64.sh
+```
+
+
 Or natively on the device itself:
 ```
 make platform=linux-portable-aarch64
