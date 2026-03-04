@@ -386,7 +386,7 @@ static void poll_keyboard()
 #define SHOW_KEYBOARD_BUTTON RETRO_DEVICE_ID_JOYPAD_L
 #define MOVE_KEYBOARD_BUTTON RETRO_DEVICE_ID_JOYPAD_R
 
-static void get_joystick_bits(int pad, uint8_t* state)
+static void get_joystick_bits(int pad, uint8_t* state, bool* shift, bool *backsp)
 {
                                     //port device              index  id
     *state &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT) << 0);
@@ -395,6 +395,15 @@ static void get_joystick_bits(int pad, uint8_t* state)
     *state &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN) << 3);
     *state &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A) << 6);
     *state &= ~(input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B) << 7);
+
+    // for vkbd
+    if (shift) {
+        *shift = input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X) != 0;
+    }
+
+    if (backsp) {
+        *backsp = input_state_cb(pad, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2) != 0;
+    }
 }
 
 static void update_input(void)
@@ -410,7 +419,8 @@ static void update_input(void)
             Emulator_ShowVirtualKeyboard(!Emulator_VirtualKeyboardVisible());
             vkeys_debounce_count = vkeys_debounce_frames;
         }
-        else if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, MOVE_KEYBOARD_BUTTON)) {
+        else if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, MOVE_KEYBOARD_BUTTON)
+                && Emulator_VirtualKeyboardVisible()) {
             Emulator_VirtualKeyboardMove();
             vkeys_debounce_count = vkeys_debounce_frames;
         }
@@ -424,8 +434,10 @@ static void update_input(void)
 
     if (Emulator_VirtualKeyboardVisible()) {
         uint8_t joy0f_bits = 0xff;
-        get_joystick_bits(0, &joy0f_bits);
-        Emulator_SetJoysticks(joy0f_bits, 0xff);
+        bool shift, backsp;
+        get_joystick_bits(0, &joy0f_bits, &shift, &backsp);
+
+        Emulator_SetJoysticks(joy0f_bits, ~((shift ? 1 : 0) | (backsp ? 2 : 0)));
         return;
     }
 
@@ -438,13 +450,13 @@ static void update_input(void)
         joy_key(0, RETRO_DEVICE_ID_JOYPAD_START, RETROK_F12);   // F12/blksbr
     }
 
-    joy_key(0, RETRO_DEVICE_ID_JOYPAD_L, RETROK_F6);           // rus
-    joy_key(0, RETRO_DEVICE_ID_JOYPAD_L2, RETROK_LSHIFT);      // ss/shift
-    joy_key(0, RETRO_DEVICE_ID_JOYPAD_R2, RETROK_LCTRL);       // us/ctrl
-    joy_key(0, RETRO_DEVICE_ID_JOYPAD_R, RETROK_RALT);         // ps
+    joy_key(0, RETRO_DEVICE_ID_JOYPAD_R, RETROK_RETURN);        // Enter/VK
 
-    joy_key(0, RETRO_DEVICE_ID_JOYPAD_X, RETROK_RETURN);       // vk
-    joy_key(0, RETRO_DEVICE_ID_JOYPAD_Y, RETROK_SPACE);        // probl
+    joy_key(0, RETRO_DEVICE_ID_JOYPAD_X, RETROK_LSHIFT);        // SS
+    joy_key(0, RETRO_DEVICE_ID_JOYPAD_Y, RETROK_TAB);           // TAB
+
+    joy_key(0, RETRO_DEVICE_ID_JOYPAD_L2, RETROK_F6);           // RUS
+    joy_key(0, RETRO_DEVICE_ID_JOYPAD_R2, RETROK_BACKSPACE);    // BS
 
     if (release_f1_frames) {
         if (--release_f1_frames == 0) {
@@ -466,7 +478,7 @@ static void update_input(void)
         state[pad] = 0xff; 
 
         if (control_mapping[pad] == CM_JOYSTICK) {
-            get_joystick_bits(pad, &state[pad]);
+            get_joystick_bits(pad, &state[pad], 0, 0);
         }
         else if (control_mapping[pad] == CM_ARROWS) {
             joy_key(pad, RETRO_DEVICE_ID_JOYPAD_LEFT, RETROK_LEFT);
@@ -474,8 +486,8 @@ static void update_input(void)
             joy_key(pad, RETRO_DEVICE_ID_JOYPAD_UP, RETROK_UP);
             joy_key(pad, RETRO_DEVICE_ID_JOYPAD_DOWN, RETROK_DOWN);
 
-            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_A, RETROK_TAB);
-            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_B, RETROK_HOME);
+            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_A, RETROK_SPACE);
+            joy_key(pad, RETRO_DEVICE_ID_JOYPAD_B, RETROK_LALT);  // PS
         }
     }
 
@@ -620,14 +632,14 @@ void retro_run(void)
         { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP,    "Up" },\
         { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN,  "Down" },\
         { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT, "Right" },\
-        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B,     "B" },\
-        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A,     "A" },\
-        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L,     "РУС" },\
-        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2,    "CC" },\
-        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2,    "УС" },\
-        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R,     "ПС" },\
-        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X,     "ВК" }, \
-        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_Y,     "Space"}, \
+        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A,     "Space" },\
+        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B,     "ПС" },\
+        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X,     "СС" }, \
+        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_Y,     "ТАБ"}, \
+        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L,     "Show Keys" },\
+        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R,     "ВК" },\
+        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2,    "РУС/LAT" },\
+        { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2,    "ЗБ" },\
         { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START, "Reset (БЛК+СБР)" }, \
         { user, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_SELECT,"F1" }
 

@@ -51,8 +51,9 @@ class VirtualKeyboard
     };
 
 
-    int debounce_count = 0;
-    static constexpr int debounce_frames = 8;
+    int autorepeat_count = -1;
+    static constexpr int autorepeat_delay = 8;    // frames
+    static constexpr int autorepeat_rate = 4;    // frames
 
     static constexpr int NUM_ROWS = 5;
     static constexpr int NUM_COLS = 17;
@@ -73,7 +74,7 @@ public:
     bool visible;
 
     std::array<int, 16> keys_down;
-    std::array<int, 2> sticky_down;
+    std::array<int, 16> sticky_down;
 
     std::function<void(int)> on_keydown;
     std::function<void(int)> on_keyup;
@@ -94,58 +95,96 @@ public:
         visible = false;
     }
 
+    int prev_joy = 0xff;
+    int prev_shift = 0xff;
+
+    bool check_joy(int joy, int prev_joy, int mask)
+    {
+        return ((joy & mask) == 0 && ((prev_joy & mask) != 0 || autorepeat_count == 0));
+    }
+
+    // joy0f: bit 0 = shift
+    //            1 = backspace
     void set_joysticks(int joy0e, int joy0f)
     {
-        if (joy0e == 0xff) {
-            debounce_count = 0;
-        }
-        else {
-            if (debounce_count && is_sticky(selected().scancode)) {
-                return;
+        if (autorepeat_count > 0) 
+            --autorepeat_count;
+
+        if (joy0f != prev_shift) {
+            bool shift_trig = ((joy0f & 1) == 0 && (prev_shift & 1) != 0);
+            bool shift_release = ((joy0f & 1) != 0 && (prev_shift & 1) == 0);
+            bool bs_trig = ((joy0f & 2) == 0 && (prev_shift & 2) != 0);
+            bool bs_release = ((joy0f & 2) != 0 && (prev_shift & 2) == 0);
+
+            prev_shift = joy0f;
+
+            if (shift_trig) {
+                key_down(keyinfo_shift(), false);
+            }
+            else if (shift_release) {
+                key_up(keyinfo_shift(), false);
+            }
+            if (bs_trig) {
+                key_down(keyinfo_backspace(), false);
+            }
+            else if (bs_release) {
+                key_up(keyinfo_backspace(), false);
             }
         }
 
-        if (debounce_count > 0) {
-            --debounce_count;
+        if (joy0e == prev_joy && autorepeat_count != 0)
             return;
+
+        bool a_down = (joy0e & 0x40) == 0; // sticky press
+        bool a_trig = a_down && ((prev_joy & 0x40) != 0);
+        bool a_release = (!a_down) && ((prev_joy & 0x40) == 0);
+
+        bool b_down = (joy0e & 0x80) == 0; // normal press
+        bool b_trig = b_down && ((prev_joy & 0x80) != 0);
+        bool b_release = (!b_down) && ((prev_joy & 0x80) == 0);
+
+        if (check_joy(joy0e, prev_joy, 0x01)) {
+            // right
+            key_up(selected(), !a_down);
+            move_finger(+1, 0);
+            autorepeat_count = (autorepeat_count == -1) ? autorepeat_delay : autorepeat_rate; 
+        }
+        if (check_joy(joy0e, prev_joy, 0x02)) {
+            // left
+            key_up(selected(), !a_down);
+            move_finger(-1, 0);
+            autorepeat_count = (autorepeat_count == -1) ? autorepeat_delay : autorepeat_rate; 
+        }
+        if (check_joy(joy0e, prev_joy, 0x04)) {
+            // up
+            key_up(selected(), !a_down);
+            move_finger(0, -1);
+            autorepeat_count = (autorepeat_count == -1) ? autorepeat_delay : autorepeat_rate; 
+        }
+        if (check_joy(joy0e, prev_joy, 0x08)) {
+            // down
+            key_up(selected(), !a_down);
+            move_finger(0, +1);
+            autorepeat_count = (autorepeat_count == -1) ? autorepeat_delay : autorepeat_rate; 
         }
 
-        if ((joy0e & 0x01) == 0) {
-            // right
-            key_up();
-            move_finger(+1, 0);
-            debounce_count = debounce_frames;
+        if (a_trig) {
+            key_down(selected(), true);
         }
-        else if ((joy0e & 0x02) == 0) {
-            // left
-            key_up();
-            move_finger(-1, 0);
-            debounce_count = debounce_frames;
+        if (b_trig) {
+            key_down(selected(), false);
         }
-        else if ((joy0e & 0x04) == 0) {
-            // up
-            key_up();
-            move_finger(0, -1);
-            debounce_count = debounce_frames;
+        if (b_release) {
+            key_up(selected(), true);
         }
-        else if ((joy0e & 0x08) == 0) {
-            // down
-            key_up();
-            move_finger(0, +1);
-            debounce_count = debounce_frames;
+        if (a_release) {
+            // nothing
         }
-        else if ((joy0e & 0x40) == 0) {
-            // a
-            key_down();
-            debounce_count = debounce_frames;
-        }
-        else if ((joy0e & 0x80) == 0) {
-            // b
-            key_down();
-            debounce_count = debounce_frames;
-        }
-        else {
-            key_up();
+
+        prev_joy = joy0e;
+
+        if (joy0e == 0xff) {
+            autorepeat_count = -1;
         }
     }
 
@@ -254,9 +293,8 @@ private:
         return ki;
     }
 
-    void key_down()
+    void key_down(key_info_t& ki, bool sticky)
     {
-        key_info_t& ki = selected();
         int first_empty = keys_down.size();
         if (ki.scancode == 0) 
             return;
@@ -270,7 +308,7 @@ private:
             }
         }
 
-        if (is_sticky(ki.scancode)) {
+        if (sticky) {
             for (unsigned i = 0; i < sticky_down.size(); ++i) {
                 if (sticky_down[i] == ki.scancode) {
                     sticky_down[i] = 0;
@@ -293,13 +331,9 @@ private:
         ki.pressed = true;
     }
 
-    void key_up()
+    void key_up(key_info_t& ki, bool unstick)
     {
-        key_info_t& ki = selected();
         if (ki.scancode == 0) 
-            return;
-
-        if (is_sticky(ki.scancode))
             return;
 
         for (unsigned i = 0; i < keys_down.size(); ++i) {
@@ -308,7 +342,8 @@ private:
                 if (on_keyup) on_keyup(ki.scancode);
                 ki.pressed = false;
 
-                unstick_stickies();
+                if (unstick)
+                    unstick_stickies();
                 return;
             }
         }
@@ -467,14 +502,6 @@ private:
         cur_y = TOP_BORDER;
     }
 
-    bool is_sticky(int scancode) const
-    {
-        for (unsigned i = 0; i < std::size(scancodes_sticky); ++i) {
-            if (scancodes_sticky[i] == scancode) return true;
-        }
-        return false;
-    }
-
     void unstick_stickies()
     {
         bool nothing = true;
@@ -495,6 +522,15 @@ private:
     }
 
 
+    key_info_t& keyinfo_shift()
+    {
+        return key_map.at(3 * NUM_COLS + 0);
+    }
+
+    key_info_t& keyinfo_backspace()
+    {
+        return key_map.at(4 * NUM_COLS + 4);
+    }
 
 private:
     Graphics32& gfx; 
@@ -559,8 +595,5 @@ private:
         {SDL_SCANCODE_LEFT, SDL_SCANCODE_DOWN, SDL_SCANCODE_RIGHT}};
 
     static constexpr int scancodes_blk[] = {SDL_SCANCODE_F11, -1, SDL_SCANCODE_F12};
-
-    static constexpr int scancodes_sticky[] = {SDL_SCANCODE_LCTRL, SDL_SCANCODE_LSHIFT};
-
 };
 

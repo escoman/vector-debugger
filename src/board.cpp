@@ -11,8 +11,16 @@
 #include "board.h"
 #include "util.h"
 
+#if LITTLE_BOOTS
 extern "C" unsigned char* boots_bin;
 extern "C" unsigned int boots_bin_len;
+#else
+extern "C" unsigned char* boot_bin;
+extern "C" unsigned int boot_bin_len;
+
+#define boots_bin boot_bin
+#define boots_bin_len boot_bin_len
+#endif
 
 using namespace i8080cpu;
 
