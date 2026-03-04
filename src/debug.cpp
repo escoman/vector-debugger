@@ -18,6 +18,7 @@ Debug::Debug(Memory* _memoryP)
   , memoryP(_memoryP)
   , wp_break(false)
 {
+#ifndef NODEBUGGER
     auto read_func = [this](const uint32_t _addr, const uint8_t _val,
                        const bool _is_opcode) {
         this->read(_addr, _val, _is_opcode);
@@ -27,7 +28,6 @@ Debug::Debug(Memory* _memoryP)
         this->write(_addr, _val);
     };
 
-#ifndef NODEBUGGER
     memoryP->debug_onread = read_func;
     memoryP->debug_onwrite = write_func;
 #endif

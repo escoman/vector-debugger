@@ -44,7 +44,7 @@ static int release_f1_frames = 0;
 
 static struct retro_log_callback logging;
 static retro_log_printf_t log_cb;
-static bool use_audio_cb;
+//static bool use_audio_cb;
 char retro_base_directory[4096];
 char retro_game_path[4096];
 
@@ -192,7 +192,7 @@ void retro_get_system_av_info(struct retro_system_av_info *info)
     info->geometry.max_height   = VIDEO_HEIGHT;
     info->geometry.aspect_ratio = 5.f/4.f;
 
-    info->timing.fps = FPS; //FPS;//3e6/59904;
+    info->timing.fps = FPS;
     info->timing.sample_rate = SAMPLERATE;
 }
 
@@ -539,10 +539,10 @@ static void check_variables(void)
             control_mapping[0], control_mapping[1]);
 }
 
-static void audio_set_state(bool enable)
-{
-    (void)enable;
-}
+//static void audio_set_state(bool enable)
+//{
+//    (void)enable;
+//}
 
 void record_audio(uint16_t * buf, size_t nframes)
 {

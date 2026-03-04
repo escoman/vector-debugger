@@ -229,10 +229,10 @@ auto Memory::get_mode_map() const -> const uint8_t
 
 auto Memory::get_page_map() const -> const uint32_t
 {
-    return page_map>>16 - 1;
+    return (page_map>>16) - 1;
 }
 
 auto Memory::get_page_stack() const -> const uint32_t
 {
-    return page_stack>>16 - 1;
+    return (page_stack>>16) - 1;
 }

@@ -298,7 +298,9 @@ void TV::handle_window_event(SDL_Event & event)
         case SDL_WINDOWEVENT_SIZE_CHANGED:
             window_resized(event);
             break;
-        }    
+        default:
+            break;
+    }    
 }
 
 void TV::toggle_fullscreen()
