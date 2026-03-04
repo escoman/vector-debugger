@@ -115,14 +115,19 @@ If the core appears named as `v06x_libretro` and not as `Vector-06C`, quit Retro
 # Gamepad mapping
 
 * D-pad, A/B is Joystick 1 + buttons
-* X = ВК/Enter, Y = Space
-* Left shoulder = РУС
-* Left trigger = СС
-* Right trigger = УС
-* Right shoulder = ПС
+* X = СС/Shift
+* Y = ТАБ/Tab
+* L1 = Show/hide virtual keyboard
+* L2 = РУС/LAT
+* R2 = ЗБ/Backspace
+* R1 = ВК/Enter or switch virtual keyboard position
 * START = БЛК+СБР
 * SELECT = F1
 
-This is not sufficient for every game, unfortunately. For example some games want you to press ТАБ or АР2. These are not yet implemented.
+# Virtual keyboard
 
+A is a sticky press, press A again to unstick. B is momentary press. A momentary press unsticks all stickies.
+X/Shift and R2/ЗБ can be used while using virtual keyboard.
+
+To boot into BASIC (F3+БЛК+ВВОД), point to F3, press A, point to ВВОД, press A, press A again, point to СБР, press B.
 
