@@ -493,7 +493,7 @@ bool Debug::check_watchpoint(const Watchpoint::Access _access,
     if (out) {
         auto byte_l = memoryP->get_byte(_global_addr & 0xffff, false);
         auto byte_h = memoryP->get_byte((_global_addr + 1) & 0xffff, false);
-        std::printf("wp break = true. addr: 0x%05llx, word: 0x%02x \n",
+        std::printf("wp break = true. addr: 0x%05zx, word: 0x%02x \n",
           _global_addr, byte_l | byte_h << 8);
     }
     return out;
@@ -747,7 +747,7 @@ auto Debug::Breakpoint::check() const -> const bool
 
 void Debug::Breakpoint::print() const
 {
-    std::printf("0x%06llx, active: %d \n", global_addr, active);
+    std::printf("0x%06zx, active: %d \n", global_addr, active);
 }
 
 auto Debug::Watchpoint::is_active() const -> const bool
@@ -826,7 +826,7 @@ void Debug::Watchpoint::reset()
 
 void Debug::Watchpoint::print() const
 {
-    std::printf("0x%05llx, access: %s, cond: %s, value: 0x%04x, value_size: %lld, "
+    std::printf("0x%05zx, access: %s, cond: %s, value: 0x%04x, value_size: %zu, "
                 "active: %d \n",
       global_addr, access_s[static_cast<size_t>(access)],
       conditions_s[static_cast<size_t>(cond)], value, value_size, active);

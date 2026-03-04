@@ -11,6 +11,8 @@ RUN apt-get update && \
         build-essential \
         gcc-aarch64-linux-gnu \
         g++-aarch64-linux-gnu \
+        gcc-arm-linux-gnueabihf \
+        g++-arm-linux-gnueabihf \
         make \
         git \
         pkg-config \
