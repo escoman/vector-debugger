@@ -58,6 +58,7 @@ class VirtualKeyboard
     static constexpr int NUM_ROWS = 5;
     static constexpr int NUM_COLS = 17;
 
+    static constexpr int LEFT_BORDER = 8;
     static constexpr int TOP_BORDER = 1;
     static constexpr int BOTTOM_BORDER = 0;
 
@@ -90,7 +91,7 @@ public:
         select_col = 5;
 
         finger_row = 2;
-        finger_col = 5;
+        finger_col = 6;
 
         visible = false;
     }
@@ -107,7 +108,7 @@ public:
     //            1 = backspace
     void set_joysticks(int joy0e, int joy0f)
     {
-        if (autorepeat_count > 0) 
+        if (autorepeat_count > 0)
             --autorepeat_count;
 
         if (joy0f != prev_shift) {
@@ -147,25 +148,25 @@ public:
             // right
             key_up(selected(), !a_down);
             move_finger(+1, 0);
-            autorepeat_count = (autorepeat_count == -1) ? autorepeat_delay : autorepeat_rate; 
+            autorepeat_count = (autorepeat_count == -1) ? autorepeat_delay : autorepeat_rate;
         }
         if (check_joy(joy0e, prev_joy, 0x02)) {
             // left
             key_up(selected(), !a_down);
             move_finger(-1, 0);
-            autorepeat_count = (autorepeat_count == -1) ? autorepeat_delay : autorepeat_rate; 
+            autorepeat_count = (autorepeat_count == -1) ? autorepeat_delay : autorepeat_rate;
         }
         if (check_joy(joy0e, prev_joy, 0x04)) {
             // up
             key_up(selected(), !a_down);
             move_finger(0, -1);
-            autorepeat_count = (autorepeat_count == -1) ? autorepeat_delay : autorepeat_rate; 
+            autorepeat_count = (autorepeat_count == -1) ? autorepeat_delay : autorepeat_rate;
         }
         if (check_joy(joy0e, prev_joy, 0x08)) {
             // down
             key_up(selected(), !a_down);
             move_finger(0, +1);
-            autorepeat_count = (autorepeat_count == -1) ? autorepeat_delay : autorepeat_rate; 
+            autorepeat_count = (autorepeat_count == -1) ? autorepeat_delay : autorepeat_rate;
         }
 
         if (a_trig) {
@@ -191,7 +192,7 @@ public:
     void prepare()
     {
         home();
-        for (unsigned row = 0; row < std::size(top_text); ++row) 
+        for (unsigned row = 0; row < std::size(top_text); ++row)
         {
             if (row == 1) {
                 space(unit_width_t::U0_5);
@@ -215,7 +216,7 @@ public:
                     ki.col = col;
                     ki.scancode = scancodes[row][col];
                     key_map.at(row * NUM_COLS + col) = ki;
-                    
+
                     col += 1;
                     cur_x += ki.width;
                 }
@@ -225,7 +226,7 @@ public:
                 space(unit_width_t::U0_5);
             }
 
-            cur_x += pixel_width(unit_width_t::U1);
+            cur_x += pixel_width(unit_width_t::U1) / 2;
             col = 14;
             int fcol = 50; // only used for coord to reference colours
 
@@ -273,7 +274,7 @@ private:
         //int x = unit_w * 13 + unit_w / 2;
         //int y = unit_h * 3 / 2;
 
-        int x = unit_w / 3 + 1;
+        int x = LEFT_BORDER + unit_w / 3 + 1;
         int y = unit_h * 4 + unit_h - LED_RADIUS - 3 - ygap + TOP_BORDER;
 
         if (ruslat_status) {
@@ -296,7 +297,7 @@ private:
     void key_down(key_info_t& ki, bool sticky)
     {
         int first_empty = keys_down.size();
-        if (ki.scancode == 0) 
+        if (ki.scancode == 0)
             return;
 
         for (unsigned i = 0; i < keys_down.size(); ++i) {
@@ -333,7 +334,7 @@ private:
 
     void key_up(key_info_t& ki, bool unstick)
     {
-        if (ki.scancode == 0) 
+        if (ki.scancode == 0)
             return;
 
         for (unsigned i = 0; i < keys_down.size(); ++i) {
@@ -411,8 +412,8 @@ private:
     int pixel_width(unit_width_t uwidth)
     {
         switch (uwidth) {
-            case unit_width_t::U0_5:  return unit_w / 2; 
-            case unit_width_t::U1:    return unit_w; 
+            case unit_width_t::U0_5:  return unit_w / 2;
+            case unit_width_t::U1:    return unit_w;
             case unit_width_t::U1_5:  return unit_w * 3 / 2;
             case unit_width_t::U7:    return unit_w * 7;
         }
@@ -430,7 +431,7 @@ private:
     void draw_key(const key_info_t& ki)
     {
         constexpr int border = 1;
-        constexpr int xmargin = 2;
+        constexpr int xmargin = 4;
         constexpr int ymargin = 1;
 
         if (ki.scancode == 0) return;
@@ -470,8 +471,13 @@ private:
 
         gfx.setCursor(text1_x, text1_y);
         if (ki.legend_1 != "___") {
+            bool condensed = ki.legend_1.size() > 3; // kludge to make VVOD key fit
+            if (condensed)
+                ++gfx.cursorX;
             for (const char c : ki.legend_1) {
                 gfx.print(c);
+                if (condensed)
+                    --gfx.cursorX;
             }
         }
 
@@ -485,20 +491,20 @@ private:
         key_rect(ki.x, ki.y, w, h, border_color);
     }
 
-    void space(unit_width_t uwidth) 
+    void space(unit_width_t uwidth)
     {
         cur_x += pixel_width(uwidth);
     }
 
     void newline()
     {
-        cur_x = 0;
+        cur_x = LEFT_BORDER;
         cur_y += unit_h;
     }
 
     void home()
     {
-        cur_x = 0;
+        cur_x = LEFT_BORDER;
         cur_y = TOP_BORDER;
     }
 
@@ -533,7 +539,7 @@ private:
     }
 
 private:
-    Graphics32& gfx; 
+    Graphics32& gfx;
     bool& ruslat_status;
 
     int cur_x, cur_y;
@@ -583,7 +589,7 @@ private:
             SDL_SCANCODE_M, SDL_SCANCODE_I, SDL_SCANCODE_T, SDL_SCANCODE_X,
             SDL_SCANCODE_B, SDL_SCANCODE_MINUS, SDL_SCANCODE_COMMA, SDL_SCANCODE_RETURN},
 
-        {SDL_SCANCODE_F6, SDL_SCANCODE_TAB, 
+        {SDL_SCANCODE_F6, SDL_SCANCODE_TAB,
             SDL_SCANCODE_SPACE,
             SDL_SCANCODE_LALT, SDL_SCANCODE_BACKSPACE}};
 
