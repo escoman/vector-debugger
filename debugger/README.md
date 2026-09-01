@@ -15,21 +15,30 @@
 Для сборки необходимы:
 
 - CMake (версии 2.8.12 или выше)
-- Компилятор с поддержкой C++14 (GCC, Clang)
-- SDL2
-- OpenGL
+- Компилятор с поддержкой **C++17** (GCC 7+, Clang 5+)
+- **Boost** (компоненты: program_options, system, thread, chrono, filesystem)
+- **SDL2**
+- **OpenGL**
 
 ### Установка зависимостей (Ubuntu/Debian)
 
 ```bash
-sudo apt-get install build-essential cmake libsdl2-dev libgl-dev
+sudo apt-get install build-essential cmake libboost-all-dev libsdl2-dev libgl-dev
 ```
 
 ### Установка зависимостей (Fedora)
 
 ```bash
-sudo dnf install gcc gcc-c++ cmake make SDL2-devel mesa-libGL-devel
+sudo dnf install gcc gcc-c++ cmake make boost-devel SDL2-devel mesa-libGL-devel
 ```
+
+### Дополнительные зависимости
+
+Проект использует библиотеки из основного репозитория Vector-06C:
+- `fast-filters/` — coredsp (для Resampler)
+- `coreutil/` — coreutil (для SIMD)
+
+Эти библиотеки поставляются с основным проектом и не требуют отдельной установки.
 
 ## Сборка
 
@@ -42,9 +51,10 @@ cmake ..
 make
 ```
 
-После сборки в каталоге `build/` появятся два исполняемых файла:
+После сборки в каталоге `build/` появятся:
 
-- `test_backend` — тесты бэкенда
+- `test_backend` — unit-тесты бэкенда (31 тест)
+- `test_board_smoke` — smoke-тест с реальным Board (1 тест)
 - `debugger_gui` — графический отладчик
 
 ## Запуск тестов
@@ -54,7 +64,16 @@ cd debugger/build
 ./test_backend
 ```
 
-Ожидается: все тесты пройдены (21/21).
+Ожидается: все тесты пройдены (31/31).
+
+## Запуск smoke-теста с реальным Board
+
+```bash
+cd debugger/build
+./test_board_smoke
+```
+
+Ожидается: 1/1 тест пройден.
 
 ## Запуск отладчика
 
