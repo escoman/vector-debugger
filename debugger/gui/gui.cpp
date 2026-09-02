@@ -154,14 +154,16 @@ void DebuggerGui::render(DebugBackend &backend, Memory &memory)
     renderControls(backend);
     ImGui::Separator();
 
+    // Get CPU state for this frame
+    CpuState cpu = backend.getCpuState();
+
     // -- Middle: two-column layout --
     float leftWidth = 280.0f;
 
     ImGui::BeginChild("LeftPanel", ImVec2(leftWidth, 0), ImGuiChildFlags_None,
                        ImGuiWindowFlags_None);
     {
-        CpuState cpu = backend.getCpuState();
-        renderCpuPanel(cpu);
+        renderCpuPanel(backend);
         ImGui::Separator();
         renderCurrentInstruction(cpu.pc, backend, memory);
     }
@@ -198,18 +200,103 @@ void DebuggerGui::render(DebugBackend &backend, Memory &memory)
 // CPU Panel
 // ---------------------------------------------------------------------------
 
-void DebuggerGui::renderCpuPanel(const CpuState &s)
+void DebuggerGui::renderCpuPanel(DebugBackend &backend)
 {
+    CpuState s = backend.getCpuState();
+    
     ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "CPU");
     ImGui::Spacing();
-
-    ImGui::Text("PC   %04X", s.pc);
-    ImGui::Text("AF   %02X%02X", s.a, s.flags);
-    ImGui::Text("BC   %02X%02X", s.b, s.c);
-    ImGui::Text("DE   %02X%02X", s.d, s.e);
-    ImGui::Text("HL   %02X%02X", s.h, s.l);
-    ImGui::Text("SP   %04X", s.sp);
-    ImGui::Text("IFF  %d", s.iff ? 1 : 0);
+    
+    // Register editing mode (Stage 3.6)
+    if (editingRegister_) {
+        const char *regNames[] = { "AF", "BC", "DE", "HL", "SP", "PC" };
+        int idx = static_cast<int>(editingRegId_);
+        ImGui::Text("Edit %s:", regNames[idx]);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(70);
+        bool enterPressed = ImGui::InputText("##editreg", editRegBuffer_, sizeof(editRegBuffer_),
+            ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_EnterReturnsTrue |
+            ImGuiInputTextFlags_AutoSelectAll);
+        ImGui::SameLine();
+        if (ImGui::Button("Go") || enterPressed) {
+            unsigned int value = 0;
+            if (sscanf(editRegBuffer_, "%x", &value) == 1 && value <= 0xFFFF) {
+                bool ok = backend.writeRegister(editingRegId_, static_cast<uint16_t>(value));
+                if (ok) {
+                    editingRegister_ = false;
+                    writeRegFailed_ = false;
+                } else {
+                    writeRegFailed_ = true;
+                }
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            editingRegister_ = false;
+            writeRegFailed_ = false;
+        }
+        if (writeRegFailed_) {
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Write failed: CPU must be Paused");
+        }
+        ImGui::Separator();
+        return;  // Skip normal display while editing
+    }
+    
+    writeRegFailed_ = false;
+    
+    // Helper lambda: render editable register row
+    auto renderRegRow = [&](const char *name, uint16_t value, DebugBackend::RegisterId regId) {
+        ImGui::Text("%s   %04X", name, value);
+        if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
+            editingRegister_ = true;
+            editingRegId_ = regId;
+            snprintf(editRegBuffer_, sizeof(editRegBuffer_), "%04X", value);
+        }
+    };
+    
+    // 16-bit register pairs
+    uint16_t af = (static_cast<uint16_t>(s.a) << 8) | s.flags;
+    uint16_t bc = (static_cast<uint16_t>(s.b) << 8) | s.c;
+    uint16_t de = (static_cast<uint16_t>(s.d) << 8) | s.e;
+    uint16_t hl = (static_cast<uint16_t>(s.h) << 8) | s.l;
+    
+    renderRegRow("PC", s.pc, DebugBackend::RegisterId::PC);
+    renderRegRow("AF", af,  DebugBackend::RegisterId::AF);
+    renderRegRow("BC", bc,  DebugBackend::RegisterId::BC);
+    renderRegRow("DE", de,  DebugBackend::RegisterId::DE);
+    renderRegRow("HL", hl,  DebugBackend::RegisterId::HL);
+    renderRegRow("SP", s.sp, DebugBackend::RegisterId::SP);
+    
+    // 8-bit components (read-only)
+    ImGui::Spacing();
+    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
+        "A=%02X  B=%02X C=%02X  D=%02X E=%02X  H=%02X L=%02X",
+        s.a, s.b, s.c, s.d, s.e, s.h, s.l);
+    
+    // Flags
+    ImGui::Spacing();
+    uint8_t f = s.flags;
+    bool flagS  = (f >> 7) & 1;
+    bool flagZ  = (f >> 6) & 1;
+    bool flagAC = (f >> 4) & 1;
+    bool flagP  = (f >> 2) & 1;
+    bool flagCY = f & 1;
+    
+    ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Flags");
+    ImGui::Text("S  Z  AC P  CY");
+    ImGui::Text("%d  %d   %d  %d   %d",
+        flagS ? 1 : 0, flagZ ? 1 : 0, flagAC ? 1 : 0,
+        flagP ? 1 : 0, flagCY ? 1 : 0);
+    
+    // Additional CPU state (read-only)
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "State");
+    ImGui::Text("IFF:        %d", s.iff ? 1 : 0);
+    // Not exposed by the current emulator core.
+    ImGui::Text("EI pending: N/A");
+    ImGui::Text("Cycles:     %u", s.cycles);
+    ImGui::Text("Last PC:    %04X", s.last_pc);
 }
 
 // ---------------------------------------------------------------------------

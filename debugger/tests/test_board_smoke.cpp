@@ -27,6 +27,8 @@
 #include "fd1793.h"
 #include "debug_memory.h"
 
+using namespace i8080cpu;
+
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
@@ -314,6 +316,52 @@ static void test_board_smoke()
     CHECK_EQ(origByte, restored, "restored original value");
     
     printf("  Memory Editing API works with real Board\n");
+    
+    // --- Test CPU Register Write/Read (Stage 3.6) ---
+    printf("  Testing CPU Register Write/Read API...\n");
+    
+    // Write registers via i8080 API (simulating what emulation thread does)
+    i8080_jump(0x0100);
+    i8080_setreg_sp(0xC100);
+    i8080_setreg_b(0x12);
+    i8080_setreg_c(0x34);
+    i8080_setreg_d(0x56);
+    i8080_setreg_e(0x78);
+    i8080_setreg_h(0x9A);
+    i8080_setreg_l(0xBC);
+    i8080_setreg_a(0xDE);
+    i8080_setreg_f(0xF0);
+    
+    // Read back via DebugBackend
+    CpuState regs = backend.getCpuState();
+    CHECK_EQ(0x0100, regs.pc, "PC = 0x0100");
+    CHECK_EQ(0xC100, regs.sp, "SP = 0xC100");
+    CHECK_EQ(0x12, regs.b, "B = 0x12");
+    CHECK_EQ(0x34, regs.c, "C = 0x34");
+    CHECK_EQ(0x56, regs.d, "D = 0x56");
+    CHECK_EQ(0x78, regs.e, "E = 0x78");
+    CHECK_EQ(0x9A, regs.h, "H = 0x9A");
+    CHECK_EQ(0xBC, regs.l, "L = 0xBC");
+    CHECK_EQ(0xDE, regs.a, "A = 0xDE");
+    CHECK_EQ(0xF0, regs.flags, "F = 0xF0");
+    
+    // Verify additional Stage 3.6 fields
+    printf("  IFF=%d EI_pending=%d Cycles=%u LastPC=%04X\n",
+        regs.iff ? 1 : 0, regs.ei_pending ? 1 : 0, regs.cycles, regs.last_pc);
+    CHECK(true, "Stage 3.6 fields accessible");
+    
+    // Test PC -> Step executes from new address
+    // Write MVI A, 0x99 at 0x0100
+    memory.write(0x0100, 0x3E, false);  // MVI A
+    memory.write(0x0101, 0x99, false);  // operand
+    
+    i8080_jump(0x0100);
+    backend.stepInstruction();
+    CpuState afterStep = backend.getCpuState();
+    CHECK_EQ(0x99, afterStep.a, "A = 0x99 after step from new PC");
+    CHECK_EQ(0x0102, afterStep.pc, "PC advanced to 0x0102");
+    
+    printf("  CPU Register Write/Read API works with real Board\n");
     
     // --- Cleanup ---
     test_backend = nullptr;

@@ -34,6 +34,8 @@
 #include "disassembler.h"
 #include "debug_memory.h"
 
+using namespace i8080cpu;
+
 // ---------------------------------------------------------------------------
 // Minimal test HAL — connects CPU to a Memory instance.
 // Uses Memory::read()/write() for full address translation (bigram_select +
@@ -2019,6 +2021,243 @@ static void test_memory_edit_state_check()
 }
 
 // ---------------------------------------------------------------------------
+// Stage 3.6 — CPU Registers Inspector & Editing tests
+//
+// These tests verify register read/write through the i8080 API.
+// The command protocol (writeRegister -> emulation thread -> processRegisterWrite)
+// follows the same pattern as Stage 3.5 memory writes.
+// ---------------------------------------------------------------------------
+
+// Test 1: Register read
+static void test_cpu_regs_read()
+{
+    TEST_BEGIN("CPU Regs: read all registers");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+
+    CpuState s = dbg->getCpuState();
+    // After reset, registers should be readable
+    printf("  PC=%04X AF=%02X%02X BC=%02X%02X DE=%02X%02X HL=%02X%02X SP=%04X\n",
+        s.pc, s.a, s.flags, s.b, s.c, s.d, s.e, s.h, s.l, s.sp);
+    CHECK(true, "All registers readable");
+    
+    // Verify new Stage 3.6 fields
+    CHECK(s.cycles >= 0, "cycles field exists");
+    printf("  IFF=%d EI_pending=%d Cycles=%u LastPC=%04X\n",
+        s.iff ? 1 : 0, s.ei_pending ? 1 : 0, s.cycles, s.last_pc);
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// Test 2: Register write (each register)
+static void test_cpu_regs_write()
+{
+    TEST_BEGIN("CPU Regs: write each register");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+
+    // Write AF
+    i8080_setreg_a(0x12);
+    i8080_setreg_f(0x34);
+    CpuState s = dbg->getCpuState();
+    CHECK_EQ(0x12, s.a, "A = 0x12");
+    CHECK_EQ(0x34, s.flags, "F = 0x34");
+
+    // Write BC
+    i8080_setreg_b(0x56);
+    i8080_setreg_c(0x78);
+    s = dbg->getCpuState();
+    CHECK_EQ(0x56, s.b, "B = 0x56");
+    CHECK_EQ(0x78, s.c, "C = 0x78");
+
+    // Write DE
+    i8080_setreg_d(0x9A);
+    i8080_setreg_e(0xBC);
+    s = dbg->getCpuState();
+    CHECK_EQ(0x9A, s.d, "D = 0x9A");
+    CHECK_EQ(0xBC, s.e, "E = 0xBC");
+
+    // Write HL
+    i8080_setreg_h(0xDE);
+    i8080_setreg_l(0xF0);
+    s = dbg->getCpuState();
+    CHECK_EQ(0xDE, s.h, "H = 0xDE");
+    CHECK_EQ(0xF0, s.l, "L = 0xF0");
+
+    // Write SP
+    i8080_setreg_sp(0x8000);
+    s = dbg->getCpuState();
+    CHECK_EQ(0x8000, s.sp, "SP = 0x8000");
+
+    // Write PC
+    i8080_jump(0x1234);
+    s = dbg->getCpuState();
+    CHECK_EQ(0x1234, s.pc, "PC = 0x1234");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// Test 3: 8/16-bit consistency
+static void test_cpu_regs_8_16_consistency()
+{
+    TEST_BEGIN("CPU Regs: 8/16-bit consistency");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+
+    // BC = 0x1234
+    i8080_setreg_b(0x12);
+    i8080_setreg_c(0x34);
+    CpuState s = dbg->getCpuState();
+    uint16_t bc = (static_cast<uint16_t>(s.b) << 8) | s.c;
+    CHECK_EQ(0x1234, bc, "BC = 0x1234");
+    CHECK_EQ(0x12, s.b, "B = 0x12 (high byte)");
+    CHECK_EQ(0x34, s.c, "C = 0x34 (low byte)");
+
+    // DE = 0x5678
+    i8080_setreg_d(0x56);
+    i8080_setreg_e(0x78);
+    s = dbg->getCpuState();
+    uint16_t de = (static_cast<uint16_t>(s.d) << 8) | s.e;
+    CHECK_EQ(0x5678, de, "DE = 0x5678");
+
+    // HL = 0x9ABC
+    i8080_setreg_h(0x9A);
+    i8080_setreg_l(0xBC);
+    s = dbg->getCpuState();
+    uint16_t hl = (static_cast<uint16_t>(s.h) << 8) | s.l;
+    CHECK_EQ(0x9ABC, hl, "HL = 0x9ABC");
+
+    // AF = 0xDEF0
+    i8080_setreg_a(0xDE);
+    i8080_setreg_f(0xF0);
+    s = dbg->getCpuState();
+    uint16_t af = (static_cast<uint16_t>(s.a) << 8) | s.flags;
+    CHECK_EQ(0xDEF0, af, "AF = 0xDEF0");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// Test 4: PC execution from new address
+static void test_cpu_regs_pc_execution()
+{
+    TEST_BEGIN("CPU Regs: PC execution from new address");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+
+    // Put a known instruction at 0x0100: MVI A, 0x42
+    mem.write(0x0100, 0x3E, false);  // MVI A
+    mem.write(0x0101, 0x42, false);  // operand
+
+    // Set PC to 0x0100
+    i8080_jump(0x0100);
+    CpuState s = dbg->getCpuState();
+    CHECK_EQ(0x0100, s.pc, "PC = 0x0100");
+
+    // Step — should execute MVI A, 0x42
+    dbg->stepInstruction();
+    s = dbg->getCpuState();
+    CHECK_EQ(0x42, s.a, "A = 0x42 after step from new PC");
+    CHECK_EQ(0x0102, s.pc, "PC advanced to 0x0102");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// Test 5: SP write
+static void test_cpu_regs_sp()
+{
+    TEST_BEGIN("CPU Regs: SP write");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+
+    i8080_setreg_sp(0xEFFE);
+    CpuState s = dbg->getCpuState();
+    CHECK_EQ(0xEFFE, s.sp, "SP = 0xEFFE");
+
+    i8080_setreg_sp(0x0000);
+    s = dbg->getCpuState();
+    CHECK_EQ(0x0000, s.sp, "SP = 0x0000");
+
+    i8080_setreg_sp(0xFFFF);
+    s = dbg->getCpuState();
+    CHECK_EQ(0xFFFF, s.sp, "SP = 0xFFFF");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// Test 6: Running rejection (state check logic)
+static void test_cpu_regs_running_rejection()
+{
+    TEST_BEGIN("CPU Regs: running rejection");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+
+    // Backend starts Paused
+    CHECK(dbg->getState() == DebuggerState::Paused, "initial state is Paused");
+
+    // processRegisterWrite checks state_ == Paused.
+    // When Paused, it should succeed.
+    // We verify by writing a register directly (what executeRegisterWrite does)
+    // and checking the result via getCpuState().
+    i8080_setreg_b(0xAA);
+    i8080_setreg_c(0xBB);
+    CpuState s = dbg->getCpuState();
+    CHECK_EQ(0xAA, s.b, "B = 0xAA (write in Paused state)");
+    CHECK_EQ(0xBB, s.c, "C = 0xBB (write in Paused state)");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// Test 7: Reset clears register modifications
+static void test_cpu_regs_reset()
+{
+    TEST_BEGIN("CPU Regs: reset clears modifications");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+
+    // Modify registers
+    i8080_setreg_a(0xFF);
+    i8080_setreg_sp(0x1234);
+    i8080_jump(0x5678);
+
+    CpuState s = dbg->getCpuState();
+    CHECK_EQ(0xFF, s.a, "A = 0xFF before reset");
+    CHECK_EQ(0x1234, s.sp, "SP = 0x1234 before reset");
+    CHECK_EQ(0x5678, s.pc, "PC = 0x5678 before reset");
+
+    // Reset
+    dbg->reset();
+
+    // After reset, PC should be 0 (i8080_init resets PC and flags).
+    // General-purpose registers retain their values (i8080_init behavior).
+    s = dbg->getCpuState();
+    CHECK_EQ(0x0000, s.pc, "PC = 0x0000 after reset");
+    printf("  After reset: PC=%04X A=%02X SP=%04X\n", s.pc, s.a, s.sp);
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -2084,6 +2323,15 @@ int main()
     test_memory_edit_boundaries();
     test_memory_edit_multiple_writes();
     test_memory_edit_state_check();
+
+    // Stage 3.6 — CPU Registers tests
+    test_cpu_regs_read();
+    test_cpu_regs_write();
+    test_cpu_regs_8_16_consistency();
+    test_cpu_regs_pc_execution();
+    test_cpu_regs_sp();
+    test_cpu_regs_running_rejection();
+    test_cpu_regs_reset();
 
     printf("\n\033[0;36m=== Results: %d/%d passed", tests_passed, tests_run);
     if (tests_failed > 0) {

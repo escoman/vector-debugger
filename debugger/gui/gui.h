@@ -3,6 +3,7 @@
 #include <cstdint>
 #include "memory_inspector_window.h"
 #include "stack_view_window.h"
+#include "backend.h"
 
 // Forward declarations — avoid pulling SDL/ImGui into this header.
 struct SDL_Window;
@@ -49,7 +50,7 @@ private:
     bool          quit_       = false;
 
     // Panel renderers
-    void renderCpuPanel(const struct CpuState &state);
+    void renderCpuPanel(DebugBackend &backend);
     void renderCurrentInstruction(uint16_t pc, DebugBackend &backend, Memory &memory);
     void renderInstructionHistory(DebugBackend &backend);
     void renderStatusBar(DebugBackend &backend);
@@ -60,4 +61,10 @@ private:
     
     // Stack View window (Stage 3.4)
     StackViewWindow stackView_;
+    
+    // CPU register editing state (Stage 3.6)
+    bool editingRegister_ = false;
+    DebugBackend::RegisterId editingRegId_ = DebugBackend::RegisterId::AF;
+    char editRegBuffer_[8] = "";
+    bool writeRegFailed_ = false;
 };

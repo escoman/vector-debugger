@@ -239,6 +239,71 @@ void DebugBackend::executeWriteMemory()
 }
 
 // ---------------------------------------------------------------------------
+// Register write (Stage 3.6 — through emulation thread)
+// ---------------------------------------------------------------------------
+
+bool DebugBackend::writeRegister(RegisterId id, uint16_t value)
+{
+    // Post register write command for emulation thread
+    {
+        std::lock_guard<std::mutex> lock(commandMutex_);
+        writeRegId_     = id;
+        writeRegValue_  = value;
+        writeRegResult_ = false;
+        pendingCommand_ = PendingCommand::RegisterWrite;
+        stepCompleted_  = false;
+    }
+    commandCv_.notify_one();
+
+    // Wait for the emulation thread to complete the write
+    std::unique_lock<std::mutex> lock(commandMutex_);
+    resultCv_.wait(lock, [this]{ return stepCompleted_; });
+
+    return writeRegResult_;
+}
+
+void DebugBackend::processRegisterWrite()
+{
+    // Check state — write only allowed when Paused.
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    if (state_ != DebuggerState::Paused) {
+        writeRegResult_ = false;
+        return;
+    }
+
+    executeRegisterWrite();
+    writeRegResult_ = true;
+}
+
+void DebugBackend::executeRegisterWrite()
+{
+    switch (writeRegId_) {
+        case RegisterId::AF:
+            i8080_setreg_a((writeRegValue_ >> 8) & 0xFF);
+            i8080_setreg_f(writeRegValue_ & 0xFF);
+            break;
+        case RegisterId::BC:
+            i8080_setreg_b((writeRegValue_ >> 8) & 0xFF);
+            i8080_setreg_c(writeRegValue_ & 0xFF);
+            break;
+        case RegisterId::DE:
+            i8080_setreg_d((writeRegValue_ >> 8) & 0xFF);
+            i8080_setreg_e(writeRegValue_ & 0xFF);
+            break;
+        case RegisterId::HL:
+            i8080_setreg_h((writeRegValue_ >> 8) & 0xFF);
+            i8080_setreg_l(writeRegValue_ & 0xFF);
+            break;
+        case RegisterId::SP:
+            i8080_setreg_sp(writeRegValue_);
+            break;
+        case RegisterId::PC:
+            i8080_jump(writeRegValue_);
+            break;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // CPU state
 // ---------------------------------------------------------------------------
 
@@ -256,6 +321,12 @@ CpuState DebugBackend::getCpuState() const
     s.l     = static_cast<uint8_t>(i8080_regs_l());
     s.flags = static_cast<uint8_t>(i8080_regs_f());
     s.iff   = i8080_iff();
+    // Stage 3.6 — additional CPU state
+    s.cycles     = static_cast<uint32_t>(i8080_cycles());
+    // Not exposed by the current emulator core.
+    // Do not modify src/ just for debugger access.
+    s.ei_pending = false;
+    s.last_pc    = lastPc_;
     return s;
 }
 
@@ -301,6 +372,9 @@ void DebugBackend::reset()
 StepResult DebugBackend::stepInstruction()
 {
     StepResult r;
+
+    // Track last_pc before execution (Stage 3.6)
+    lastPc_ = static_cast<uint16_t>(i8080_pc());
 
     // --- before ---
     r.before   = getCpuState();
@@ -729,6 +803,17 @@ void DebugBackend::processOneCommand()
         resultCv_.notify_one();
         return;
     }
+    else if (cmd == PendingCommand::RegisterWrite) {
+        // Release lock before modifying CPU registers
+        lock.unlock();
+        processRegisterWrite();
+        {
+            std::lock_guard<std::mutex> lk(commandMutex_);
+            stepCompleted_ = true;
+        }
+        resultCv_.notify_one();
+        return;
+    }
     else if (cmd == PendingCommand::Pause) {
         pauseRequested_ = true;
     }
@@ -824,6 +909,15 @@ void DebugBackend::runUntilPause()
             // MemoryWrite while running: reject — must be Paused.
             if (pendingCommand_ == PendingCommand::MemoryWrite) {
                 writeResult_ = false;
+                pendingCommand_ = PendingCommand::None;
+                stepCompleted_ = true;
+                resultCv_.notify_one();
+                return;
+            }
+
+            // RegisterWrite while running: reject — must be Paused.
+            if (pendingCommand_ == PendingCommand::RegisterWrite) {
+                writeRegResult_ = false;
                 pendingCommand_ = PendingCommand::None;
                 stepCompleted_ = true;
                 resultCv_.notify_one();

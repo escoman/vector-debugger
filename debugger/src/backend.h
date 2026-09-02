@@ -44,6 +44,11 @@ struct CpuState
     uint8_t flags;   // S Z AC P CY packed as in F register
 
     bool iff;        // interrupt flip-flop
+
+    // Stage 3.6 — additional CPU state
+    uint32_t cycles;       // cycles of last instruction
+    bool     ei_pending;   // EI pending flag
+    uint16_t last_pc;      // PC before last step
 };
 
 // ---------------------------------------------------------------------------
@@ -123,6 +128,15 @@ public:
     // Write range of bytes. Posts command to emulation thread, blocks until done.
     // Returns false if not Paused or any address invalid.
     bool writeMemory(uint16_t address, const uint8_t* data, size_t size);
+
+    // -- register write (Stage 3.6, through emulation thread) --------------
+
+    // Register identifiers for writeRegister()
+    enum class RegisterId { AF, BC, DE, HL, SP, PC };
+
+    // Write a CPU register. Posts command to emulation thread, blocks until done.
+    // Returns false if not Paused or invalid register.
+    bool writeRegister(RegisterId id, uint16_t value);
 
     // -- state queries ------------------------------------------------------
 
@@ -248,7 +262,7 @@ private:
 
     // -- Stage 3.1: thread-safe command protocol ------------------------------
 
-    enum class PendingCommand { None, Step, Run, Pause, Reset, Quit, MemoryWrite };
+    enum class PendingCommand { None, Step, Run, Pause, Reset, Quit, MemoryWrite, RegisterWrite };
 
     mutable std::mutex      commandMutex_;
     std::condition_variable commandCv_;
@@ -266,4 +280,14 @@ private:
 
     void processWriteCommand();
     void executeWriteMemory();
+
+    // -- Stage 3.6: register write command state ------------------------------
+
+    RegisterId  writeRegId_    = RegisterId::AF;
+    uint16_t    writeRegValue_ = 0;
+    bool        writeRegResult_ = false;
+    uint16_t    lastPc_        = 0;  // PC before last stepInstruction
+
+    void processRegisterWrite();
+    void executeRegisterWrite();
 };
