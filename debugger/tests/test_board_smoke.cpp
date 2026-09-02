@@ -363,6 +363,71 @@ static void test_board_smoke()
     
     printf("  CPU Register Write/Read API works with real Board\n");
     
+    // --- Test Breakpoint API with real Board (Stage 3.7) ---
+    printf("  Testing Breakpoint API with real Board...\n");
+    
+    // Reset to known state
+    Options.pc = 0;
+    board.reset(Board::ResetMode::LOADROM);
+    backend.clearHistory();
+    backend.clearBreakpoints();
+    
+    // Verify test program is still in memory (MVI A,55 / INR A / JMP 0002)
+    CHECK_EQ(0x3E, backend.readMemory(0x0000), "test program at 0000: MVI A opcode");
+    CHECK_EQ(0x55, backend.readMemory(0x0001), "test program at 0001: operand 55");
+    CHECK_EQ(0x3C, backend.readMemory(0x0002), "test program at 0002: INR A");
+    
+    // Add breakpoint at 0x0002 (INR A)
+    int bpId = backend.addBreakpoint(0x0002);
+    CHECK(bpId >= 0, "breakpoint added at 0x0002");
+    CHECK(backend.hasBreakpoint(0x0002), "hasBreakpoint(0x0002)");
+    
+    // Run — should stop at 0x0002 before executing INR A
+    backend.run();
+    
+    CpuState bpState = backend.getCpuState();
+    CHECK_EQ(0x0002, bpState.pc, "PC == 0x0002 at breakpoint");
+    CHECK_EQ(0x55, bpState.a, "A == 0x55 (MVI executed, INR not yet)");
+    CHECK_EQ((int)StopReason::Breakpoint, (int)backend.getStopReason(),
+             "stopReason == Breakpoint");
+    
+    // Step — should execute INR A, A becomes 0x56, PC becomes 0x0003
+    StepResult bpStep = backend.stepInstruction();
+    CHECK_EQ(0x0002, bpStep.pcBefore, "step from 0x0002");
+    CHECK_EQ(0x0003, bpStep.pcAfter, "now at 0x0003");
+    
+    CpuState afterBpStep = backend.getCpuState();
+    CHECK_EQ(0x56, afterBpStep.a, "A == 0x56 (INR A executed)");
+    CHECK_EQ((int)StopReason::Step, (int)backend.getStopReason(),
+             "stopReason == Step");
+    
+    // Test breakpoint enable/disable
+    backend.clearBreakpoints();
+    backend.addBreakpoint(0x0002);
+    backend.setBreakpointEnabled(0x0002, false);
+    CHECK(!backend.hasBreakpoint(0x0002), "disabled BP not reported by hasBreakpoint");
+    
+    auto bpList = backend.getBreakpoints();
+    CHECK_EQ((size_t)1, bpList.size(), "1 BP in list (disabled)");
+    CHECK(!bpList[0].enabled, "BP marked disabled");
+    
+    backend.setBreakpointEnabled(0x0002, true);
+    CHECK(backend.hasBreakpoint(0x0002), "re-enabled BP visible");
+    
+    // Test duplicate rejection
+    int dupId = backend.addBreakpoint(0x0002);
+    CHECK_EQ(-1, dupId, "duplicate BP returns -1");
+    
+    // Test reset preserves breakpoints
+    backend.reset();
+    auto bpAfterReset = backend.getBreakpoints();
+    CHECK_EQ((size_t)1, bpAfterReset.size(), "BP survives reset");
+    CHECK_EQ((int)StopReason::Reset, (int)backend.getStopReason(),
+             "stopReason == Reset after reset");
+    
+    backend.clearBreakpoints();
+    printf("  Breakpoint API works with real Board\n");
+    
     // --- Cleanup ---
     test_backend = nullptr;
     

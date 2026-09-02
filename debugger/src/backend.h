@@ -80,6 +80,29 @@ enum class DebuggerState
 };
 
 // ---------------------------------------------------------------------------
+// Breakpoint model (Stage 3.7)
+// ---------------------------------------------------------------------------
+
+struct DebuggerBreakpoint
+{
+    uint16_t address;
+    bool     enabled;
+};
+
+// ---------------------------------------------------------------------------
+// Stop reason (Stage 3.7)
+// ---------------------------------------------------------------------------
+
+enum class StopReason
+{
+    None,
+    Breakpoint,
+    UserPause,
+    Step,
+    Reset
+};
+
+// ---------------------------------------------------------------------------
 // DebugBackend
 //
 // Minimal debugger backend that works directly with the real CPU core
@@ -153,11 +176,19 @@ public:
     // Execute exactly one 8080 instruction and return detailed result.
     StepResult stepInstruction();
 
-    // -- breakpoints --------------------------------------------------------
+    // -- breakpoints (Stage 3.7) --------------------------------------------
 
-    int  addBreakpoint(uint16_t address);
-    void removeBreakpoint(int id);
+    int  addBreakpoint(uint16_t address);       // returns id, or -1 if duplicate
+    bool removeBreakpoint(uint16_t address);    // remove by address
+    bool setBreakpointEnabled(uint16_t address, bool enabled);
+    bool hasBreakpoint(uint16_t address) const;
+    std::vector<DebuggerBreakpoint> getBreakpoints() const; // thread-safe snapshot
     void clearBreakpoints();
+
+    // Legacy: remove by id (backward compat with tests)
+    void removeBreakpoint(int id);
+
+    StopReason getStopReason() const;
 
     // -- debug logging (Stage 1, kept for backward compatibility) -----------
 
@@ -232,13 +263,17 @@ private:
 
     DebuggerState state_;
 
-    // Breakpoints: id → address
-    std::map<int, uint16_t> breakpoints_;
+    // Breakpoints: id → DebuggerBreakpoint (Stage 3.7)
+    std::map<int, DebuggerBreakpoint> breakpoints_;
     int nextId_;
 
     bool pauseRequested_;
 
+    StopReason stopReason_ = StopReason::None;
+    bool       skipBreakpoint_ = false;  // "run after breakpoint" step-over
+
     bool checkBreakpoint();
+    void syncBreakpointsToBoard();
 
     void formatTraceLine(char *buf, size_t bufsize,
                          uint16_t pc, uint8_t opcode,
@@ -290,4 +325,8 @@ private:
 
     void processRegisterWrite();
     void executeRegisterWrite();
+
+    // Find breakpoint by address (returns iterator, or end())
+    std::map<int, DebuggerBreakpoint>::iterator findBreakpointByAddress(uint16_t address);
+    std::map<int, DebuggerBreakpoint>::const_iterator findBreakpointByAddress(uint16_t address) const;
 };

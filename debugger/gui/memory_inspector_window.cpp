@@ -178,6 +178,15 @@ void MemoryInspectorWindow::renderMemoryView(DebugBackend &backend)
                 if (addr == pc) containsPc = true;
             }
             
+            // Check if this line contains a breakpoint
+            bool containsBp = false;
+            for (int i = 0; i < bytesPerLine; ++i) {
+                size_t offset = lineOffset + i;
+                if (offset >= totalBytes) break;
+                uint16_t addr = static_cast<uint16_t>((snapshot_.start + offset) & 0xFFFF);
+                if (backend.hasBreakpoint(addr)) containsBp = true;
+            }
+
             // Highlight line with PC
             if (containsPc) {
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 0.5f, 1.0f));
@@ -186,9 +195,15 @@ void MemoryInspectorWindow::renderMemoryView(DebugBackend &backend)
             // Make line selectable (for click-to-select-row)
             ImGui::PushID(line);
             
-            // Address column
+            // Address column with breakpoint marker (Stage 3.7)
             char lineBuf[256];
-            int pos = snprintf(lineBuf, sizeof(lineBuf), "%04X: ", lineAddr);
+            int pos = 0;
+            if (containsBp) {
+                pos += snprintf(lineBuf, sizeof(lineBuf), "\xe2\x97\x8f ");  // red dot ●
+            } else {
+                pos += snprintf(lineBuf, sizeof(lineBuf), "  ");
+            }
+            pos += snprintf(lineBuf + pos, sizeof(lineBuf) - pos, "%04X: ", lineAddr);
             
             // Hex column
             for (int i = 0; i < bytesPerLine; ++i) {
@@ -252,6 +267,21 @@ void MemoryInspectorWindow::renderMemoryView(DebugBackend &backend)
                 }
             }
             
+            // Right-click context menu for breakpoints (Stage 3.7)
+            if (ImGui::BeginPopupContextItem("bpctx")) {
+                // Use the selectedAddress_ as the target
+                if (backend.hasBreakpoint(selectedAddress_)) {
+                    if (ImGui::MenuItem("Remove Breakpoint")) {
+                        backend.removeBreakpoint(selectedAddress_);
+                    }
+                } else {
+                    if (ImGui::MenuItem("Set Breakpoint")) {
+                        backend.addBreakpoint(selectedAddress_);
+                    }
+                }
+                ImGui::EndPopup();
+            }
+
             ImGui::PopID();
             
             if (containsPc) {

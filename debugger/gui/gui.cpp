@@ -194,6 +194,9 @@ void DebuggerGui::render(DebugBackend &backend, Memory &memory)
     
     // Render Stack View window (separate, movable window)
     stackView_.render(backend);
+    
+    // Render Breakpoints window (Stage 3.7)
+    breakpointsWindow_.render(backend);
 }
 
 // ---------------------------------------------------------------------------
@@ -416,6 +419,12 @@ void DebuggerGui::renderControls(DebugBackend &backend)
     if (ImGui::Button("Stack View")) {
         stackView_.setVisible(!stackView_.isVisible());
     }
+    
+    // Breakpoints toggle (Stage 3.7)
+    ImGui::SameLine();
+    if (ImGui::Button("Breakpoints")) {
+        breakpointsWindow_.setVisible(!breakpointsWindow_.isVisible());
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -435,6 +444,23 @@ void DebuggerGui::renderStatusBar(DebugBackend &backend)
         case DebuggerState::Stopped: stateStr = "STOPPED"; break;
     }
 
-    ImGui::Text("Status: %s   PC: %04X   Instructions: %llu",
-                stateStr, cpu.pc, (unsigned long long)seq);
+    // Stop reason (Stage 3.7)
+    const char *reasonStr = "";
+    switch (backend.getStopReason()) {
+        case StopReason::Breakpoint:
+            // Show address of the breakpoint
+            {
+                static char reasonBuf[64];
+                snprintf(reasonBuf, sizeof(reasonBuf), " (Breakpoint at %04X)", cpu.pc);
+                reasonStr = reasonBuf;
+            }
+            break;
+        case StopReason::UserPause:  reasonStr = " (User Pause)"; break;
+        case StopReason::Step:       reasonStr = " (Step)"; break;
+        case StopReason::Reset:      reasonStr = " (Reset)"; break;
+        default: break;
+    }
+
+    ImGui::Text("Status: %s%s   PC: %04X   Instructions: %llu",
+                stateStr, reasonStr, cpu.pc, (unsigned long long)seq);
 }

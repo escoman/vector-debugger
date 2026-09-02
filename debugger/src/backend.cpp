@@ -360,8 +360,9 @@ void DebugBackend::reset()
     
     state_ = DebuggerState::Paused;
     pauseRequested_ = false;
+    stopReason_ = StopReason::Reset;
 
-    // Clear all debug state
+    // Clear all debug state (but NOT breakpoints — they survive reset)
     instructionSequence_ = 0;
     impl_->instrHistory.clear();
     impl_->memHistory.clear();
@@ -375,6 +376,7 @@ StepResult DebugBackend::stepInstruction()
 
     // Track last_pc before execution (Stage 3.6)
     lastPc_ = static_cast<uint16_t>(i8080_pc());
+    stopReason_ = StopReason::Step;
 
     // --- before ---
     r.before   = getCpuState();
@@ -457,15 +459,26 @@ void DebugBackend::run()
     state_ = DebuggerState::Running;
     pauseRequested_ = false;
 
+    // "Run after breakpoint" step-over:
+    // If PC is currently at an enabled breakpoint, skip it on first check.
+    skipBreakpoint_ = checkBreakpoint();
+
     while (state_ == DebuggerState::Running) {
         // Check breakpoint BEFORE executing the instruction at PC.
         if (checkBreakpoint()) {
+            if (skipBreakpoint_) {
+                skipBreakpoint_ = false;
+                stepInstruction();  // step past the breakpoint
+                continue;
+            }
+            stopReason_ = StopReason::Breakpoint;
             state_ = DebuggerState::Paused;
             break;
         }
 
         // Check if pause was requested externally.
         if (pauseRequested_) {
+            stopReason_ = StopReason::UserPause;
             state_ = DebuggerState::Paused;
             pauseRequested_ = false;
             break;
@@ -485,14 +498,44 @@ void DebugBackend::pause()
 }
 
 // ---------------------------------------------------------------------------
-// Breakpoints
+// Breakpoints (Stage 3.7)
 // ---------------------------------------------------------------------------
+
+std::map<int, DebuggerBreakpoint>::iterator
+DebugBackend::findBreakpointByAddress(uint16_t address)
+{
+    for (auto it = breakpoints_.begin(); it != breakpoints_.end(); ++it) {
+        if (it->second.address == address) return it;
+    }
+    return breakpoints_.end();
+}
+
+std::map<int, DebuggerBreakpoint>::const_iterator
+DebugBackend::findBreakpointByAddress(uint16_t address) const
+{
+    for (auto it = breakpoints_.begin(); it != breakpoints_.end(); ++it) {
+        if (it->second.address == address) return it;
+    }
+    return breakpoints_.end();
+}
 
 int DebugBackend::addBreakpoint(uint16_t address)
 {
+    // Check for duplicate
+    if (findBreakpointByAddress(address) != breakpoints_.end()) {
+        return -1;  // duplicate
+    }
     int id = nextId_++;
-    breakpoints_[id] = address;
+    breakpoints_[id] = { address, true };
     return id;
+}
+
+bool DebugBackend::removeBreakpoint(uint16_t address)
+{
+    auto it = findBreakpointByAddress(address);
+    if (it == breakpoints_.end()) return false;
+    breakpoints_.erase(it);
+    return true;
 }
 
 void DebugBackend::removeBreakpoint(int id)
@@ -500,20 +543,67 @@ void DebugBackend::removeBreakpoint(int id)
     breakpoints_.erase(id);
 }
 
+bool DebugBackend::setBreakpointEnabled(uint16_t address, bool enabled)
+{
+    auto it = findBreakpointByAddress(address);
+    if (it == breakpoints_.end()) return false;
+    it->second.enabled = enabled;
+    return true;
+}
+
+bool DebugBackend::hasBreakpoint(uint16_t address) const
+{
+    auto it = findBreakpointByAddress(address);
+    return it != breakpoints_.end() && it->second.enabled;
+}
+
+std::vector<DebuggerBreakpoint> DebugBackend::getBreakpoints() const
+{
+    std::lock_guard<std::mutex> lock(commandMutex_);
+    std::vector<DebuggerBreakpoint> result;
+    result.reserve(breakpoints_.size());
+    for (auto &kv : breakpoints_) {
+        result.push_back(kv.second);
+    }
+    return result;
+}
+
 void DebugBackend::clearBreakpoints()
 {
     breakpoints_.clear();
+}
+
+StopReason DebugBackend::getStopReason() const
+{
+    return stopReason_;
 }
 
 bool DebugBackend::checkBreakpoint()
 {
     uint16_t pc = static_cast<uint16_t>(i8080_pc());
     for (auto &kv : breakpoints_) {
-        if (kv.second == pc) {
+        if (kv.second.enabled && kv.second.address == pc) {
             return true;
         }
     }
     return false;
+}
+
+void DebugBackend::syncBreakpointsToBoard()
+{
+#ifndef DEBUGGER_NO_BOARD
+    if (!board_) return;
+
+    // Add all enabled debugger breakpoints to Board.
+    // Board::insert_breakpoint() adds to its internal list.
+    // Board::check_breakpoint() checks PC against this list.
+    // We use type=0 (software breakpoint), kind=1.
+    for (auto &kv : breakpoints_) {
+        if (kv.second.enabled) {
+            board_->insert_breakpoint(0, kv.second.address, 1);
+        }
+    }
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -714,6 +804,10 @@ void DebugBackend::requestRun()
         state_ = DebuggerState::Running;
         pauseRequested_ = false;
         pendingCommand_ = PendingCommand::None;
+
+        // "Run after breakpoint" step-over:
+        // If PC is currently at an enabled breakpoint, skip it on first check.
+        skipBreakpoint_ = checkBreakpoint();
     }
     commandCv_.notify_one();
 }
@@ -823,6 +917,15 @@ void DebugBackend::processOneCommand()
     // Execution loop — runs until pause or breakpoint.
 #ifndef DEBUGGER_NO_BOARD
     if (board_) {
+        // Sync debugger breakpoints to Board before running
+        syncBreakpointsToBoard();
+
+        // Handle "run after breakpoint" step-over
+        if (skipBreakpoint_ && checkBreakpoint()) {
+            skipBreakpoint_ = false;
+            stepInstruction();  // step past the breakpoint
+        }
+
         while (state_ == DebuggerState::Running) {
             {
                 std::lock_guard<std::mutex> lk(commandMutex_);
@@ -833,11 +936,34 @@ void DebugBackend::processOneCommand()
                 }
             }
             board_->debugger_continue();
+            uint16_t pcBeforeFrame = static_cast<uint16_t>(i8080_pc());
             board_->execute_frame_with_cadence(false, false);
+            uint16_t pcAfterFrame = static_cast<uint16_t>(i8080_pc());
+
+            // If PC didn't change, Board stopped (breakpoint or debugger_interrupt)
+            if (pcAfterFrame == pcBeforeFrame && state_ == DebuggerState::Running) {
+                // Check if we're on a breakpoint
+                if (checkBreakpoint()) {
+                    stopReason_ = StopReason::Breakpoint;
+                    std::lock_guard<std::mutex> lk(commandMutex_);
+                    state_ = DebuggerState::Paused;
+                    break;
+                }
+            }
+
             if (pauseRequested_) {
                 std::lock_guard<std::mutex> lk(commandMutex_);
+                stopReason_ = StopReason::UserPause;
                 state_ = DebuggerState::Paused;
                 pauseRequested_ = false;
+                break;
+            }
+
+            // Also check our own breakpoint list (in case Board's check didn't fire)
+            if (checkBreakpoint()) {
+                std::lock_guard<std::mutex> lk(commandMutex_);
+                stopReason_ = StopReason::Breakpoint;
+                state_ = DebuggerState::Paused;
                 break;
             }
         }
@@ -862,12 +988,19 @@ void DebugBackend::processOneCommand()
                 }
             }
             if (checkBreakpoint()) {
+                if (skipBreakpoint_) {
+                    skipBreakpoint_ = false;
+                    stepInstruction();  // step past the breakpoint
+                    continue;
+                }
                 std::lock_guard<std::mutex> lk(commandMutex_);
+                stopReason_ = StopReason::Breakpoint;
                 state_ = DebuggerState::Paused;
                 break;
             }
             if (pauseRequested_) {
                 std::lock_guard<std::mutex> lk(commandMutex_);
+                stopReason_ = StopReason::UserPause;
                 state_ = DebuggerState::Paused;
                 pauseRequested_ = false;
                 break;

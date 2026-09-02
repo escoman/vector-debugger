@@ -2257,6 +2257,329 @@ static void test_cpu_regs_reset()
     TEST_END();
 }
 
+// ===================================================================
+// Stage 3.7 — Breakpoint API tests
+// ===================================================================
+
+// ---------------------------------------------------------------------------
+// Test 1: Add breakpoint
+// ---------------------------------------------------------------------------
+static void test_bp_add()
+{
+    TEST_BEGIN("S3.7: bp add");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+
+    CHECK(!dbg->hasBreakpoint(0x8000), "no BP at 8000 initially");
+    int id = dbg->addBreakpoint(0x8000);
+    CHECK(id >= 0, "addBreakpoint returns positive id");
+    CHECK(dbg->hasBreakpoint(0x8000), "hasBreakpoint(0x8000) == true");
+
+    auto bps = dbg->getBreakpoints();
+    CHECK_EQ((size_t)1, bps.size(), "1 breakpoint in snapshot");
+    CHECK_EQ(0x8000, bps[0].address, "BP address == 0x8000");
+    CHECK(bps[0].enabled, "BP enabled by default");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test 2: Duplicate breakpoint rejected
+// ---------------------------------------------------------------------------
+static void test_bp_duplicate()
+{
+    TEST_BEGIN("S3.7: bp duplicate");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+
+    int id1 = dbg->addBreakpoint(0x8000);
+    CHECK(id1 >= 0, "first add succeeds");
+
+    int id2 = dbg->addBreakpoint(0x8000);
+    CHECK_EQ(-1, id2, "duplicate add returns -1");
+
+    auto bps = dbg->getBreakpoints();
+    CHECK_EQ((size_t)1, bps.size(), "only 1 breakpoint exists");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test 3: Remove breakpoint
+// ---------------------------------------------------------------------------
+static void test_bp_remove()
+{
+    TEST_BEGIN("S3.7: bp remove");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+
+    dbg->addBreakpoint(0x8000);
+    CHECK(dbg->hasBreakpoint(0x8000), "BP exists after add");
+
+    bool removed = dbg->removeBreakpoint(static_cast<uint16_t>(0x8000));
+    CHECK(removed, "removeBreakpoint returns true");
+    CHECK(!dbg->hasBreakpoint(0x8000), "BP gone after remove");
+
+    auto bps = dbg->getBreakpoints();
+    CHECK_EQ((size_t)0, bps.size(), "snapshot empty");
+
+    // Remove non-existent
+    bool removed2 = dbg->removeBreakpoint(static_cast<uint16_t>(0x9999));
+    CHECK(!removed2, "remove non-existent returns false");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test 4: Enable / disable breakpoint
+// ---------------------------------------------------------------------------
+static void test_bp_enable_disable()
+{
+    TEST_BEGIN("S3.7: bp enable/disable");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+
+    dbg->addBreakpoint(0x8000);
+    CHECK(dbg->hasBreakpoint(0x8000), "BP enabled initially");
+
+    // Disable
+    bool ok = dbg->setBreakpointEnabled(0x8000, false);
+    CHECK(ok, "setBreakpointEnabled returns true");
+    CHECK(!dbg->hasBreakpoint(0x8000), "hasBreakpoint false when disabled");
+
+    auto bps = dbg->getBreakpoints();
+    CHECK_EQ((size_t)1, bps.size(), "BP still in list");
+    CHECK(!bps[0].enabled, "BP marked disabled in snapshot");
+
+    // Re-enable
+    ok = dbg->setBreakpointEnabled(0x8000, true);
+    CHECK(ok, "re-enable returns true");
+    CHECK(dbg->hasBreakpoint(0x8000), "hasBreakpoint true after re-enable");
+
+    // Disable non-existent
+    bool ok2 = dbg->setBreakpointEnabled(0x9999, false);
+    CHECK(!ok2, "setBreakpointEnabled on non-existent returns false");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test 5: Multiple breakpoints
+// ---------------------------------------------------------------------------
+static void test_bp_multiple()
+{
+    TEST_BEGIN("S3.7: bp multiple");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+
+    dbg->addBreakpoint(0x1000);
+    dbg->addBreakpoint(0x2000);
+    dbg->addBreakpoint(0x3000);
+
+    auto bps = dbg->getBreakpoints();
+    CHECK_EQ((size_t)3, bps.size(), "3 breakpoints in snapshot");
+
+    CHECK(dbg->hasBreakpoint(0x1000), "has 1000");
+    CHECK(dbg->hasBreakpoint(0x2000), "has 2000");
+    CHECK(dbg->hasBreakpoint(0x3000), "has 3000");
+    CHECK(!dbg->hasBreakpoint(0x4000), "no 4000");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test 6: Clear all breakpoints
+// ---------------------------------------------------------------------------
+static void test_bp_clear()
+{
+    TEST_BEGIN("S3.7: bp clear all");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+
+    dbg->addBreakpoint(0x1000);
+    dbg->addBreakpoint(0x2000);
+    dbg->addBreakpoint(0x3000);
+    CHECK_EQ((size_t)3, dbg->getBreakpoints().size(), "3 BPs before clear");
+
+    dbg->clearBreakpoints();
+    auto bps = dbg->getBreakpoints();
+    CHECK_EQ((size_t)0, bps.size(), "0 BPs after clear");
+    CHECK(!dbg->hasBreakpoint(0x1000), "no 1000 after clear");
+    CHECK(!dbg->hasBreakpoint(0x2000), "no 2000 after clear");
+    CHECK(!dbg->hasBreakpoint(0x3000), "no 3000 after clear");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test 7: Break stops before execution
+// ---------------------------------------------------------------------------
+static void test_bp_break_before_execution()
+{
+    TEST_BEGIN("S3.7: bp break before execution");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_test_rom(mem);
+    dbg->reset();
+
+    // Test ROM:
+    //   0000: LXI H, C000
+    //   0003: MVI A, 42
+    //   0005: MOV M, A   <-- BP here
+    //   0006: INR A
+
+    // Place breakpoint at 0x0005 (MOV M, A)
+    dbg->addBreakpoint(0x0005);
+
+    // Run — should stop at 0x0005 BEFORE executing MOV M, A
+    dbg->run();
+
+    CHECK(dbg->isPaused(), "state == Paused");
+    CpuState s = dbg->getCpuState();
+    CHECK_EQ(0x0005, s.pc, "PC == 0x0005");
+    CHECK_EQ(0x42, s.a, "A == 0x42 (MVI executed)");
+
+    // MOV M, A was NOT executed — [C000] should still be 0
+    uint8_t val = DebugMemoryAccess::peek(mem, 0xC000);
+    CHECK_EQ(0x00, val, "[C000] == 0 (MOV M,A not executed)");
+
+    // StopReason should be Breakpoint
+    CHECK_EQ((int)StopReason::Breakpoint, (int)dbg->getStopReason(),
+             "stopReason == Breakpoint");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test 8: Continue after breakpoint (step-over semantics)
+// ---------------------------------------------------------------------------
+static void test_bp_continue_after()
+{
+    TEST_BEGIN("S3.7: bp continue after (step-over)");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_test_rom(mem);
+    dbg->reset();
+
+    // BP at 0x0005 (MOV M, A)
+    dbg->addBreakpoint(0x0005);
+    dbg->run();
+    CHECK_EQ(0x0005, dbg->getCpuState().pc, "stopped at BP");
+    CHECK_EQ((int)StopReason::Breakpoint, (int)dbg->getStopReason(), "stopReason == Breakpoint");
+
+    // Run again — should step over the BP, execute MOV M,A, then loop back
+    // and hit the BP again at 0x0005.
+    dbg->run();
+
+    CpuState s = dbg->getCpuState();
+    CHECK_EQ(0x0005, s.pc, "PC == 0x0005 (hit BP again after loop)");
+
+    // After step-over: MOV M,A wrote 0x42 to [C000], then INR A (A=0x43),
+    // then MOV M,A wrote 0x43 to [C000], then JMP 0003, MVI A,42 (A=0x42),
+    // then hit BP again at 0x0005.
+    uint8_t val = DebugMemoryAccess::peek(mem, 0xC000);
+    CHECK_EQ(0x43, val, "[C000] == 0x43 (MOV M,A executed, then INR A, then MOV M,A again)");
+
+    CHECK_EQ(0x42, s.a, "A == 0x42 (MVI A,42 re-executed in loop)");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test 9: Step at breakpoint
+// ---------------------------------------------------------------------------
+static void test_bp_step_over()
+{
+    TEST_BEGIN("S3.7: bp step at breakpoint");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_test_rom(mem);
+    dbg->reset();
+
+    // Step to 0x0005 manually
+    dbg->stepInstruction(); // 0000: LXI H, C000
+    dbg->stepInstruction(); // 0003: MVI A, 42
+
+    CpuState s = dbg->getCpuState();
+    CHECK_EQ(0x0005, s.pc, "PC == 0x0005 before step");
+
+    // Place BP at current PC
+    dbg->addBreakpoint(0x0005);
+
+    // Step — should execute exactly one instruction (MOV M, A)
+    StepResult r = dbg->stepInstruction();
+    CHECK_EQ(0x0005, r.pcBefore, "stepped from 0x0005");
+    CHECK_EQ(0x0006, r.pcAfter, "now at 0x0006");
+
+    // MOV M,A was executed
+    uint8_t val = DebugMemoryAccess::peek(mem, 0xC000);
+    CHECK_EQ(0x42, val, "[C000] == 0x42 (MOV M,A executed)");
+
+    // StopReason should be Step
+    CHECK_EQ((int)StopReason::Step, (int)dbg->getStopReason(),
+             "stopReason == Step");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test 10: Reset preserves breakpoints
+// ---------------------------------------------------------------------------
+static void test_bp_reset_preserves()
+{
+    TEST_BEGIN("S3.7: bp reset preserves");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+
+    dbg->addBreakpoint(0x1000);
+    dbg->addBreakpoint(0x2000);
+    CHECK_EQ((size_t)2, dbg->getBreakpoints().size(), "2 BPs before reset");
+
+    dbg->reset();
+
+    // Breakpoints survive reset
+    auto bps = dbg->getBreakpoints();
+    CHECK_EQ((size_t)2, bps.size(), "2 BPs after reset");
+    CHECK(dbg->hasBreakpoint(0x1000), "BP at 1000 preserved");
+    CHECK(dbg->hasBreakpoint(0x2000), "BP at 2000 preserved");
+
+    // StopReason should be Reset
+    CHECK_EQ((int)StopReason::Reset, (int)dbg->getStopReason(),
+             "stopReason == Reset");
+
+    teardown(dbg);
+    TEST_END();
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
@@ -2332,6 +2655,18 @@ int main()
     test_cpu_regs_sp();
     test_cpu_regs_running_rejection();
     test_cpu_regs_reset();
+
+    // Stage 3.7 — Breakpoint API tests
+    test_bp_add();
+    test_bp_duplicate();
+    test_bp_remove();
+    test_bp_enable_disable();
+    test_bp_multiple();
+    test_bp_clear();
+    test_bp_break_before_execution();
+    test_bp_continue_after();
+    test_bp_step_over();
+    test_bp_reset_preserves();
 
     printf("\n\033[0;36m=== Results: %d/%d passed", tests_passed, tests_run);
     if (tests_failed > 0) {
