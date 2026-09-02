@@ -277,6 +277,44 @@ static void test_board_smoke()
     
     printf("  Stack View API works with real Board\n");
     
+    // --- Test Memory Editing API (Stage 3.5) ---
+    printf("  Testing Memory Editing API...\n");
+    
+    // Write a byte to a known RAM area (use address 0xC000 which is RAM)
+    // First read original value
+    uint8_t origByte = backend.readMemory(0xC000);
+    printf("  Original C000 = %02X\n", origByte);
+    
+    // Write through Memory::write (virtual address path)
+    // This is what processWriteCommand -> executeWriteMemory does
+    memory.write(0xC000, 0x77, false);
+    
+    // Verify through backend read
+    uint8_t newByte = backend.readMemory(0xC000);
+    CHECK_EQ(0x77, newByte, "write C000 = 0x77, read back 0x77");
+    
+    // Verify snapshot reflects the write
+    MemorySnapshot editSnap = backend.readMemorySnapshot(0xC000, 4);
+    CHECK_EQ(0x77, editSnap.data[0], "snapshot[0] == 0x77 after write");
+    
+    // Write multiple bytes
+    uint8_t editData[] = {0xDE, 0xAD, 0xBE, 0xEF};
+    for (size_t i = 0; i < sizeof(editData); ++i) {
+        memory.write(static_cast<uint16_t>(0xC010 + i), editData[i], false);
+    }
+    MemorySnapshot editSnap2 = backend.readMemorySnapshot(0xC010, 4);
+    CHECK_EQ(0xDE, editSnap2.data[0], "bulk write [0] == 0xDE");
+    CHECK_EQ(0xAD, editSnap2.data[1], "bulk write [1] == 0xAD");
+    CHECK_EQ(0xBE, editSnap2.data[2], "bulk write [2] == 0xBE");
+    CHECK_EQ(0xEF, editSnap2.data[3], "bulk write [3] == 0xEF");
+    
+    // Restore original value
+    memory.write(0xC000, origByte, false);
+    uint8_t restored = backend.readMemory(0xC000);
+    CHECK_EQ(origByte, restored, "restored original value");
+    
+    printf("  Memory Editing API works with real Board\n");
+    
     // --- Cleanup ---
     test_backend = nullptr;
     

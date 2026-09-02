@@ -114,6 +114,16 @@ public:
     // Read memory range as snapshot
     MemorySnapshot readMemorySnapshot(uint16_t start, size_t size);
 
+    // -- memory write (Stage 3.5, through emulation thread) ----------------
+
+    // Write single byte. Posts command to emulation thread, blocks until done.
+    // Returns false if not Paused or address invalid.
+    bool writeMemoryByte(uint16_t address, uint8_t value);
+
+    // Write range of bytes. Posts command to emulation thread, blocks until done.
+    // Returns false if not Paused or any address invalid.
+    bool writeMemory(uint16_t address, const uint8_t* data, size_t size);
+
     // -- state queries ------------------------------------------------------
 
     CpuState       getCpuState() const;
@@ -192,6 +202,10 @@ public:
     // Called from emulation thread — runs until paused or breakpoint.
     void runUntilPause();
 
+    // Process one pending command (called from emulation thread loop).
+    // Also callable from tests to synchronously process posted commands.
+    void processOneCommand();
+
     // Signal the emulation thread to quit.
     void requestQuit();
     bool isQuitRequested() const;
@@ -234,7 +248,7 @@ private:
 
     // -- Stage 3.1: thread-safe command protocol ------------------------------
 
-    enum class PendingCommand { None, Step, Run, Pause, Reset, Quit };
+    enum class PendingCommand { None, Step, Run, Pause, Reset, Quit, MemoryWrite };
 
     mutable std::mutex      commandMutex_;
     std::condition_variable commandCv_;
@@ -243,4 +257,13 @@ private:
     bool                    stepCompleted_  = false;
     bool                    quitRequested_  = false;
     mutable std::mutex      stateMutex_;  // protects state_ for cross-thread reads
+
+    // -- Stage 3.5: memory write command state --------------------------------
+
+    uint16_t                writeAddress_   = 0;
+    std::vector<uint8_t>    writeData_;
+    bool                    writeResult_    = false;
+
+    void processWriteCommand();
+    void executeWriteMemory();
 };

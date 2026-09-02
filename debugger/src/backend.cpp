@@ -184,6 +184,61 @@ MemorySnapshot DebugBackend::readMemorySnapshot(uint16_t start, size_t size)
 }
 
 // ---------------------------------------------------------------------------
+// Memory write (Stage 3.5 — through emulation thread)
+// ---------------------------------------------------------------------------
+
+bool DebugBackend::writeMemoryByte(uint16_t address, uint8_t value)
+{
+    return writeMemory(address, &value, 1);
+}
+
+bool DebugBackend::writeMemory(uint16_t address, const uint8_t* data, size_t size)
+{
+    if (!data || size == 0) return false;
+
+    // Post write command for emulation thread
+    {
+        std::lock_guard<std::mutex> lock(commandMutex_);
+        writeAddress_ = address;
+        writeData_.assign(data, data + size);
+        writeResult_  = false;
+        pendingCommand_ = PendingCommand::MemoryWrite;
+        stepCompleted_  = false;
+    }
+    commandCv_.notify_one();
+
+    // Wait for the emulation thread to complete the write
+    std::unique_lock<std::mutex> lock(commandMutex_);
+    resultCv_.wait(lock, [this]{ return stepCompleted_; });
+
+    return writeResult_;
+}
+
+void DebugBackend::processWriteCommand()
+{
+    // Check state — write only allowed when Paused.
+    // State check happens in the emulation thread context.
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    if (state_ != DebuggerState::Paused) {
+        writeResult_ = false;
+        return;
+    }
+
+    executeWriteMemory();
+    writeResult_ = true;
+}
+
+void DebugBackend::executeWriteMemory()
+{
+    // Write through Memory::write() — handles virtual address translation
+    // and banking automatically. Do NOT use Memory::buffer().
+    for (size_t i = 0; i < writeData_.size(); ++i) {
+        uint16_t addr = static_cast<uint16_t>((writeAddress_ + i) & 0xFFFF);
+        memory_.write(addr, writeData_[i], false);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // CPU state
 // ---------------------------------------------------------------------------
 
@@ -633,13 +688,116 @@ bool DebugBackend::isQuitRequested() const
     return quitRequested_;
 }
 
+void DebugBackend::processOneCommand()
+{
+    std::unique_lock<std::mutex> lock(commandMutex_);
+    commandCv_.wait(lock, [this]{
+        return pendingCommand_ != PendingCommand::None;
+    });
+
+    PendingCommand cmd = pendingCommand_;
+    pendingCommand_ = PendingCommand::None;
+
+    if (cmd == PendingCommand::Quit) {
+#ifndef DEBUGGER_NO_BOARD
+        if (board_) {
+            board_->debugger_detached();
+        }
+#endif
+        return;
+    }
+    else if (cmd == PendingCommand::Step) {
+        stepInstruction();
+        stepCompleted_ = true;
+        resultCv_.notify_one();
+        return;
+    }
+    else if (cmd == PendingCommand::Reset) {
+        reset();
+        stepCompleted_ = true;
+        resultCv_.notify_one();
+        return;
+    }
+    else if (cmd == PendingCommand::MemoryWrite) {
+        // Release lock before writing to memory (Memory::write may fire callbacks)
+        lock.unlock();
+        processWriteCommand();
+        {
+            std::lock_guard<std::mutex> lk(commandMutex_);
+            stepCompleted_ = true;
+        }
+        resultCv_.notify_one();
+        return;
+    }
+    else if (cmd == PendingCommand::Pause) {
+        pauseRequested_ = true;
+    }
+    // For Run: state_ is already set to Running by requestRun().
+    // Fall through to the execution loop below.
+
+    // Execution loop — runs until pause or breakpoint.
+#ifndef DEBUGGER_NO_BOARD
+    if (board_) {
+        while (state_ == DebuggerState::Running) {
+            {
+                std::lock_guard<std::mutex> lk(commandMutex_);
+                if (quitRequested_) {
+                    board_->debugger_break();
+                    board_->debugger_detached();
+                    return;
+                }
+            }
+            board_->debugger_continue();
+            board_->execute_frame_with_cadence(false, false);
+            if (pauseRequested_) {
+                std::lock_guard<std::mutex> lk(commandMutex_);
+                state_ = DebuggerState::Paused;
+                pauseRequested_ = false;
+                break;
+            }
+        }
+    } else
+#endif
+    {
+        while (state_ == DebuggerState::Running) {
+            {
+                std::lock_guard<std::mutex> lk(commandMutex_);
+                if (quitRequested_) return;
+                if (pendingCommand_ == PendingCommand::Quit) return;
+                if (pendingCommand_ == PendingCommand::Step) {
+                    pendingCommand_ = PendingCommand::None;
+                    stepInstruction();
+                    stepCompleted_ = true;
+                    resultCv_.notify_one();
+                    break;
+                }
+                if (pendingCommand_ == PendingCommand::Pause) {
+                    pendingCommand_ = PendingCommand::None;
+                    pauseRequested_ = true;
+                }
+            }
+            if (checkBreakpoint()) {
+                std::lock_guard<std::mutex> lk(commandMutex_);
+                state_ = DebuggerState::Paused;
+                break;
+            }
+            if (pauseRequested_) {
+                std::lock_guard<std::mutex> lk(commandMutex_);
+                state_ = DebuggerState::Paused;
+                pauseRequested_ = false;
+                break;
+            }
+            stepInstruction();
+        }
+    }
+}
+
 void DebugBackend::runUntilPause()
 {
 #ifndef DEBUGGER_NO_BOARD
     // If Board is attached, set up poll_debugger callback for command checking
     if (board_) {
         board_->poll_debugger = [this]() {
-            // Check for pending commands from GUI thread
             std::lock_guard<std::mutex> lock(commandMutex_);
             
             if (quitRequested_ || pendingCommand_ == PendingCommand::Quit) {
@@ -648,7 +806,6 @@ void DebugBackend::runUntilPause()
             }
             
             if (pendingCommand_ == PendingCommand::Step) {
-                // Single step requested while running
                 pendingCommand_ = PendingCommand::None;
                 stepInstruction();
                 stepCompleted_ = true;
@@ -663,6 +820,15 @@ void DebugBackend::runUntilPause()
                 board_->debugger_break();
                 return;
             }
+
+            // MemoryWrite while running: reject — must be Paused.
+            if (pendingCommand_ == PendingCommand::MemoryWrite) {
+                writeResult_ = false;
+                pendingCommand_ = PendingCommand::None;
+                stepCompleted_ = true;
+                resultCv_.notify_one();
+                return;
+            }
         };
         
         // Enable debugging mode for breakpoint checking
@@ -671,114 +837,15 @@ void DebugBackend::runUntilPause()
 #endif
     
     while (true) {
-        // Wait for a command from the GUI thread.
+        processOneCommand();
+
+        // If processOneCommand returned because of Run (fall-through),
+        // the execution loop is inside processOneCommand and it will
+        // return when paused/breakpoint. Then we loop back to wait.
+        // Check if we should exit (Quit was processed).
         {
-            std::unique_lock<std::mutex> lock(commandMutex_);
-            commandCv_.wait(lock, [this]{
-                return pendingCommand_ != PendingCommand::None;
-            });
-
-            PendingCommand cmd = pendingCommand_;
-            pendingCommand_ = PendingCommand::None;
-
-            if (cmd == PendingCommand::Quit) {
-#ifndef DEBUGGER_NO_BOARD
-                if (board_) {
-                    board_->debugger_detached();
-                }
-#endif
-                return;
-            }
-            else if (cmd == PendingCommand::Step) {
-                stepInstruction();
-                stepCompleted_ = true;
-                resultCv_.notify_one();
-                // Stay in the loop — wait for next command.
-                continue;
-            }
-            else if (cmd == PendingCommand::Reset) {
-                reset();
-                stepCompleted_ = true;
-                resultCv_.notify_one();
-                continue;
-            }
-            else if (cmd == PendingCommand::Pause) {
-                pauseRequested_ = true;
-            }
-            // For Run: state_ is already set to Running by requestRun().
-            // Fall through to the execution loop below.
-        }
-
-        // Execution loop — runs until pause or breakpoint.
-#ifndef DEBUGGER_NO_BOARD
-        if (board_) {
-            // Use Board's execute_frame for full emulator integration
-            while (state_ == DebuggerState::Running) {
-                // Check for quit request
-                {
-                    std::lock_guard<std::mutex> lock(commandMutex_);
-                    if (quitRequested_) {
-                        board_->debugger_break();
-                        board_->debugger_detached();
-                        return;
-                    }
-                }
-                
-                // Clear debugger_interrupt before executing frame
-                board_->debugger_continue();
-                
-                // Execute one frame (or until breakpoint/pause)
-                board_->execute_frame_with_cadence(false, false);  // false = don't update screen, no cadence
-                
-                // Check if we stopped due to breakpoint or pause
-                // Board sets debugger_interrupt internally when breakpoint is hit
-                // We can check if we're still running
-                if (pauseRequested_) {
-                    std::lock_guard<std::mutex> lock(commandMutex_);
-                    state_ = DebuggerState::Paused;
-                    pauseRequested_ = false;
-                    break;
-                }
-            }
-        } else
-#endif
-        {
-            // Original CPU-only loop (for tests)
-            while (state_ == DebuggerState::Running) {
-                // Check for quit/pause commands.
-                {
-                    std::lock_guard<std::mutex> lock(commandMutex_);
-                    if (quitRequested_) return;
-                    if (pendingCommand_ == PendingCommand::Quit) return;
-                    if (pendingCommand_ == PendingCommand::Step) {
-                        // GUI requested a single step while we were running.
-                        pendingCommand_ = PendingCommand::None;
-                        stepInstruction();
-                        stepCompleted_ = true;
-                        resultCv_.notify_one();
-                        break;  // Go back to waiting for commands.
-                    }
-                    if (pendingCommand_ == PendingCommand::Pause) {
-                        pendingCommand_ = PendingCommand::None;
-                        pauseRequested_ = true;
-                    }
-                }
-
-                if (checkBreakpoint()) {
-                    std::lock_guard<std::mutex> lock(commandMutex_);
-                    state_ = DebuggerState::Paused;
-                    break;
-                }
-
-                if (pauseRequested_) {
-                    std::lock_guard<std::mutex> lock(commandMutex_);
-                    state_ = DebuggerState::Paused;
-                    pauseRequested_ = false;
-                    break;
-                }
-
-                stepInstruction();
-            }
+            std::lock_guard<std::mutex> lock(commandMutex_);
+            if (quitRequested_) return;
         }
     }
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdio>
 #include "backend.h"
 
 // Forward declarations
@@ -42,7 +43,7 @@ private:
     
     // Address state
     uint16_t address_ = 0;          // Current view address (for scroll position)
-    uint16_t selectedAddress_ = 0;  // Selected/clicked address
+    uint16_t selectedAddress_ = 0;  // Selected byte address
     
     // Snapshot cache
     MemorySnapshot snapshot_;
@@ -50,6 +51,12 @@ private:
     
     // Input buffer for address field
     char addressInput_[8] = "0000";
+    
+    // Byte editing state (Stage 3.5)
+    bool editingByte_ = false;
+    char editBuffer_[4] = "";        // hex input for byte edit
+    uint16_t editAddress_ = 0;       // address being edited
+    bool writeFailed_ = false;       // status: write rejected (not paused)
     
     // Render sub-components
     void renderToolbar(DebugBackend &backend);
@@ -61,4 +68,9 @@ private:
     
     // Address parsing
     bool parseAddress(const char *input, uint16_t &address) const;
+    
+    // Byte editing
+    void beginEditByte(uint16_t address);
+    void confirmEdit(DebugBackend &backend);
+    void cancelEdit();
 };

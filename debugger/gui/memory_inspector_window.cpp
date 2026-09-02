@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cctype>
+#include <algorithm>
 
 // ---------------------------------------------------------------------------
 // Construction
@@ -64,6 +65,30 @@ void MemoryInspectorWindow::render(DebugBackend &backend)
 
 void MemoryInspectorWindow::renderToolbar(DebugBackend &backend)
 {
+    // Byte editing mode (Stage 3.5)
+    if (editingByte_) {
+        ImGui::Text("Edit %04X:", editAddress_);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(50);
+        bool enterPressed = ImGui::InputText("##editbyte", editBuffer_, sizeof(editBuffer_),
+            ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_EnterReturnsTrue |
+            ImGuiInputTextFlags_AutoSelectAll);
+        ImGui::SameLine();
+        if (ImGui::Button("Go") || enterPressed) {
+            confirmEdit(backend);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            cancelEdit();
+        }
+        if (writeFailed_) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Write failed: CPU must be Paused");
+        }
+        return;  // Skip normal toolbar while editing
+    }
+    
+    writeFailed_ = false;
     // Address input
     ImGui::SetNextItemWidth(100);
     if (ImGui::InputText("##addr", addressInput_, sizeof(addressInput_), 
@@ -127,6 +152,10 @@ void MemoryInspectorWindow::renderMemoryView(DebugBackend &backend)
     const size_t totalBytes = snapshot_.data.size();
     const size_t totalLines = (totalBytes + bytesPerLine - 1) / bytesPerLine;
     
+    // Character width for click calculation (monospace font)
+    float charWidth = ImGui::CalcTextSize("M").x;
+    if (charWidth < 1.0f) charWidth = 8.0f;
+    
     // Child window for scrolling
     ImGui::BeginChild("MemoryScroll", ImVec2(0, -ImGui::GetFrameHeightWithSpacing() * 4), 
                       ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
@@ -146,10 +175,7 @@ void MemoryInspectorWindow::renderMemoryView(DebugBackend &backend)
                 size_t offset = lineOffset + i;
                 if (offset >= totalBytes) break;
                 uint16_t addr = static_cast<uint16_t>((snapshot_.start + offset) & 0xFFFF);
-                if (addr == pc) {
-                    containsPc = true;
-                    break;
-                }
+                if (addr == pc) containsPc = true;
             }
             
             // Highlight line with PC
@@ -157,7 +183,7 @@ void MemoryInspectorWindow::renderMemoryView(DebugBackend &backend)
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 0.5f, 1.0f));
             }
             
-            // Make line clickable
+            // Make line selectable (for click-to-select-row)
             ImGui::PushID(line);
             
             // Address column
@@ -185,7 +211,6 @@ void MemoryInspectorWindow::renderMemoryView(DebugBackend &backend)
                     lineBuf[pos++] = ' ';
                 } else {
                     uint8_t byte = snapshot_.data[offset];
-                    // Printable ASCII: 0x20-0x7E
                     if (byte >= 0x20 && byte <= 0x7E) {
                         lineBuf[pos++] = static_cast<char>(byte);
                     } else {
@@ -196,37 +221,35 @@ void MemoryInspectorWindow::renderMemoryView(DebugBackend &backend)
             lineBuf[pos++] = '|';
             lineBuf[pos] = '\0';
             
-            // Check if this line is selected
-            bool isSelected = false;
-            for (int i = 0; i < bytesPerLine; ++i) {
-                size_t offset = lineOffset + i;
-                if (offset >= totalBytes) break;
-                uint16_t addr = static_cast<uint16_t>((snapshot_.start + offset) & 0xFFFF);
-                if (addr == selectedAddress_) {
-                    isSelected = true;
-                    break;
-                }
-            }
+            // Render the full line as selectable
+            bool lineClicked = ImGui::Selectable(lineBuf, false, ImGuiSelectableFlags_AllowDoubleClick);
             
-            if (isSelected) {
-                ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.3f, 0.5f, 0.3f, 1.0f));
-            }
-            
-            // Render as selectable text
-            if (ImGui::Selectable(lineBuf, false, ImGuiSelectableFlags_AllowDoubleClick)) {
-                // Calculate clicked address based on mouse position
-                // For simplicity, use the line start address
-                selectedAddress_ = lineAddr;
+            if (lineClicked) {
+                // Calculate which byte was clicked based on mouse X position
+                ImVec2 textStart = ImGui::GetItemRectMin();
+                float mouseX = ImGui::GetIO().MousePos.x;
+                float offset = mouseX - textStart.x;
                 
-                if (ImGui::IsMouseDoubleClicked(0)) {
-                    // Double-click: set as current address
-                    address_ = lineAddr;
-                    snprintf(addressInput_, sizeof(addressInput_), "%04X", lineAddr);
+                // Address field: "XXXX: " = 6 chars
+                float addrWidth = 6.0f * charWidth;
+                
+                if (offset >= addrWidth) {
+                    float byteOffset = offset - addrWidth;
+                    // Each byte cell: "XX " = 3 chars wide
+                    float cellWidth = 3.0f * charWidth;
+                    int byteIndex = static_cast<int>(byteOffset / cellWidth);
+                    byteIndex = std::max(0, std::min(byteIndex, bytesPerLine - 1));
+                    
+                    size_t clickOffset = lineOffset + byteIndex;
+                    if (clickOffset < totalBytes) {
+                        uint16_t clickedAddr = static_cast<uint16_t>((snapshot_.start + clickOffset) & 0xFFFF);
+                        selectedAddress_ = clickedAddr;
+                        
+                        if (ImGui::IsMouseDoubleClicked(0)) {
+                            beginEditByte(clickedAddr);
+                        }
+                    }
                 }
-            }
-            
-            if (isSelected) {
-                ImGui::PopStyleColor();
             }
             
             ImGui::PopID();
@@ -333,4 +356,53 @@ bool MemoryInspectorWindow::parseAddress(const char *input, uint16_t &address) c
     
     address = static_cast<uint16_t>(value);
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Byte editing (Stage 3.5)
+// ---------------------------------------------------------------------------
+
+void MemoryInspectorWindow::beginEditByte(uint16_t address)
+{
+    editingByte_ = true;
+    editAddress_ = address;
+    writeFailed_ = false;
+    
+    // Pre-fill with current value from snapshot
+    size_t offset = static_cast<size_t>((address - snapshot_.start) & 0xFFFF);
+    if (offset < snapshot_.data.size()) {
+        snprintf(editBuffer_, sizeof(editBuffer_), "%02X", snapshot_.data[offset]);
+    } else {
+        editBuffer_[0] = '\0';
+    }
+}
+
+void MemoryInspectorWindow::confirmEdit(DebugBackend &backend)
+{
+    // Parse hex value
+    unsigned int value = 0;
+    if (sscanf(editBuffer_, "%x", &value) != 1 || value > 0xFF) {
+        cancelEdit();
+        return;
+    }
+    
+    uint8_t byte = static_cast<uint8_t>(value);
+    
+    // Write through backend (goes through emulation thread command protocol)
+    bool ok = backend.writeMemoryByte(editAddress_, byte);
+    
+    if (ok) {
+        // Write succeeded — refresh snapshot to show new value
+        cancelEdit();
+        needsRefresh_ = true;
+    } else {
+        // Write failed (not paused)
+        writeFailed_ = true;
+    }
+}
+
+void MemoryInspectorWindow::cancelEdit()
+{
+    editingByte_ = false;
+    writeFailed_ = false;
 }
