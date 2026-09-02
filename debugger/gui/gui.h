@@ -6,6 +6,7 @@
 #include "breakpoints_window.h"
 #include "disassembly_window.h"
 #include "execution_trace_window.h"
+#include "io_inspector_window.h"
 #include "backend.h"
 
 // Forward declarations — avoid pulling SDL/ImGui into this header.
@@ -78,6 +79,9 @@ private:
     
     // Execution Trace window (Stage 3.10)
     ExecutionTraceWindow executionTrace_;
+    
+    // I/O Inspector window (Stage 3.11)
+    IoInspectorWindow ioInspector_;
     
     // CPU register editing state (Stage 3.6)
     bool editingRegister_ = false;

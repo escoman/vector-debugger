@@ -1,0 +1,243 @@
+#include "io_inspector_window.h"
+
+// Dear ImGui
+#include "imgui.h"
+
+#include <cstdio>
+#include <cstring>
+#include <algorithm>
+
+// ---------------------------------------------------------------------------
+// PC resolution — cross-reference instructionSequence with InstructionEvent
+// ---------------------------------------------------------------------------
+
+uint16_t IoInspectorWindow::resolvePc(uint64_t instructionSequence) const
+{
+    // Linear scan of cached instruction events to find matching sequence.
+    // The instruction history is typically small (last 10000 entries),
+    // and this is only called during GUI rendering (not emulation thread).
+    for (const auto &ie : cachedInstrEvents_) {
+        if (ie.sequence == instructionSequence) {
+            return ie.pcBefore;
+        }
+    }
+    return 0xFFFF;  // unknown — instruction not in cached history
+}
+
+// ---------------------------------------------------------------------------
+// Main render
+// ---------------------------------------------------------------------------
+
+void IoInspectorWindow::render(DebugBackend &backend)
+{
+    if (!visible_) return;
+
+    ImGui::SetNextWindowSize(ImVec2(550, 400), ImGuiCond_FirstUseEver);
+
+    if (!ImGui::Begin("I/O & Hardware Inspector", &visible_)) {
+        ImGui::End();
+        return;
+    }
+
+    // Refresh snapshots if needed
+    if (needsRefresh_ && !pauseCapture_) {
+        cachedEntries_    = backend.ioHistorySnapshot();
+        cachedInstrEvents_ = backend.instructionHistorySnapshot();
+        needsRefresh_ = false;
+    } else if (needsRefresh_ && pauseCapture_) {
+        // Pause Capture: don't fetch new data, just clear the refresh flag
+        needsRefresh_ = false;
+    }
+
+    // Render toolbar
+    renderToolbar(backend);
+
+    ImGui::Separator();
+
+    // Render I/O table
+    renderIoTable(backend);
+
+    ImGui::Separator();
+
+    // Render hardware state
+    renderHardwareState(backend);
+
+    ImGui::End();
+}
+
+// ---------------------------------------------------------------------------
+// Toolbar
+// ---------------------------------------------------------------------------
+
+void IoInspectorWindow::renderToolbar(DebugBackend &backend)
+{
+    // Follow I/O checkbox
+    ImGui::Checkbox("Follow I/O", &followIo_);
+
+    ImGui::SameLine();
+    // Pause Capture checkbox
+    ImGui::Checkbox("Pause Capture", &pauseCapture_);
+
+    ImGui::SameLine();
+    // Clear button — clears I/O history only
+    if (ImGui::Button("Clear")) {
+        backend.clearIoHistory();
+        cachedEntries_.clear();
+        needsRefresh_ = true;
+    }
+
+    ImGui::SameLine();
+    // Max entries input
+    ImGui::SetNextItemWidth(70);
+    if (ImGui::InputInt("Max", &maxEntries_)) {
+        if (maxEntries_ < 100) maxEntries_ = 100;
+        if (maxEntries_ > 10000) maxEntries_ = 10000;
+    }
+
+    // Type filter: All / IN / OUT
+    ImGui::SameLine();
+    if (ImGui::RadioButton("All", typeFilter_ == TypeFilter::All)) {
+        typeFilter_ = TypeFilter::All;
+    }
+    ImGui::SameLine();
+    if (ImGui::RadioButton("IN", typeFilter_ == TypeFilter::In)) {
+        typeFilter_ = TypeFilter::In;
+    }
+    ImGui::SameLine();
+    if (ImGui::RadioButton("OUT", typeFilter_ == TypeFilter::Out)) {
+        typeFilter_ = TypeFilter::Out;
+    }
+
+    // Port filter
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(50);
+    ImGui::InputInt("Port", &portInput_);
+    ImGui::SameLine();
+    if (ImGui::Button("Apply")) {
+        if (portInput_ < 0) {
+            portFilter_ = -1;  // all ports
+        } else if (portInput_ > 255) {
+            portFilter_ = -1;  // invalid — keep all ports
+        } else {
+            portFilter_ = portInput_;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// I/O table
+// ---------------------------------------------------------------------------
+
+void IoInspectorWindow::renderIoTable(DebugBackend &backend)
+{
+    if (cachedEntries_.empty()) {
+        ImGui::TextDisabled("(no I/O events recorded)");
+        return;
+    }
+
+    // Determine the range of entries to display (last maxEntries_)
+    size_t totalEntries = cachedEntries_.size();
+    size_t startIdx = 0;
+    if (static_cast<int>(totalEntries) > maxEntries_) {
+        startIdx = totalEntries - static_cast<size_t>(maxEntries_);
+    }
+
+    // Child window for scrolling
+    ImGui::BeginChild("IoScroll", ImVec2(0, 0), ImGuiChildFlags_None,
+                       ImGuiWindowFlags_HorizontalScrollbar);
+
+    // Column header
+    ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f),
+                       "%-10s  %-4s  %-4s  %-4s  %-5s",
+                       "Seq", "PC", "Type", "Port", "Value");
+
+    int displayedCount = 0;
+    int lastDisplayedIndex = -1;
+
+    for (size_t i = startIdx; i < totalEntries; ++i) {
+        const auto &ev = cachedEntries_[i];
+
+        // Type filter
+        if (typeFilter_ == TypeFilter::In && ev.type != IoAccessType::In) continue;
+        if (typeFilter_ == TypeFilter::Out && ev.type != IoAccessType::Out) continue;
+
+        // Port filter
+        if (portFilter_ >= 0 && ev.port != static_cast<uint8_t>(portFilter_)) continue;
+
+        // Resolve PC
+        uint16_t pc = resolvePc(ev.instructionSequence);
+
+        const char *typeStr = (ev.type == IoAccessType::In) ? "IN" : "OUT";
+
+        // Render as selectable line
+        char line[128];
+        snprintf(line, sizeof(line), "%-10llu  %04X  %-4s  %02X     %02X",
+                 (unsigned long long)ev.instructionSequence,
+                 pc,
+                 typeStr,
+                 ev.port,
+                 ev.value);
+
+        bool isSelected = false;
+        bool clicked = ImGui::Selectable(line, isSelected,
+                                          ImGuiSelectableFlags_AllowDoubleClick);
+
+        // Context menu for navigation
+        if (ImGui::BeginPopupContextItem("ioctx")) {
+            if (ImGui::MenuItem("Go to Disassembly")) {
+                if (onGoToDisassembly && pc != 0xFFFF) {
+                    onGoToDisassembly(pc);
+                }
+            }
+            if (ImGui::MenuItem("Go to Memory Inspector")) {
+                if (onGoToMemoryInspector && pc != 0xFFFF) {
+                    onGoToMemoryInspector(pc);
+                }
+            }
+            ImGui::EndPopup();
+        }
+
+        // Double-click -> Go to Disassembly
+        if (clicked && ImGui::IsMouseDoubleClicked(0)) {
+            if (onGoToDisassembly && pc != 0xFFFF) {
+                onGoToDisassembly(pc);
+            }
+        }
+
+        lastDisplayedIndex = displayedCount;
+        displayedCount++;
+    }
+
+    // Auto-scroll to last entry when Follow I/O is ON
+    if (followIo_ && lastDisplayedIndex >= 0) {
+        ImGui::SetScrollHereY(1.0f);
+    }
+
+    if (displayedCount == 0) {
+        ImGui::TextDisabled("(no matching I/O events)");
+    }
+
+    ImGui::EndChild();
+}
+
+// ---------------------------------------------------------------------------
+// Hardware State
+// ---------------------------------------------------------------------------
+
+void IoInspectorWindow::renderHardwareState(DebugBackend &backend)
+{
+    if (!ImGui::CollapsingHeader("Hardware State")) {
+        return;
+    }
+
+    CpuState cpu = backend.getCpuState();
+
+    ImGui::Text("CPU:");
+    ImGui::Text("  PC: %04X   SP: %04X   IFF: %d", cpu.pc, cpu.sp, cpu.iff ? 1 : 0);
+    ImGui::Text("  A=%02X  B=%02X  C=%02X  D=%02X  E=%02X  H=%02X  L=%02X  F=%02X",
+                cpu.a, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l, cpu.flags);
+    ImGui::Text("  Cycles: %u   EI pending: %d", cpu.cycles, cpu.ei_pending ? 1 : 0);
+
+    ImGui::Spacing();
+    ImGui::TextDisabled("(Timer, AY, FD1793, Keyboard: not available via current backend API)");
+}

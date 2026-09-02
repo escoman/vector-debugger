@@ -748,6 +748,11 @@ void DebugBackend::clearHistory()
     impl_->ioHistory.clear();
 }
 
+void DebugBackend::clearIoHistory()
+{
+    impl_->ioHistory.clear();
+}
+
 // ---------------------------------------------------------------------------
 // Memory statistics (Stage 2.1 — thread-safe snapshot)
 // ---------------------------------------------------------------------------

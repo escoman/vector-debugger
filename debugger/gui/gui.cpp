@@ -220,6 +220,9 @@ void DebuggerGui::render(DebugBackend &backend, Memory &memory)
     executionTrace_.onGoToDisassembly = [this](uint16_t a) { gotoDisassembly(a); };
     executionTrace_.onGoToMemoryInspector = [this](uint16_t a) { gotoMemory(a); };
     
+    ioInspector_.onGoToDisassembly = [this](uint16_t a) { gotoDisassembly(a); };
+    ioInspector_.onGoToMemoryInspector = [this](uint16_t a) { gotoMemory(a); };
+    
     // Render Memory Inspector window (separate, movable window)
     memoryInspector_.render(backend);
     
@@ -234,6 +237,9 @@ void DebuggerGui::render(DebugBackend &backend, Memory &memory)
     
     // Render Execution Trace window (Stage 3.10)
     executionTrace_.render(backend);
+    
+    // Render I/O Inspector window (Stage 3.11)
+    ioInspector_.render(backend);
 }
 
 // ---------------------------------------------------------------------------
@@ -444,6 +450,7 @@ void DebuggerGui::renderControls(DebugBackend &backend)
             stackView_.requestRefresh();
             disassemblyView_.requestRefresh();
             executionTrace_.requestRefresh();
+            ioInspector_.requestRefresh();
         }
         ImGui::SameLine();
     }
@@ -457,6 +464,7 @@ void DebuggerGui::renderControls(DebugBackend &backend)
             stackView_.requestRefresh();
             disassemblyView_.requestRefresh();
             executionTrace_.requestRefresh();
+            ioInspector_.requestRefresh();
         }
     } else {
         if (ImGui::Button("Run")) {
@@ -472,6 +480,7 @@ void DebuggerGui::renderControls(DebugBackend &backend)
         stackView_.requestRefresh();
         disassemblyView_.requestRefresh();
         executionTrace_.requestRefresh();
+        ioInspector_.requestRefresh();
     }
     
     // Memory Inspector toggle
@@ -502,6 +511,12 @@ void DebuggerGui::renderControls(DebugBackend &backend)
     ImGui::SameLine();
     if (ImGui::Button("Execution Trace")) {
         executionTrace_.setVisible(!executionTrace_.isVisible());
+    }
+    
+    // I/O Inspector toggle (Stage 3.11)
+    ImGui::SameLine();
+    if (ImGui::Button("I/O Inspector")) {
+        ioInspector_.setVisible(!ioInspector_.isVisible());
     }
 }
 

@@ -3280,6 +3280,323 @@ static void test_trace_operand_bytes()
     TEST_END();
 }
 
+// ===========================================================================
+// Stage 3.11 — I/O Inspector tests
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Test: I/O Inspector — OUT
+// ---------------------------------------------------------------------------
+
+static void test_io_inspector_out()
+{
+    TEST_BEGIN("S3.11: I/O Inspector OUT");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_rom(mem, io_test_rom, sizeof(io_test_rom));
+    dbg->reset();
+
+    // Execute: IN 42 (seq 0), MVI A,99 (seq 1), OUT 43 (seq 2)
+    dbg->stepInstruction();  // IN 42
+    dbg->stepInstruction();  // MVI A,99
+    dbg->stepInstruction();  // OUT 43
+
+    auto ioSnap = dbg->ioHistorySnapshot();
+    CHECK_EQ((size_t)2, ioSnap.size(), "2 I/O events");
+
+    // Second event: OUT 43
+    const auto &out_ev = ioSnap[1];
+    CHECK_EQ((int)IoAccessType::Out, (int)out_ev.type, "type == Out");
+    CHECK_EQ(0x43, out_ev.port, "port == 0x43");
+    CHECK_EQ(0x99, out_ev.value, "value == 0x99");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test: I/O Inspector — IN
+// ---------------------------------------------------------------------------
+
+static void test_io_inspector_in()
+{
+    TEST_BEGIN("S3.11: I/O Inspector IN");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_rom(mem, io_test_rom, sizeof(io_test_rom));
+    dbg->reset();
+
+    // Execute: IN 42 (seq 0)
+    dbg->stepInstruction();
+
+    auto ioSnap = dbg->ioHistorySnapshot();
+    CHECK_EQ((size_t)1, ioSnap.size(), "1 I/O event");
+
+    const auto &in_ev = ioSnap[0];
+    CHECK_EQ((int)IoAccessType::In, (int)in_ev.type, "type == In");
+    CHECK_EQ(0x42, in_ev.port, "port == 0x42");
+    CHECK_EQ(0xFF, in_ev.value, "value == 0xFF (test HAL returns 0xFF)");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test: I/O Inspector — PC resolution via instructionSequence
+// ---------------------------------------------------------------------------
+
+static void test_io_inspector_pc()
+{
+    TEST_BEGIN("S3.11: I/O Inspector PC resolution");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_rom(mem, io_test_rom, sizeof(io_test_rom));
+    dbg->reset();
+
+    // io_test_rom:
+    // 0000: IN  42   (DB 42)
+    // 0002: MVI A,99 (3E 99)
+    // 0004: OUT 43   (D3 43)
+
+    dbg->stepInstruction();  // IN at PC=0000, seq=0
+    dbg->stepInstruction();  // MVI A,99 at PC=0002, seq=1
+    dbg->stepInstruction();  // OUT at PC=0004, seq=2
+
+    auto ioSnap = dbg->ioHistorySnapshot();
+    auto instrSnap = dbg->instructionHistorySnapshot();
+
+    CHECK_EQ((size_t)2, ioSnap.size(), "2 I/O events");
+    CHECK_EQ((size_t)3, instrSnap.size(), "3 instructions");
+
+    // Resolve PC for IN event: instructionSequence=0 → pcBefore=0x0000
+    uint16_t pcIn = 0xFFFF;
+    for (const auto &ie : instrSnap) {
+        if (ie.sequence == ioSnap[0].instructionSequence) {
+            pcIn = ie.pcBefore;
+            break;
+        }
+    }
+    CHECK_EQ(0x0000, pcIn, "IN event PC == 0x0000");
+
+    // Resolve PC for OUT event: instructionSequence=2 → pcBefore=0x0004
+    uint16_t pcOut = 0xFFFF;
+    for (const auto &ie : instrSnap) {
+        if (ie.sequence == ioSnap[1].instructionSequence) {
+            pcOut = ie.pcBefore;
+            break;
+        }
+    }
+    CHECK_EQ(0x0004, pcOut, "OUT event PC == 0x0004");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test: I/O Inspector — ordering
+// ---------------------------------------------------------------------------
+
+static void test_io_inspector_ordering()
+{
+    TEST_BEGIN("S3.11: I/O Inspector ordering");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_rom(mem, io_test_rom, sizeof(io_test_rom));
+    dbg->reset();
+
+    // Execute: IN 42 (seq 0), MVI A,99 (seq 1), OUT 43 (seq 2)
+    dbg->stepInstruction();
+    dbg->stepInstruction();
+    dbg->stepInstruction();
+
+    auto ioSnap = dbg->ioHistorySnapshot();
+    CHECK_EQ((size_t)2, ioSnap.size(), "2 I/O events");
+
+    // Sequences must be monotonically increasing
+    CHECK(ioSnap[0].instructionSequence < ioSnap[1].instructionSequence,
+          "event[0].sequence < event[1].sequence");
+    CHECK_EQ(0, (int)ioSnap[0].instructionSequence, "event[0] seq == 0");
+    CHECK_EQ(2, (int)ioSnap[1].instructionSequence, "event[1] seq == 2");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test: I/O Inspector — multiple I/O not merged
+// ---------------------------------------------------------------------------
+
+static void test_io_inspector_multiple()
+{
+    TEST_BEGIN("S3.11: I/O Inspector multiple I/O not merged");
+
+    // Program: IN 10 / OUT 11 (two separate I/O instructions)
+    uint8_t prog[] = {
+        0xDB, 0x10,   // 0000: IN  10
+        0xD3, 0x11,   // 0002: OUT 11
+    };
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_rom(mem, prog, sizeof(prog));
+    dbg->reset();
+
+    dbg->stepInstruction();  // IN 10
+    dbg->stepInstruction();  // OUT 11
+
+    auto ioSnap = dbg->ioHistorySnapshot();
+    CHECK_EQ((size_t)2, ioSnap.size(), "2 separate I/O events (not merged)");
+    CHECK_EQ((int)IoAccessType::In,  (int)ioSnap[0].type, "event 0: IN");
+    CHECK_EQ((int)IoAccessType::Out, (int)ioSnap[1].type, "event 1: OUT");
+    CHECK_EQ(0x10, ioSnap[0].port, "event 0: port 0x10");
+    CHECK_EQ(0x11, ioSnap[1].port, "event 1: port 0x11");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test: I/O Inspector — snapshot isolation
+// ---------------------------------------------------------------------------
+
+static void test_io_inspector_snapshot_isolation()
+{
+    TEST_BEGIN("S3.11: I/O Inspector snapshot isolation");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_rom(mem, io_test_rom, sizeof(io_test_rom));
+    dbg->reset();
+
+    // Execute IN 42
+    dbg->stepInstruction();
+
+    auto snapshot1 = dbg->ioHistorySnapshot();
+    CHECK_EQ((size_t)1, snapshot1.size(), "snapshot1 has 1 event");
+
+    // Execute more I/O: MVI A,99, OUT 43
+    dbg->stepInstruction();
+    dbg->stepInstruction();
+
+    // snapshot1 must be unchanged
+    CHECK_EQ((size_t)1, snapshot1.size(), "snapshot1 still has 1 event");
+    CHECK_EQ(0x42, snapshot1[0].port, "snapshot1[0] port unchanged");
+
+    // Current history has 2 events
+    auto snapshot2 = dbg->ioHistorySnapshot();
+    CHECK_EQ((size_t)2, snapshot2.size(), "snapshot2 has 2 events");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test: I/O Inspector — clearIoHistory
+// ---------------------------------------------------------------------------
+
+static void test_io_inspector_clear()
+{
+    TEST_BEGIN("S3.11: I/O Inspector clearIoHistory");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_rom(mem, io_test_rom, sizeof(io_test_rom));
+    dbg->reset();
+
+    // Execute: IN 42, MVI A,99, OUT 43
+    dbg->stepInstruction();
+    dbg->stepInstruction();
+    dbg->stepInstruction();
+
+    CHECK_EQ((size_t)2, dbg->ioHistorySize(), "2 I/O events before clear");
+    CHECK_EQ((size_t)3, dbg->instructionHistorySize(), "3 instr events before clear");
+
+    // Clear I/O history only
+    dbg->clearIoHistory();
+
+    CHECK_EQ((size_t)0, dbg->ioHistorySize(), "I/O history empty after clear");
+    CHECK_EQ((size_t)3, dbg->instructionHistorySize(), "instr history preserved");
+
+    // CPU not reset
+    CpuState cpu = dbg->getCpuState();
+    CHECK_EQ(0x0006, cpu.pc, "PC == 0x0006 (not reset)");
+    CHECK_EQ(0x99, cpu.a, "A == 0x99 (not reset)");
+
+    // New I/O events appear after clear
+    // Write new program at PC=0006: OUT 55
+    mem.write(0x0006, 0xD3, false);
+    mem.write(0x0007, 0x55, false);
+    dbg->stepInstruction();  // OUT 55
+
+    CHECK_EQ((size_t)1, dbg->ioHistorySize(), "1 new I/O event after clear+step");
+    auto ioSnap = dbg->ioHistorySnapshot();
+    CHECK_EQ(0x55, ioSnap[0].port, "new event port == 0x55");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test: I/O Inspector — ring buffer overflow
+// ---------------------------------------------------------------------------
+
+static void test_io_inspector_ring_overflow()
+{
+    TEST_BEGIN("S3.11: I/O Inspector ring overflow");
+
+    // Program: loop of IN 10 / OUT 11 (2 I/O per iteration)
+    // 0000: IN  10    (DB 10)
+    // 0002: OUT 11    (D3 11)
+    // 0004: JMP 0000  (C3 00 00)
+    uint8_t prog[] = {
+        0xDB, 0x10,            // 0000: IN  10
+        0xD3, 0x11,            // 0002: OUT 11
+        0xC3, 0x00, 0x00,      // 0004: JMP 0000
+    };
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_rom(mem, prog, sizeof(prog));
+    dbg->reset();
+
+    // Execute 10 iterations = 20 I/O events + 10 JMPs = 30 instructions
+    for (int i = 0; i < 30; ++i) {
+        dbg->stepInstruction();
+    }
+
+    auto ioSnap = dbg->ioHistorySnapshot();
+    CHECK_EQ((size_t)20, ioSnap.size(), "20 I/O events after 10 iterations");
+
+    // Verify last entry
+    CHECK_EQ((int)IoAccessType::Out, (int)ioSnap[19].type, "last event: OUT");
+    CHECK_EQ(0x11, ioSnap[19].port, "last event: port 0x11");
+
+    // Verify sequences are monotonically increasing
+    bool monotonic = true;
+    for (size_t i = 1; i < ioSnap.size(); ++i) {
+        if (ioSnap[i].instructionSequence <= ioSnap[i-1].instructionSequence) {
+            monotonic = false;
+            break;
+        }
+    }
+    CHECK(monotonic, "sequences monotonically increasing");
+
+    teardown(dbg);
+    TEST_END();
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
@@ -3397,6 +3714,16 @@ int main()
     test_trace_clear();
     test_trace_snapshot_isolation();
     test_trace_operand_bytes();
+
+    // Stage 3.11 — I/O Inspector tests
+    test_io_inspector_out();
+    test_io_inspector_in();
+    test_io_inspector_pc();
+    test_io_inspector_ordering();
+    test_io_inspector_multiple();
+    test_io_inspector_snapshot_isolation();
+    test_io_inspector_clear();
+    test_io_inspector_ring_overflow();
 
     printf("\n\033[0;36m=== Results: %d/%d passed", tests_passed, tests_run);
     if (tests_failed > 0) {

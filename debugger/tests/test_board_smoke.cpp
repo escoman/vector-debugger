@@ -31,6 +31,7 @@
 #include "disassembly_window.h"
 #include "stack_view_window.h"
 #include "breakpoints_window.h"
+#include "io_inspector_window.h"
 
 using namespace i8080cpu;
 
@@ -155,6 +156,17 @@ static void test_board_smoke()
     DebugBackend backend(memory);
     backend.attachBoard(&board);
     test_backend = &backend;
+    
+    // --- Wire I/O callbacks so DebugBackend records I/O events ---
+    // The real HAL calls io.input()/io.output() which fire onread/onwrite.
+    // We connect them to DebugBackend's I/O recording hooks.
+    io.onread = [](uint32_t port, uint8_t value) -> int {
+        if (test_backend) test_backend->onIoInput((uint8_t)port, value);
+        return -1;  // don't override the result
+    };
+    io.onwrite = [](uint32_t port, uint8_t value) {
+        if (test_backend) test_backend->onIoOutput((uint8_t)port, value);
+    };
     
     printf("  Real Board attached to DebugBackend\n");
     
@@ -722,6 +734,114 @@ static void test_board_smoke()
     
     backend.clearBreakpoints();
     printf("  Execution Trace API works with real Board\n");
+    
+    // --- Test I/O Inspector API (Stage 3.11) ---
+    printf("  Testing I/O Inspector API...\n");
+    
+    // I/O test program:
+    // 0000: OUT 10h   (D3 10)
+    // 0002: IN  20h   (DB 20)
+    // 0004: OUT 11h   (D3 11)
+    // 0006: JMP 0006h (C3 06 00)
+    static const uint8_t io_test_program[] = {
+        0xD3, 0x10,              // 0000: OUT 10h
+        0xDB, 0x20,              // 0002: IN  20h
+        0xD3, 0x11,              // 0004: OUT 11h
+        0xC3, 0x06, 0x00,        // 0006: JMP 0006h
+    };
+    
+    // Reset and write I/O test program
+    Options.pc = 0;
+    board.reset(Board::ResetMode::LOADROM);
+    backend.clearHistory();
+    backend.clearBreakpoints();
+    
+    for (size_t i = 0; i < sizeof(io_test_program); ++i) {
+        memory.write((uint16_t)i, io_test_program[i], false);
+    }
+    
+    // Step 1: OUT 10h at PC=0000
+    uint64_t seqBase = backend.instructionSequence();
+    backend.stepInstruction();
+    
+    auto io1 = backend.ioHistorySnapshot();
+    CHECK_EQ(1, (int)io1.size(), "I/O history has 1 entry after first step");
+    CHECK_EQ((int)IoAccessType::Out, (int)io1[0].type, "io[0].type == OUT");
+    CHECK_EQ(0x10, io1[0].port, "io[0].port == 0x10");
+    CHECK_EQ((int)seqBase, (int)io1[0].instructionSequence, "io[0].sequence == seqBase");
+    
+    // Resolve PC via instruction history
+    auto instr1 = backend.instructionHistorySnapshot();
+    uint16_t pc0 = 0xFFFF;
+    for (const auto &ie : instr1) {
+        if (ie.sequence == io1[0].instructionSequence) {
+            pc0 = ie.pcBefore;
+            break;
+        }
+    }
+    CHECK_EQ(0x0000, pc0, "io[0] resolved PC == 0x0000");
+    
+    // Step 2: IN 20h at PC=0002
+    backend.stepInstruction();
+    
+    auto io2 = backend.ioHistorySnapshot();
+    CHECK_EQ(2, (int)io2.size(), "I/O history has 2 entries");
+    CHECK_EQ((int)IoAccessType::In, (int)io2[1].type, "io[1].type == IN");
+    CHECK_EQ(0x20, io2[1].port, "io[1].port == 0x20");
+    CHECK_EQ((int)(seqBase + 1), (int)io2[1].instructionSequence, "io[1].sequence == seqBase+1");
+    
+    // Step 3: OUT 11h at PC=0004
+    backend.stepInstruction();
+    
+    auto io3 = backend.ioHistorySnapshot();
+    CHECK_EQ(3, (int)io3.size(), "I/O history has 3 entries");
+    CHECK_EQ((int)IoAccessType::Out, (int)io3[2].type, "io[2].type == OUT");
+    CHECK_EQ(0x11, io3[2].port, "io[2].port == 0x11");
+    CHECK_EQ((int)(seqBase + 2), (int)io3[2].instructionSequence, "io[2].sequence == seqBase+2");
+    
+    // Verify sequences are monotonically increasing
+    CHECK(io3[0].instructionSequence < io3[1].instructionSequence,
+          "io[0].seq < io[1].seq");
+    CHECK(io3[1].instructionSequence < io3[2].instructionSequence,
+          "io[1].seq < io[2].seq");
+    
+    // Test clearIoHistory — I/O empty, instruction history preserved
+    size_t instrCount = backend.instructionHistorySize();
+    backend.clearIoHistory();
+    CHECK_EQ(0, (int)backend.ioHistorySize(), "I/O history empty after clearIoHistory");
+    CHECK_EQ((int)instrCount, (int)backend.instructionHistorySize(),
+             "instruction history preserved");
+    
+    // CPU not reset
+    CpuState ioCpu = backend.getCpuState();
+    CHECK_EQ(0x0006, ioCpu.pc, "PC == 0x0006 (not reset after clearIoHistory)");
+    
+    // Test navigation callbacks
+    uint16_t navDisasm = 0xFFFF;
+    uint16_t navMemory = 0xFFFF;
+    IoInspectorWindow ioWin;
+    ioWin.onGoToDisassembly = [&navDisasm](uint16_t a) { navDisasm = a; };
+    ioWin.onGoToMemoryInspector = [&navMemory](uint16_t a) { navMemory = a; };
+    
+    // Simulate navigation
+    if (ioWin.onGoToDisassembly) ioWin.onGoToDisassembly(0x0000);
+    if (ioWin.onGoToMemoryInspector) ioWin.onGoToMemoryInspector(0x0002);
+    CHECK_EQ(0x0000, navDisasm, "I/O nav: GoToDisassembly(0x0000)");
+    CHECK_EQ(0x0002, navMemory, "I/O nav: GoToMemoryInspector(0x0002)");
+    
+    // Test IoInspectorWindow state
+    ioWin.setFollowIo(false);
+    CHECK(!ioWin.followIo(), "followIo == false");
+    ioWin.setPauseCapture(true);
+    CHECK(ioWin.pauseCapture(), "pauseCapture == true");
+    ioWin.setTypeFilter(IoInspectorWindow::TypeFilter::Out);
+    CHECK((int)ioWin.typeFilter() == (int)IoInspectorWindow::TypeFilter::Out,
+          "typeFilter == Out");
+    ioWin.setPortFilter(0x10);
+    CHECK_EQ(0x10, ioWin.portFilter(), "portFilter == 0x10");
+    
+    backend.clearBreakpoints();
+    printf("  I/O Inspector API works with real Board\n");
     
     // --- Cleanup ---
     test_backend = nullptr;

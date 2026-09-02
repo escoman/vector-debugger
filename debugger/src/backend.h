@@ -229,6 +229,7 @@ public:
     std::vector<struct IoAccessEvent> ioHistorySnapshot() const;
 
     void clearHistory();
+    void clearIoHistory();  // Stage 3.11 — clear I/O history only
 
     // -- memory statistics (Stage 2.1, thread-safe snapshot) ------------------
 
