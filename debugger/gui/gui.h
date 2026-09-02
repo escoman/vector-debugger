@@ -45,6 +45,11 @@ public:
 
     // True after the user requested window close.
     bool shouldQuit() const;
+    
+    // Central Navigation API (Stage 3.9)
+    void gotoMemory(uint16_t address);
+    void gotoDisassembly(uint16_t address);
+    void gotoStack(uint16_t address);
 
 private:
     SDL_Window   *window_    = nullptr;

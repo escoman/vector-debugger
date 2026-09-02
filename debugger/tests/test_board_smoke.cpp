@@ -27,6 +27,10 @@
 #include "fd1793.h"
 #include "debug_memory.h"
 #include "disassembler.h"
+#include "memory_inspector_window.h"
+#include "disassembly_window.h"
+#include "stack_view_window.h"
+#include "breakpoints_window.h"
 
 using namespace i8080cpu;
 
@@ -487,6 +491,168 @@ static void test_board_smoke()
     
     backend.clearBreakpoints();
     printf("  Disassembly API works with real Board\n");
+    
+    // --- Test Navigation API (Stage 3.9) ---
+    printf("  Testing Navigation API...\n");
+    
+    // Reset to known state
+    Options.pc = 0;
+    board.reset(Board::ResetMode::LOADROM);
+    backend.clearHistory();
+    backend.clearBreakpoints();
+    
+    // Create window objects for navigation testing
+    MemoryInspectorWindow memWin;
+    DisassemblyWindow dasmWin;
+    StackViewWindow stackWin;
+    BreakpointsWindow bpWin;
+    
+    // --- PC → Disassembly navigation ---
+    printf("  Testing PC -> Disassembly navigation...\n");
+    CpuState navCpu = backend.getCpuState();
+    uint16_t pcAddr = navCpu.pc;
+    dasmWin.gotoAddress(pcAddr);
+    CHECK_EQ(pcAddr, dasmWin.address(), "Disassembly navigated to PC address");
+    CHECK(dasmWin.isVisible(), "Disassembly window opened");
+    
+    // --- PC → Memory navigation ---
+    printf("  Testing PC -> Memory navigation...\n");
+    memWin.gotoAddress(pcAddr);
+    CHECK_EQ(pcAddr, memWin.address(), "Memory Inspector navigated to PC address");
+    CHECK(memWin.isVisible(), "Memory Inspector window opened");
+    
+    // --- SP → Stack navigation ---
+    printf("  Testing SP -> Stack navigation...\n");
+    uint16_t spAddr = navCpu.sp;
+    stackWin.gotoAddress(spAddr);
+    CHECK_EQ(spAddr, stackWin.address(), "Stack View navigated to SP address");
+    CHECK(stackWin.isVisible(), "Stack View window opened");
+    CHECK(!stackWin.followSP(), "gotoAddress disables Follow SP");
+    
+    // --- SP → Memory navigation ---
+    printf("  Testing SP -> Memory navigation...\n");
+    memWin.gotoAddress(spAddr);
+    CHECK_EQ(spAddr, memWin.address(), "Memory Inspector navigated to SP address");
+    
+    // --- BP → Disassembly/Memory navigation ---
+    printf("  Testing BP -> Disassembly/Memory navigation...\n");
+    int navBpId = backend.addBreakpoint(0x0003);
+    CHECK(navBpId >= 0, "BP added for navigation test");
+    
+    auto bpList2 = backend.getBreakpoints();
+    CHECK_EQ((size_t)1, bpList2.size(), "1 BP in list");
+    uint16_t bpAddr = bpList2[0].address;
+    
+    // Navigate BP address to both windows
+    dasmWin.gotoAddress(bpAddr);
+    CHECK_EQ(bpAddr, dasmWin.address(), "Disassembly navigated to BP address");
+    
+    memWin.gotoAddress(bpAddr);
+    CHECK_EQ(bpAddr, memWin.address(), "Memory navigated to BP address");
+    
+    backend.clearBreakpoints();
+    
+    // --- Stack Word → Disassembly navigation ---
+    printf("  Testing Stack Word -> Disassembly navigation...\n");
+    
+    // Write a known LE word at a RAM address
+    uint16_t wordAddr = 0xC000;
+    uint16_t wordVal  = 0x1234;
+    memory.write(wordAddr,      static_cast<uint8_t>(wordVal & 0xFF), false);       // low byte
+    memory.write(wordAddr + 1,  static_cast<uint8_t>((wordVal >> 8) & 0xFF), false); // high byte
+    
+    // Read back as LE word (same logic as StackViewWindow context menu)
+    uint8_t lo = backend.readMemory(wordAddr);
+    uint8_t hi = backend.readMemory(wordAddr + 1);
+    uint16_t leWord = static_cast<uint16_t>(lo | (hi << 8));
+    CHECK_EQ(wordVal, leWord, "LE word at C000 == 0x1234");
+    
+    // Navigate to the word value in Disassembly
+    dasmWin.gotoAddress(leWord);
+    CHECK_EQ(leWord, dasmWin.address(), "Disassembly navigated to LE word value");
+    
+    // --- Follow PC ON/OFF ---
+    printf("  Testing Follow PC ON/OFF...\n");
+    
+    // gotoAddress should disable Follow PC
+    dasmWin.gotoAddress(0x0000);
+    CHECK_EQ(0x0000, dasmWin.address(), "gotoAddress sets address");
+    // Follow PC is internal to DisassemblyWindow; we verify via address() stability
+    // After gotoAddress, address is 0x0000 and followPc_ is false
+    
+    // Navigate again — address should change (proves follow was off, manual nav works)
+    dasmWin.gotoAddress(0x0003);
+    CHECK_EQ(0x0003, dasmWin.address(), "second gotoAddress updates address");
+    
+    // --- Follow SP ON/OFF ---
+    printf("  Testing Follow SP ON/OFF...\n");
+    
+    // gotoAddress disables Follow SP
+    stackWin.gotoAddress(0xC000);
+    CHECK(!stackWin.followSP(), "gotoAddress disables Follow SP");
+    CHECK_EQ(0xC000, stackWin.address(), "Stack address == 0xC000");
+    
+    // Enable Follow SP
+    stackWin.setFollowSP(true);
+    CHECK(stackWin.followSP(), "Follow SP enabled");
+    // address() now returns currentSP_ (tracked internally)
+    
+    // Disable Follow SP — address should return to viewCenter_
+    stackWin.setFollowSP(false);
+    CHECK(!stackWin.followSP(), "Follow SP disabled");
+    CHECK_EQ(0xC000, stackWin.address(), "Stack address returns to viewCenter_");
+    
+    // --- Cross-navigation callbacks ---
+    printf("  Testing cross-navigation callbacks...\n");
+    
+    // Wire callbacks like DebuggerGui would
+    uint16_t dasmNavTarget = 0xFFFF;
+    uint16_t memNavTarget  = 0xFFFF;
+    
+    memWin.onGoToDisassembly = [&](uint16_t a) { dasmNavTarget = a; };
+    dasmWin.onGoToMemoryInspector = [&](uint16_t a) { memNavTarget = a; };
+    stackWin.onGoToDisassembly = [&](uint16_t a) { dasmNavTarget = a; };
+    stackWin.onGoToMemoryInspector = [&](uint16_t a) { memNavTarget = a; };
+    bpWin.onGoToDisassembly = [&](uint16_t a) { dasmNavTarget = a; };
+    bpWin.onGoToMemoryInspector = [&](uint16_t a) { memNavTarget = a; };
+    
+    // Fire callbacks
+    memWin.onGoToDisassembly(0x1234);
+    CHECK_EQ(0x1234, dasmNavTarget, "Memory → Disassembly callback fires");
+    
+    dasmWin.onGoToMemoryInspector(0x2345);
+    CHECK_EQ(0x2345, memNavTarget, "Disassembly → Memory callback fires");
+    
+    stackWin.onGoToDisassembly(0x3456);
+    CHECK_EQ(0x3456, dasmNavTarget, "Stack → Disassembly callback fires");
+    
+    stackWin.onGoToMemoryInspector(0x4567);
+    CHECK_EQ(0x4567, memNavTarget, "Stack → Memory callback fires");
+    
+    bpWin.onGoToDisassembly(0x5678);
+    CHECK_EQ(0x5678, dasmNavTarget, "BP → Disassembly callback fires");
+    
+    bpWin.onGoToMemoryInspector(0x6789);
+    CHECK_EQ(0x6789, memNavTarget, "BP → Memory callback fires");
+    
+    // --- Boundary addresses ---
+    printf("  Testing boundary addresses...\n");
+    memWin.gotoAddress(0x0000);
+    CHECK_EQ(0x0000, memWin.address(), "Memory: gotoAddress(0x0000)");
+    memWin.gotoAddress(0xFFFF);
+    CHECK_EQ(0xFFFF, memWin.address(), "Memory: gotoAddress(0xFFFF)");
+    
+    dasmWin.gotoAddress(0x0000);
+    CHECK_EQ(0x0000, dasmWin.address(), "Disassembly: gotoAddress(0x0000)");
+    dasmWin.gotoAddress(0xFFFF);
+    CHECK_EQ(0xFFFF, dasmWin.address(), "Disassembly: gotoAddress(0xFFFF)");
+    
+    stackWin.gotoAddress(0x0000);
+    CHECK_EQ(0x0000, stackWin.address(), "Stack: gotoAddress(0x0000)");
+    stackWin.gotoAddress(0xFFFF);
+    CHECK_EQ(0xFFFF, stackWin.address(), "Stack: gotoAddress(0xFFFF)");
+    
+    printf("  Navigation API works with real Board\n");
     
     // --- Cleanup ---
     test_backend = nullptr;

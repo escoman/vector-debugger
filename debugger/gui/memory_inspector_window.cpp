@@ -10,16 +10,6 @@
 #include <algorithm>
 
 // ---------------------------------------------------------------------------
-// Construction
-// ---------------------------------------------------------------------------
-
-MemoryInspectorWindow::MemoryInspectorWindow()
-{
-    // Initialize snapshot with empty data
-    snapshot_.start = 0;
-}
-
-// ---------------------------------------------------------------------------
 // Main render
 // ---------------------------------------------------------------------------
 
@@ -267,7 +257,7 @@ void MemoryInspectorWindow::renderMemoryView(DebugBackend &backend)
                 }
             }
             
-            // Right-click context menu for breakpoints (Stage 3.7)
+            // Right-click context menu for breakpoints (Stage 3.7) + navigation (Stage 3.9)
             if (ImGui::BeginPopupContextItem("bpctx")) {
                 // Use the selectedAddress_ as the target
                 if (backend.hasBreakpoint(selectedAddress_)) {
@@ -277,6 +267,12 @@ void MemoryInspectorWindow::renderMemoryView(DebugBackend &backend)
                 } else {
                     if (ImGui::MenuItem("Set Breakpoint")) {
                         backend.addBreakpoint(selectedAddress_);
+                    }
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Go to Disassembly")) {
+                    if (onGoToDisassembly) {
+                        onGoToDisassembly(selectedAddress_);
                     }
                 }
                 ImGui::EndPopup();
@@ -290,6 +286,16 @@ void MemoryInspectorWindow::renderMemoryView(DebugBackend &backend)
         }
     }
     clipper.End();
+    
+    // Stage 3.9: real scroll to selected address
+    if (pendingScroll_) {
+        // Calculate which line contains selectedAddress_
+        size_t offset = static_cast<size_t>((selectedAddress_ - snapshot_.start) & 0xFFFF);
+        int targetLine = static_cast<int>(offset / bytesPerLine);
+        float lineY = targetLine * ImGui::GetTextLineHeightWithSpacing();
+        ImGui::SetScrollY(lineY - ImGui::GetWindowHeight() * 0.4f);
+        pendingScroll_ = false;
+    }
     
     ImGui::EndChild();
 }

@@ -7,10 +7,6 @@
 #include <cstdio>
 #include <cstring>
 
-BreakpointsWindow::BreakpointsWindow()
-{
-}
-
 void BreakpointsWindow::render(DebugBackend &backend)
 {
     if (!visible_) return;
@@ -73,6 +69,22 @@ void BreakpointsWindow::render(DebugBackend &backend)
                                    ImGuiSelectableFlags_SpanAllColumns)) {
                 selectedBpIndex_ = i;
             }
+            
+            // Stage 3.9: right-click context menu for navigation
+            if (ImGui::BeginPopupContextItem()) {
+                if (onGoToDisassembly) {
+                    if (ImGui::MenuItem("Go to Disassembly")) {
+                        onGoToDisassembly(bp.address);
+                    }
+                }
+                if (onGoToMemoryInspector) {
+                    if (ImGui::MenuItem("Go to Memory Inspector")) {
+                        onGoToMemoryInspector(bp.address);
+                    }
+                }
+                ImGui::EndPopup();
+            }
+            
             ImGui::NextColumn();
             
             // Disassembly at breakpoint address

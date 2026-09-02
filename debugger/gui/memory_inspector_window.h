@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include "backend.h"
 
 // Forward declarations
@@ -17,7 +18,9 @@ class DebugBackend;
 class MemoryInspectorWindow
 {
 public:
-    MemoryInspectorWindow();
+    MemoryInspectorWindow() {
+        snapshot_.start = 0;
+    }
     
     // Render the window. Call every frame.
     void render(DebugBackend &backend);
@@ -29,14 +32,21 @@ public:
     bool isVisible() const { return visible_; }
     void setVisible(bool v) { visible_ = v; }
     
-    // Navigate to specific address (used by Stack View integration)
-    void navigateTo(uint16_t address) {
+    // Navigate to specific address (Stage 3.9 — real scrolling)
+    void gotoAddress(uint16_t address) {
         address_ = address;
         selectedAddress_ = address;
         snprintf(addressInput_, sizeof(addressInput_), "%04X", address);
         needsRefresh_ = true;
+        pendingScroll_ = true;
         visible_ = true;
     }
+    
+    // Current view address (for tests / navigation)
+    uint16_t address() const { return address_; }
+    
+    // Callback: Go to Disassembly (Stage 3.9)
+    std::function<void(uint16_t address)> onGoToDisassembly;
     
 private:
     bool visible_ = true;
@@ -48,6 +58,7 @@ private:
     // Snapshot cache
     MemorySnapshot snapshot_;
     bool needsRefresh_ = true;
+    bool pendingScroll_ = false;      // Stage 3.9: real scroll on next render
     
     // Input buffer for address field
     char addressInput_[8] = "0000";

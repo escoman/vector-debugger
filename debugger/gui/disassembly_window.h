@@ -19,13 +19,26 @@ class DebugBackend;
 class DisassemblyWindow
 {
 public:
-    DisassemblyWindow();
+    DisassemblyWindow() {}
     
     // Render the window. Call every frame.
     void render(DebugBackend &backend);
     
     // Request refresh on next render
     void requestRefresh() { needsRefresh_ = true; }
+    
+    // Navigate to specific address (Stage 3.9 — real scrolling, inline for testability)
+    void gotoAddress(uint16_t address) {
+        viewAddress_ = address;
+        followPc_ = false;
+        pendingScroll_ = true;
+        needsRefresh_ = true;
+        visible_ = true;
+        snprintf(addressInput_, sizeof(addressInput_), "%04X", address);
+    }
+    
+    // Current view address (for tests / navigation)
+    uint16_t address() const { return viewAddress_; }
     
     // Check if window is visible
     bool isVisible() const { return visible_; }
@@ -39,6 +52,7 @@ private:
     bool visible_ = true;
     bool followPc_ = true;
     bool needsRefresh_ = true;
+    bool pendingScroll_ = false;        // Stage 3.9: real scroll on next render
     
     uint16_t viewAddress_ = 0;          // top of the disassembly view
     uint16_t lastPc_ = 0;               // previous PC for change detection

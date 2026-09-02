@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include "backend.h"
 
 // Forward declarations
@@ -16,7 +17,7 @@ class DebugBackend;
 class BreakpointsWindow
 {
 public:
-    BreakpointsWindow();
+    BreakpointsWindow() {}
     
     // Render the window. Call every frame.
     void render(DebugBackend &backend);
@@ -24,6 +25,10 @@ public:
     // Check if window is visible
     bool isVisible() const { return visible_; }
     void setVisible(bool v) { visible_ = v; }
+    
+    // Callbacks for cross-navigation (Stage 3.9)
+    std::function<void(uint16_t address)> onGoToDisassembly;
+    std::function<void(uint16_t address)> onGoToMemoryInspector;
     
 private:
     bool visible_ = true;

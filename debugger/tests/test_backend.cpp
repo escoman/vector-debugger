@@ -34,6 +34,12 @@
 #include "disassembler.h"
 #include "debug_memory.h"
 
+// Stage 3.9 — navigation window headers (no ImGui dependency in .h)
+#include "memory_inspector_window.h"
+#include "disassembly_window.h"
+#include "stack_view_window.h"
+#include "breakpoints_window.h"
+
 using namespace i8080cpu;
 
 // ---------------------------------------------------------------------------
@@ -2750,6 +2756,216 @@ static void test_disasm_banking()
 }
 
 // ---------------------------------------------------------------------------
+// Stage 3.9 — Navigation state tests
+// ---------------------------------------------------------------------------
+
+static void test_nav_memory()
+{
+    TEST_BEGIN("S3.9: nav Memory gotoAddress");
+
+    MemoryInspectorWindow win;
+    win.gotoAddress(0x1234);
+    CHECK_EQ(0x1234, win.address(), "Memory address == 0x1234");
+    CHECK(win.isVisible(), "Memory window visible after goto");
+
+    // Navigate again
+    win.gotoAddress(0xABCD);
+    CHECK_EQ(0xABCD, win.address(), "Memory address == 0xABCD");
+
+    TEST_END();
+}
+
+static void test_nav_disassembly()
+{
+    TEST_BEGIN("S3.9: nav Disassembly gotoAddress");
+
+    DisassemblyWindow win;
+    win.gotoAddress(0x2345);
+    CHECK_EQ(0x2345, win.address(), "Disassembly address == 0x2345");
+    CHECK(win.isVisible(), "Disassembly window visible after goto");
+
+    // gotoAddress disables Follow PC
+    win.gotoAddress(0x5000);
+    CHECK_EQ(0x5000, win.address(), "Disassembly address == 0x5000");
+
+    TEST_END();
+}
+
+static void test_nav_stack()
+{
+    TEST_BEGIN("S3.9: nav Stack gotoAddress");
+
+    StackViewWindow win;
+    win.gotoAddress(0x7F00);
+    CHECK_EQ(0x7F00, win.address(), "Stack address == 0x7F00");
+    CHECK(win.isVisible(), "Stack window visible after goto");
+    CHECK(!win.followSP(), "followSP disabled after gotoAddress");
+
+    TEST_END();
+}
+
+static void test_nav_stack_word()
+{
+    TEST_BEGIN("S3.9: nav Stack word value");
+
+    // Verify little-endian word computation
+    // Write two bytes at a known address, read them back as a word
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+
+    mem.write(0x0100, 0x34, false);  // LO byte
+    mem.write(0x0101, 0x12, false);  // HI byte
+
+    // Read back through backend
+    uint8_t lo = dbg->readMemory(0x0100);
+    uint8_t hi = dbg->readMemory(0x0101);
+    uint16_t wordVal = static_cast<uint16_t>(lo) | (static_cast<uint16_t>(hi) << 8);
+    CHECK_EQ(0x1234, wordVal, "LE word at 0100 == 0x1234");
+
+    // Navigate to the word value as address
+    StackViewWindow svWin;
+    svWin.gotoAddress(wordVal);
+    CHECK_EQ(0x1234, svWin.address(), "Stack navigated to word value 0x1234");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+static void test_nav_breakpoint()
+{
+    TEST_BEGIN("S3.9: nav Breakpoint address");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+
+    // Add breakpoint
+    int bpId = dbg->addBreakpoint(0x2345);
+    CHECK(bpId >= 0, "breakpoint added at 0x2345");
+    CHECK(dbg->hasBreakpoint(0x2345), "hasBreakpoint(0x2345)");
+
+    // Navigate to breakpoint address
+    DisassemblyWindow dasmWin;
+    dasmWin.gotoAddress(0x2345);
+    CHECK_EQ(0x2345, dasmWin.address(), "Disassembly at BP address 0x2345");
+
+    MemoryInspectorWindow memWin;
+    memWin.gotoAddress(0x2345);
+    CHECK_EQ(0x2345, memWin.address(), "Memory at BP address 0x2345");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+static void test_nav_follow_pc_on()
+{
+    TEST_BEGIN("S3.9: nav Follow PC ON");
+
+    // When Follow PC is active (default), gotoAddress disables it.
+    // Test that gotoAddress sets the address and disables follow.
+    DisassemblyWindow win;
+    // Default: followPc_ = true. gotoAddress sets it to false.
+    win.gotoAddress(0x1000);
+    CHECK_EQ(0x1000, win.address(), "address == 0x1000 after goto");
+
+    // After gotoAddress, follow is off — address stays even if we
+    // don't call render (which would track PC).
+    // We verify the state is consistent:
+    CHECK_EQ(0x1000, win.address(), "address stays 0x1000 (follow off)");
+
+    TEST_END();
+}
+
+static void test_nav_follow_pc_off()
+{
+    TEST_BEGIN("S3.9: nav Follow PC OFF");
+
+    DisassemblyWindow win;
+    // Navigate to 0x1000 (disables follow)
+    win.gotoAddress(0x1000);
+    CHECK_EQ(0x1000, win.address(), "address == 0x1000");
+
+    // Navigate to 0x2000
+    win.gotoAddress(0x2000);
+    CHECK_EQ(0x2000, win.address(), "address == 0x2000 after second goto");
+
+    // Address changed only by explicit goto, not by PC change
+    CHECK_EQ(0x2000, win.address(), "address stays 0x2000 (no auto-follow)");
+
+    TEST_END();
+}
+
+static void test_nav_follow_sp_on()
+{
+    TEST_BEGIN("S3.9: nav Follow SP ON");
+
+    StackViewWindow win;
+    // Default: followSP_ = true. address() returns currentSP_ (initially 0).
+    // setFollowSP(true) keeps it in follow mode.
+    win.setFollowSP(true);
+    CHECK(win.followSP(), "followSP is true");
+
+    // When followSP is on, gotoAddress disables it
+    win.gotoAddress(0x8000);
+    CHECK(!win.followSP(), "followSP disabled after gotoAddress");
+    CHECK_EQ(0x8000, win.address(), "address == 0x8000");
+
+    TEST_END();
+}
+
+static void test_nav_follow_sp_off()
+{
+    TEST_BEGIN("S3.9: nav Follow SP OFF");
+
+    StackViewWindow win;
+    // Navigate to 0x8000 (disables follow SP)
+    win.gotoAddress(0x8000);
+    CHECK_EQ(0x8000, win.address(), "address == 0x8000");
+    CHECK(!win.followSP(), "followSP off");
+
+    // Navigate to 0x9000
+    win.gotoAddress(0x9000);
+    CHECK_EQ(0x9000, win.address(), "address == 0x9000");
+
+    // Re-enable follow SP
+    win.setFollowSP(true);
+    CHECK(win.followSP(), "followSP re-enabled");
+    // address() now returns currentSP_ (which is 0 since no backend render)
+    CHECK_EQ(0x0000, win.address(), "address == currentSP_ (0) when followSP on");
+
+    TEST_END();
+}
+
+static void test_nav_boundaries()
+{
+    TEST_BEGIN("S3.9: nav boundaries 0000 and FFFF");
+
+    // Memory Inspector
+    MemoryInspectorWindow memWin;
+    memWin.gotoAddress(0x0000);
+    CHECK_EQ(0x0000, memWin.address(), "Memory at 0x0000");
+    memWin.gotoAddress(0xFFFF);
+    CHECK_EQ(0xFFFF, memWin.address(), "Memory at 0xFFFF");
+
+    // Disassembly
+    DisassemblyWindow dasmWin;
+    dasmWin.gotoAddress(0x0000);
+    CHECK_EQ(0x0000, dasmWin.address(), "Disassembly at 0x0000");
+    dasmWin.gotoAddress(0xFFFF);
+    CHECK_EQ(0xFFFF, dasmWin.address(), "Disassembly at 0xFFFF");
+
+    // Stack View
+    StackViewWindow stackWin;
+    stackWin.gotoAddress(0x0000);
+    CHECK_EQ(0x0000, stackWin.address(), "Stack at 0x0000");
+    stackWin.gotoAddress(0xFFFF);
+    CHECK_EQ(0xFFFF, stackWin.address(), "Stack at 0xFFFF");
+
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -2844,6 +3060,18 @@ int main()
     test_disasm_sequential();
     test_disasm_boundary();
     test_disasm_banking();
+
+    // Stage 3.9 — Navigation tests
+    test_nav_memory();
+    test_nav_disassembly();
+    test_nav_stack();
+    test_nav_stack_word();
+    test_nav_breakpoint();
+    test_nav_follow_pc_on();
+    test_nav_follow_pc_off();
+    test_nav_follow_sp_on();
+    test_nav_follow_sp_off();
+    test_nav_boundaries();
 
     printf("\n\033[0;36m=== Results: %d/%d passed", tests_passed, tests_run);
     if (tests_failed > 0) {

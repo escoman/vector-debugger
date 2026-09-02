@@ -7,15 +7,6 @@
 #include <algorithm>
 
 // ---------------------------------------------------------------------------
-// Construction
-// ---------------------------------------------------------------------------
-
-StackViewWindow::StackViewWindow()
-{
-    snapshot_.start = 0;
-}
-
-// ---------------------------------------------------------------------------
 // Main render
 // ---------------------------------------------------------------------------
 
@@ -36,6 +27,9 @@ void StackViewWindow::render(DebugBackend &backend)
     // Get current SP
     CpuState cpu = backend.getCpuState();
     currentSP_ = cpu.sp;
+    
+    // Stage 3.9: Follow SP — detect SP changes and auto-refresh
+    // (refreshSnapshot will use currentSP_ if followSP_ is true)
     
     // Refresh snapshot if needed
     if (needsRefresh_) {
@@ -65,8 +59,8 @@ void StackViewWindow::renderToolbar(DebugBackend &backend)
     ImGui::Text("SP: %04X", cpu.sp);
     ImGui::SameLine();
     
-    // Follow SP button
-    if (ImGui::Button("Follow SP")) {
+    // Stage 3.9: Follow SP checkbox (replaces old button)
+    if (ImGui::Checkbox("Follow SP", &followSP_)) {
         needsRefresh_ = true;
     }
     
@@ -141,12 +135,34 @@ void StackViewWindow::renderStackView(DebugBackend &backend)
             }
         }
         
-        // Context menu for Follow Word
-        if (hasWord && ImGui::BeginPopupContextItem()) {
-            char menuText[64];
-            snprintf(menuText, sizeof(menuText), "Follow Word (%04X)", wordVal);
-            if (ImGui::MenuItem(menuText)) {
-                if (onGoToMemoryInspector) {
+        // Context menu (Stage 3.9: added Go to Disassembly)
+        if (ImGui::BeginPopupContextItem()) {
+            if (onGoToMemoryInspector) {
+                char menuText[64];
+                snprintf(menuText, sizeof(menuText), "Go to Memory Inspector (%04X)", addr);
+                if (ImGui::MenuItem(menuText)) {
+                    onGoToMemoryInspector(addr);
+                }
+            }
+            if (onGoToDisassembly) {
+                char menuText[64];
+                snprintf(menuText, sizeof(menuText), "Go to Disassembly (%04X)", addr);
+                if (ImGui::MenuItem(menuText)) {
+                    onGoToDisassembly(addr);
+                }
+            }
+            if (hasWord && onGoToDisassembly) {
+                ImGui::Separator();
+                char menuText[64];
+                snprintf(menuText, sizeof(menuText), "Go to Disassembly (Word %04X)", wordVal);
+                if (ImGui::MenuItem(menuText)) {
+                    onGoToDisassembly(wordVal);
+                }
+            }
+            if (hasWord && onGoToMemoryInspector) {
+                char menuText[64];
+                snprintf(menuText, sizeof(menuText), "Go to Memory Inspector (Word %04X)", wordVal);
+                if (ImGui::MenuItem(menuText)) {
                     onGoToMemoryInspector(wordVal);
                 }
             }
@@ -160,6 +176,22 @@ void StackViewWindow::renderStackView(DebugBackend &backend)
         }
     }
     
+    // Stage 3.9: real scroll to target address
+    if (pendingScroll_) {
+        // Find the line index for viewCenter_ (or currentSP_ if following)
+        uint16_t targetAddr = followSP_ ? currentSP_ : viewCenter_;
+        int lineIndex = -1;
+        for (size_t j = 0; j < totalBytes; ++j) {
+            uint16_t a = static_cast<uint16_t>((startAddr + j) & 0xFFFF);
+            if (a == targetAddr) { lineIndex = static_cast<int>(j); break; }
+        }
+        if (lineIndex >= 0) {
+            float lineY = lineIndex * ImGui::GetTextLineHeightWithSpacing();
+            ImGui::SetScrollY(lineY - ImGui::GetWindowHeight() * 0.4f);
+        }
+        pendingScroll_ = false;
+    }
+    
     ImGui::EndChild();
 }
 
@@ -169,11 +201,11 @@ void StackViewWindow::renderStackView(DebugBackend &backend)
 
 void StackViewWindow::refreshSnapshot(DebugBackend &backend)
 {
-    CpuState cpu = backend.getCpuState();
-    uint16_t sp = cpu.sp;
+    // Stage 3.9: use SP if followSP_, else use viewCenter_
+    uint16_t center = followSP_ ? currentSP_ : viewCenter_;
     
     int start, end;
-    computeRange(sp, start, end);
+    computeRange(center, start, end);
     
     if (start >= end) {
         snapshot_.data.clear();

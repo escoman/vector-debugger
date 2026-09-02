@@ -136,6 +136,28 @@ bool DebuggerGui::shouldQuit() const
 }
 
 // ---------------------------------------------------------------------------
+// Central Navigation API (Stage 3.9)
+// ---------------------------------------------------------------------------
+
+void DebuggerGui::gotoMemory(uint16_t address)
+{
+    memoryInspector_.setVisible(true);
+    memoryInspector_.gotoAddress(address);
+}
+
+void DebuggerGui::gotoDisassembly(uint16_t address)
+{
+    disassemblyView_.setVisible(true);
+    disassemblyView_.gotoAddress(address);
+}
+
+void DebuggerGui::gotoStack(uint16_t address)
+{
+    stackView_.setVisible(true);
+    stackView_.gotoAddress(address);
+}
+
+// ---------------------------------------------------------------------------
 // Main render — assembles all panels
 // ---------------------------------------------------------------------------
 
@@ -184,10 +206,16 @@ void DebuggerGui::render(DebugBackend &backend, Memory &memory)
 
     ImGui::End();
     
-    // Setup Stack View → Memory Inspector callback
-    stackView_.onGoToMemoryInspector = [this](uint16_t address) {
-        memoryInspector_.navigateTo(address);
-    };
+    // Setup cross-window navigation callbacks (Stage 3.9)
+    stackView_.onGoToMemoryInspector = [this](uint16_t a) { gotoMemory(a); };
+    stackView_.onGoToDisassembly = [this](uint16_t a) { gotoDisassembly(a); };
+    
+    memoryInspector_.onGoToDisassembly = [this](uint16_t a) { gotoDisassembly(a); };
+    
+    disassemblyView_.onGoToMemoryInspector = [this](uint16_t a) { gotoMemory(a); };
+    
+    breakpointsWindow_.onGoToDisassembly = [this](uint16_t a) { gotoDisassembly(a); };
+    breakpointsWindow_.onGoToMemoryInspector = [this](uint16_t a) { gotoMemory(a); };
     
     // Render Memory Inspector window (separate, movable window)
     memoryInspector_.render(backend);
@@ -195,13 +223,8 @@ void DebuggerGui::render(DebugBackend &backend, Memory &memory)
     // Render Stack View window (separate, movable window)
     stackView_.render(backend);
     
-    // Render Breakpoints window (Stage 3.7)
+    // RenderBreakpoints window (Stage 3.7)
     breakpointsWindow_.render(backend);
-    
-    // Setup Disassembly → Memory Inspector callback (Stage 3.8)
-    disassemblyView_.onGoToMemoryInspector = [this](uint16_t address) {
-        memoryInspector_.navigateTo(address);
-    };
     
     // Render Disassembly View window (Stage 3.8)
     disassemblyView_.render(backend);
@@ -255,7 +278,7 @@ void DebuggerGui::renderCpuPanel(DebugBackend &backend)
     
     writeRegFailed_ = false;
     
-    // Helper lambda: render editable register row
+    // Helper lambda: render editable register row (Stage 3.6)
     auto renderRegRow = [&](const char *name, uint16_t value, DebugBackend::RegisterId regId) {
         ImGui::Text("%s   %04X", name, value);
         if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
@@ -272,11 +295,34 @@ void DebuggerGui::renderCpuPanel(DebugBackend &backend)
     uint16_t hl = (static_cast<uint16_t>(s.h) << 8) | s.l;
     
     renderRegRow("PC", s.pc, DebugBackend::RegisterId::PC);
+    
+    // Stage 3.9: PC context menu for navigation
+    if (ImGui::BeginPopupContextItem("pc_ctx")) {
+        if (ImGui::MenuItem("Go to Disassembly")) {
+            gotoDisassembly(s.pc);
+        }
+        if (ImGui::MenuItem("Go to Memory Inspector")) {
+            gotoMemory(s.pc);
+        }
+        ImGui::EndPopup();
+    }
+    
     renderRegRow("AF", af,  DebugBackend::RegisterId::AF);
     renderRegRow("BC", bc,  DebugBackend::RegisterId::BC);
     renderRegRow("DE", de,  DebugBackend::RegisterId::DE);
     renderRegRow("HL", hl,  DebugBackend::RegisterId::HL);
     renderRegRow("SP", s.sp, DebugBackend::RegisterId::SP);
+    
+    // Stage 3.9: SP context menu for navigation
+    if (ImGui::BeginPopupContextItem("sp_ctx")) {
+        if (ImGui::MenuItem("Go to Stack")) {
+            gotoStack(s.sp);
+        }
+        if (ImGui::MenuItem("Go to Memory Inspector")) {
+            gotoMemory(s.sp);
+        }
+        ImGui::EndPopup();
+    }
     
     // 8-bit components (read-only)
     ImGui::Spacing();

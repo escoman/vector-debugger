@@ -10,14 +10,6 @@
 #include <algorithm>
 
 // ---------------------------------------------------------------------------
-// Construction
-// ---------------------------------------------------------------------------
-
-DisassemblyWindow::DisassemblyWindow()
-{
-}
-
-// ---------------------------------------------------------------------------
 // Address parsing
 // ---------------------------------------------------------------------------
 
@@ -307,6 +299,12 @@ void DisassemblyWindow::renderDisassemblyList(DebugBackend &backend)
             if (followPc_) {
                 ImGui::SetScrollHereY(0.4f);
             }
+        }
+        
+        // Stage 3.9: scroll to gotoAddress target
+        if (pendingScroll_ && lineAddr == viewAddress_) {
+            ImGui::SetScrollHereY(0.3f);
+            pendingScroll_ = false;
         }
         
         displayedCount++;
