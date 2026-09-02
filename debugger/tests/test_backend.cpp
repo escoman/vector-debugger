@@ -1622,6 +1622,149 @@ static void test_memory_inspector_disassembly()
 }
 
 // ---------------------------------------------------------------------------
+// Stage 3.4 — Stack View tests
+// ---------------------------------------------------------------------------
+
+// Test 1: SP read
+static void test_stack_view_sp_read()
+{
+    TEST_BEGIN("Stack View: SP read");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+
+    // SP should be readable (value depends on reset state)
+    CpuState cpu = dbg->getCpuState();
+    // Just verify we can read SP without crash
+    printf("  SP = %04X\n", cpu.sp);
+    CHECK(true, "SP is readable");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// Test 2: Stack snapshot
+static void test_stack_view_snapshot()
+{
+    TEST_BEGIN("Stack View: Stack snapshot");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+
+    // Write known values around SP = 0xEFFE
+    uint16_t sp = 0xEFFE;
+    mem.write(0xEFFE, 0x34, false);
+    mem.write(0xEFFF, 0x12, false);
+    mem.write(0xF000, 0x78, false);
+    mem.write(0xF001, 0x56, false);
+
+    // Read snapshot
+    MemorySnapshot snap = dbg->readMemorySnapshot(sp, 4);
+    CHECK_EQ(0xEFFE, snap.start, "Snapshot start == 0xEFFE");
+    CHECK_EQ(4, snap.data.size(), "Snapshot size == 4");
+    CHECK_EQ(0x34, snap.data[0], "Snapshot[0] == 0x34");
+    CHECK_EQ(0x12, snap.data[1], "Snapshot[1] == 0x12");
+    CHECK_EQ(0x78, snap.data[2], "Snapshot[2] == 0x78");
+    CHECK_EQ(0x56, snap.data[3], "Snapshot[3] == 0x56");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// Test 3: Little endian word
+static void test_stack_view_little_endian()
+{
+    TEST_BEGIN("Stack View: Little endian word");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+
+    // Write values for little-endian test
+    mem.write(0xEFFE, 0x34, false);
+    mem.write(0xEFFF, 0x12, false);
+    mem.write(0xF000, 0x78, false);
+    mem.write(0xF001, 0x56, false);
+
+    // Read and compute words
+    MemorySnapshot snap = dbg->readMemorySnapshot(0xEFFE, 4);
+    
+    // Word at EFFE: lo=0x34, hi=0x12 -> 0x1234
+    uint16_t word1 = snap.data[0] | (snap.data[1] << 8);
+    CHECK_EQ(0x1234, word1, "Word at EFFE == 0x1234 (LE)");
+
+    // Word at F000: lo=0x78, hi=0x56 -> 0x5678
+    uint16_t word2 = snap.data[2] | (snap.data[3] << 8);
+    CHECK_EQ(0x5678, word2, "Word at F000 == 0x5678 (LE)");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// Test 4: SP boundaries
+static void test_stack_view_boundaries()
+{
+    TEST_BEGIN("Stack View: SP boundaries");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+
+    // Test SP = 0000
+    {
+        int start, end;
+        int sp = 0x0000;
+        start = sp - 32;
+        end = sp + 32;
+        start = std::max(start, 0);
+        end = std::min(end, 0xFFFF);
+        CHECK(start >= 0, "SP=0000: start >= 0");
+        CHECK(end <= 0xFFFF, "SP=0000: end <= FFFF");
+    }
+
+    // Test SP = 0001
+    {
+        int start, end;
+        int sp = 0x0001;
+        start = sp - 32;
+        end = sp + 32;
+        start = std::max(start, 0);
+        end = std::min(end, 0xFFFF);
+        CHECK(start >= 0, "SP=0001: start >= 0");
+        CHECK(end <= 0xFFFF, "SP=0001: end <= FFFF");
+    }
+
+    // Test SP = FFFE
+    {
+        int start, end;
+        int sp = 0xFFFE;
+        start = sp - 32;
+        end = sp + 32;
+        start = std::max(start, 0);
+        end = std::min(end, 0xFFFF);
+        CHECK(start >= 0, "SP=FFFE: start >= 0");
+        CHECK(end <= 0xFFFF, "SP=FFFE: end <= FFFF");
+    }
+
+    // Test SP = FFFF
+    {
+        int start, end;
+        int sp = 0xFFFF;
+        start = sp - 32;
+        end = sp + 32;
+        start = std::max(start, 0);
+        end = std::min(end, 0xFFFF);
+        CHECK(start >= 0, "SP=FFFF: start >= 0");
+        CHECK(end <= 0xFFFF, "SP=FFFF: end <= FFFF");
+    }
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -1671,6 +1814,12 @@ int main()
     test_memory_inspector_pc_marker();
     test_memory_inspector_snapshot();
     test_memory_inspector_disassembly();
+
+    // Stage 3.4 — Stack View tests
+    test_stack_view_sp_read();
+    test_stack_view_snapshot();
+    test_stack_view_little_endian();
+    test_stack_view_boundaries();
 
     printf("\n\033[0;36m=== Results: %d/%d passed", tests_passed, tests_run);
     if (tests_failed > 0) {

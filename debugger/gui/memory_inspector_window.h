@@ -28,6 +28,15 @@ public:
     bool isVisible() const { return visible_; }
     void setVisible(bool v) { visible_ = v; }
     
+    // Navigate to specific address (used by Stack View integration)
+    void navigateTo(uint16_t address) {
+        address_ = address;
+        selectedAddress_ = address;
+        snprintf(addressInput_, sizeof(addressInput_), "%04X", address);
+        needsRefresh_ = true;
+        visible_ = true;
+    }
+    
 private:
     bool visible_ = true;
     

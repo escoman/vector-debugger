@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
 
 #include "memory.h"
 #include "i8080.h"
@@ -255,6 +256,26 @@ static void test_board_smoke()
     CHECK_EQ(0xC3, snap.data[3], "Snapshot[3] == 0xC3 (JMP)");
     
     printf("  Memory Inspector API works with real Board\n");
+    
+    // --- Test Stack View API (Stage 3.4) ---
+    printf("  Testing Stack View API...\n");
+    
+    // Test SP read
+    CpuState cpu = backend.getCpuState();
+    CHECK(cpu.sp > 0, "SP > 0");
+    printf("  SP = %04X\n", cpu.sp);
+    
+    // Test stack snapshot around SP
+    uint16_t sp = cpu.sp;
+    int start = std::max(static_cast<int>(sp) - 8, 0);
+    int end = std::min(static_cast<int>(sp) + 8, 0xFFFF);
+    size_t size = static_cast<size_t>(end - start + 1);
+    
+    MemorySnapshot stackSnap = backend.readMemorySnapshot(static_cast<uint16_t>(start), size);
+    CHECK_EQ(start, stackSnap.start, "Stack snapshot start correct");
+    CHECK(size > 0, "Stack snapshot has data");
+    
+    printf("  Stack View API works with real Board\n");
     
     // --- Cleanup ---
     test_backend = nullptr;

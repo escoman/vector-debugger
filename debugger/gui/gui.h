@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include "memory_inspector_window.h"
+#include "stack_view_window.h"
 
 // Forward declarations — avoid pulling SDL/ImGui into this header.
 struct SDL_Window;
@@ -56,4 +57,7 @@ private:
     
     // Memory Inspector window (Stage 3.3)
     MemoryInspectorWindow memoryInspector_;
+    
+    // Stack View window (Stage 3.4)
+    StackViewWindow stackView_;
 };

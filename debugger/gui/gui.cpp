@@ -182,8 +182,16 @@ void DebuggerGui::render(DebugBackend &backend, Memory &memory)
 
     ImGui::End();
     
+    // Setup Stack View → Memory Inspector callback
+    stackView_.onGoToMemoryInspector = [this](uint16_t address) {
+        memoryInspector_.navigateTo(address);
+    };
+    
     // Render Memory Inspector window (separate, movable window)
     memoryInspector_.render(backend);
+    
+    // Render Stack View window (separate, movable window)
+    stackView_.render(backend);
 }
 
 // ---------------------------------------------------------------------------
@@ -281,8 +289,9 @@ void DebuggerGui::renderControls(DebugBackend &backend)
     if (paused) {
         if (ImGui::Button("Step")) {
             backend.requestStep();
-            // Refresh memory inspector after step
+            // Refresh memory inspector and stack view after step
             memoryInspector_.requestRefresh();
+            stackView_.requestRefresh();
         }
         ImGui::SameLine();
     }
@@ -291,8 +300,9 @@ void DebuggerGui::renderControls(DebugBackend &backend)
     if (state == DebuggerState::Running) {
         if (ImGui::Button("Pause")) {
             backend.requestPause();
-            // Refresh memory inspector after pause
+            // Refresh memory inspector and stack view after pause
             memoryInspector_.requestRefresh();
+            stackView_.requestRefresh();
         }
     } else {
         if (ImGui::Button("Run")) {
@@ -303,14 +313,21 @@ void DebuggerGui::renderControls(DebugBackend &backend)
     ImGui::SameLine();
     if (ImGui::Button("Reset")) {
         backend.requestReset();
-        // Refresh memory inspector after reset
+        // Refresh memory inspector and stack view after reset
         memoryInspector_.requestRefresh();
+        stackView_.requestRefresh();
     }
     
     // Memory Inspector toggle
     ImGui::SameLine();
     if (ImGui::Button("Memory Inspector")) {
         memoryInspector_.setVisible(!memoryInspector_.isVisible());
+    }
+    
+    // Stack View toggle
+    ImGui::SameLine();
+    if (ImGui::Button("Stack View")) {
+        stackView_.setVisible(!stackView_.isVisible());
     }
 }
 
