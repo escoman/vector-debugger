@@ -2581,6 +2581,175 @@ static void test_bp_reset_preserves()
 }
 
 // ---------------------------------------------------------------------------
+// Stage 3.8 — Disassembly tests
+// ---------------------------------------------------------------------------
+
+static void test_disasm_nop()
+{
+    TEST_BEGIN("S3.8: disasm NOP");
+
+    // 00 → NOP, length 1
+    uint8_t buf[] = { 0x00 };
+    auto readFn = [&buf](uint16_t addr) -> uint8_t { return buf[addr & 0xFF]; };
+    auto d = disassemble(0x0000, readFn);
+
+    CHECK_EQ(1, d.length, "NOP length == 1");
+    CHECK(d.mnemonic == "NOP", "mnemonic == NOP");
+    CHECK_EQ(0x00, d.opcode, "opcode == 0x00");
+
+    TEST_END();
+}
+
+static void test_disasm_mvi()
+{
+    TEST_BEGIN("S3.8: disasm MVI A,55H");
+
+    // 3E 55 → MVI A,55H, length 2
+    uint8_t buf[] = { 0x3E, 0x55 };
+    auto readFn = [&buf](uint16_t addr) -> uint8_t { return buf[addr & 0xFF]; };
+    auto d = disassemble(0x0000, readFn);
+
+    CHECK_EQ(2, d.length, "MVI A length == 2");
+    CHECK(d.mnemonic == "MVI", "mnemonic == MVI");
+    CHECK(d.text.find("55") != std::string::npos, "text contains operand 55");
+
+    TEST_END();
+}
+
+static void test_disasm_jmp()
+{
+    TEST_BEGIN("S3.8: disasm JMP 8002H");
+
+    // C3 02 80 → JMP 8002H, length 3
+    uint8_t buf[] = { 0xC3, 0x02, 0x80 };
+    auto readFn = [&buf](uint16_t addr) -> uint8_t { return buf[addr & 0xFF]; };
+    auto d = disassemble(0x0000, readFn);
+
+    CHECK_EQ(3, d.length, "JMP length == 3");
+    CHECK(d.mnemonic == "JMP", "mnemonic == JMP");
+    CHECK(d.text.find("8002") != std::string::npos, "text contains address 8002");
+
+    TEST_END();
+}
+
+static void test_disasm_sequential()
+{
+    TEST_BEGIN("S3.8: disasm sequential advancement");
+
+    // 8000: MVI A,55 (2 bytes) → 8002: INR A (1 byte) → 8003: JMP 8002 (3 bytes)
+    Memory mem;
+    mem.write(0x8000, 0x3E, false);  // MVI A
+    mem.write(0x8001, 0x55, false);  // operand
+    mem.write(0x8002, 0x3C, false);  // INR A
+    mem.write(0x8003, 0xC3, false);  // JMP
+    mem.write(0x8004, 0x02, false);  // lo
+    mem.write(0x8005, 0x80, false);  // hi
+
+    auto readFn = [&mem](uint16_t addr) -> uint8_t {
+        return DebugMemoryAccess::peek(mem, addr);
+    };
+
+    // First instruction at 8000
+    auto d1 = disassemble(0x8000, readFn);
+    CHECK_EQ(0x8000, d1.address, "d1 address == 8000");
+    CHECK(d1.mnemonic == "MVI", "d1 mnemonic == MVI");
+    CHECK_EQ(2, d1.length, "d1 length == 2");
+
+    // Second instruction at 8002
+    uint16_t addr2 = static_cast<uint16_t>(0x8000 + d1.length);
+    CHECK_EQ(0x8002, addr2, "advances to 8002");
+    auto d2 = disassemble(addr2, readFn);
+    CHECK(d2.mnemonic == "INR", "d2 mnemonic == INR");
+    CHECK_EQ(1, d2.length, "d2 length == 1");
+
+    // Third instruction at 8003
+    uint16_t addr3 = static_cast<uint16_t>(addr2 + d2.length);
+    CHECK_EQ(0x8003, addr3, "advances to 8003");
+    auto d3 = disassemble(addr3, readFn);
+    CHECK(d3.mnemonic == "JMP", "d3 mnemonic == JMP");
+    CHECK_EQ(3, d3.length, "d3 length == 3");
+
+    TEST_END();
+}
+
+static void test_disasm_boundary()
+{
+    TEST_BEGIN("S3.8: disasm boundary FFFF");
+
+    // Disassemble at FFFF — must return 1-byte instruction, no crash.
+    // The read function wraps via uint16_t, so addr+1 for operands
+    // would read from address 0x0000 (wrapping).
+    uint8_t buf[256];
+    memset(buf, 0x00, sizeof(buf));  // all NOPs
+    buf[0xFF] = 0x00;  // NOP at index FF (read at FFFF)
+    buf[0x00] = 0x00;  // NOP at index 00 (read at 0000 after wrap)
+
+    auto readFn = [&buf](uint16_t addr) -> uint8_t {
+        return buf[addr & 0xFF];
+    };
+
+    auto d = disassemble(0xFFFF, readFn);
+    CHECK_EQ(1, d.length, "at FFFF: length == 1 (single byte opcode)");
+    CHECK(d.mnemonic == "NOP", "at FFFF: mnemonic == NOP");
+    CHECK_EQ(0x00, d.opcode, "at FFFF: opcode == 0x00");
+
+    // Also test FFFE with a 2-byte instruction (MVI A, xx)
+    // At FFFE: opcode 0x3E (MVI A), operand at FFFF: 0x42
+    buf[0xFE] = 0x3E;  // MVI A at index FE (read at FFFE)
+    buf[0xFF] = 0x42;  // operand at index FF (read at FFFF)
+    auto d2 = disassemble(0xFFFE, readFn);
+    CHECK_EQ(2, d2.length, "at FFFE: MVI A length == 2");
+    CHECK(d2.mnemonic == "MVI", "at FFFE: mnemonic == MVI");
+
+    TEST_END();
+}
+
+static void test_disasm_banking()
+{
+    TEST_BEGIN("S3.8: disasm banking");
+
+    Memory mem;
+
+    // Write NOP + HLT at 0xC000 in default bank
+    mem.write(0xC000, 0x00, false);  // NOP
+    mem.write(0xC001, 0x76, false);  // HLT
+
+    auto readFn = [&mem](uint16_t addr) -> uint8_t {
+        return DebugMemoryAccess::peek(mem, addr);
+    };
+
+    // Verify default bank disassembly
+    auto d1 = disassemble(0xC000, readFn);
+    CHECK(d1.mnemonic == "NOP", "default bank: NOP at C000");
+    CHECK_EQ(1, d1.length, "default bank: length 1");
+
+    auto d2 = disassemble(0xC001, readFn);
+    CHECK(d2.mnemonic == "HLT", "default bank: HLT at C001");
+
+    // Switch bank (enable mode_map)
+    mem.control_write(0x20);
+
+    // Write MVI A,42H at 0xC000 in new bank
+    mem.write(0xC000, 0x3E, false);  // MVI A
+    mem.write(0xC001, 0x42, false);  // operand
+
+    // Disassembler should see new content through banking
+    auto d3 = disassemble(0xC000, readFn);
+    CHECK(d3.mnemonic == "MVI", "new bank: MVI at C000");
+    CHECK_EQ(2, d3.length, "new bank: length 2");
+    CHECK(d3.text.find("42") != std::string::npos, "new bank: operand 42 visible");
+
+    // Restore default banking
+    mem.control_write(0x00);
+
+    // Original bytes should be visible again
+    auto d4 = disassemble(0xC000, readFn);
+    CHECK(d4.mnemonic == "NOP", "restored bank: NOP at C000");
+
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -2667,6 +2836,14 @@ int main()
     test_bp_continue_after();
     test_bp_step_over();
     test_bp_reset_preserves();
+
+    // Stage 3.8 — Disassembly tests
+    test_disasm_nop();
+    test_disasm_mvi();
+    test_disasm_jmp();
+    test_disasm_sequential();
+    test_disasm_boundary();
+    test_disasm_banking();
 
     printf("\n\033[0;36m=== Results: %d/%d passed", tests_passed, tests_run);
     if (tests_failed > 0) {

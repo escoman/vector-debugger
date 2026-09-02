@@ -148,6 +148,7 @@ set(GUI_SOURCES
     ${DBG_GUI_DIR}/memory_inspector_window.cpp
     ${DBG_GUI_DIR}/stack_view_window.cpp
     ${DBG_GUI_DIR}/breakpoints_window.cpp
+    ${DBG_GUI_DIR}/disassembly_window.cpp
 )
 
 add_executable(debugger_gui

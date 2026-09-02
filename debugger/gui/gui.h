@@ -4,6 +4,7 @@
 #include "memory_inspector_window.h"
 #include "stack_view_window.h"
 #include "breakpoints_window.h"
+#include "disassembly_window.h"
 #include "backend.h"
 
 // Forward declarations — avoid pulling SDL/ImGui into this header.
@@ -65,6 +66,9 @@ private:
     
     // Breakpoints window (Stage 3.7)
     BreakpointsWindow breakpointsWindow_;
+    
+    // Disassembly view (Stage 3.8)
+    DisassemblyWindow disassemblyView_;
     
     // CPU register editing state (Stage 3.6)
     bool editingRegister_ = false;

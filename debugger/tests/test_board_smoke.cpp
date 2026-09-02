@@ -26,6 +26,7 @@
 #include "wav.h"
 #include "fd1793.h"
 #include "debug_memory.h"
+#include "disassembler.h"
 
 using namespace i8080cpu;
 
@@ -427,6 +428,65 @@ static void test_board_smoke()
     
     backend.clearBreakpoints();
     printf("  Breakpoint API works with real Board\n");
+    
+    // --- Test Disassembly API (Stage 3.8) ---
+    printf("  Testing Disassembly API...\n");
+    
+    // Reset to known state — test program should still be in memory
+    Options.pc = 0;
+    board.reset(Board::ResetMode::LOADROM);
+    backend.clearHistory();
+    
+    // Verify test program bytes
+    CHECK_EQ(0x3E, backend.readMemory(0x0000), "test program: MVI A opcode at 0000");
+    CHECK_EQ(0x55, backend.readMemory(0x0001), "test program: operand 55 at 0001");
+    CHECK_EQ(0x3C, backend.readMemory(0x0002), "test program: INR A at 0002");
+    CHECK_EQ(0xC3, backend.readMemory(0x0003), "test program: JMP opcode at 0003");
+    
+    // Disassemble using DebugMemoryAccess::peek() as read function
+    auto dasmReadFn = [&backend](uint16_t addr) -> uint8_t {
+        return backend.readMemory(addr);
+    };
+    
+    // Disassemble at 0000: MVI A,55H (2 bytes)
+    auto d1 = disassemble(0x0000, dasmReadFn);
+    CHECK(d1.mnemonic == "MVI", "disasm 0000: MVI");
+    CHECK_EQ(2, d1.length, "disasm 0000: length 2");
+    
+    // Disassemble at 0002: INR A (1 byte)
+    auto d2 = disassemble(0x0002, dasmReadFn);
+    CHECK(d2.mnemonic == "INR", "disasm 0002: INR");
+    CHECK_EQ(1, d2.length, "disasm 0002: length 1");
+    
+    // Disassemble at 0003: JMP 0002 (3 bytes)
+    auto d3 = disassemble(0x0003, dasmReadFn);
+    CHECK(d3.mnemonic == "JMP", "disasm 0003: JMP");
+    CHECK_EQ(3, d3.length, "disasm 0003: length 3");
+    CHECK(d3.text.find("0002") != std::string::npos, "disasm 0003: target 0002");
+    
+    // Set BP at 0002, run, verify PC=0002
+    backend.addBreakpoint(0x0002);
+    backend.run();
+    
+    CpuState bpState2 = backend.getCpuState();
+    CHECK_EQ(0x0002, bpState2.pc, "BP hit: PC == 0x0002");
+    CHECK_EQ(0x55, bpState2.a, "BP hit: A == 0x55");
+    CHECK_EQ((int)StopReason::Breakpoint, (int)backend.getStopReason(),
+             "stopReason == Breakpoint");
+    
+    // Step — should execute INR A, PC becomes 0003
+    backend.stepInstruction();
+    CpuState afterStep2 = backend.getCpuState();
+    CHECK_EQ(0x0003, afterStep2.pc, "after step: PC == 0x0003");
+    CHECK_EQ(0x56, afterStep2.a, "after step: A == 0x56");
+    
+    // Disassemble at PC (0003): should be JMP 0002
+    auto d4 = disassemble(afterStep2.pc, dasmReadFn);
+    CHECK(d4.mnemonic == "JMP", "disasm at PC 0003: JMP");
+    CHECK_EQ(3, d4.length, "disasm at PC 0003: length 3");
+    
+    backend.clearBreakpoints();
+    printf("  Disassembly API works with real Board\n");
     
     // --- Cleanup ---
     test_backend = nullptr;

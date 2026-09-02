@@ -197,6 +197,14 @@ void DebuggerGui::render(DebugBackend &backend, Memory &memory)
     
     // Render Breakpoints window (Stage 3.7)
     breakpointsWindow_.render(backend);
+    
+    // Setup Disassembly → Memory Inspector callback (Stage 3.8)
+    disassemblyView_.onGoToMemoryInspector = [this](uint16_t address) {
+        memoryInspector_.navigateTo(address);
+    };
+    
+    // Render Disassembly View window (Stage 3.8)
+    disassemblyView_.render(backend);
 }
 
 // ---------------------------------------------------------------------------
@@ -382,6 +390,7 @@ void DebuggerGui::renderControls(DebugBackend &backend)
             // Refresh memory inspector and stack view after step
             memoryInspector_.requestRefresh();
             stackView_.requestRefresh();
+            disassemblyView_.requestRefresh();
         }
         ImGui::SameLine();
     }
@@ -393,6 +402,7 @@ void DebuggerGui::renderControls(DebugBackend &backend)
             // Refresh memory inspector and stack view after pause
             memoryInspector_.requestRefresh();
             stackView_.requestRefresh();
+            disassemblyView_.requestRefresh();
         }
     } else {
         if (ImGui::Button("Run")) {
@@ -406,6 +416,7 @@ void DebuggerGui::renderControls(DebugBackend &backend)
         // Refresh memory inspector and stack view after reset
         memoryInspector_.requestRefresh();
         stackView_.requestRefresh();
+        disassemblyView_.requestRefresh();
     }
     
     // Memory Inspector toggle
@@ -424,6 +435,12 @@ void DebuggerGui::renderControls(DebugBackend &backend)
     ImGui::SameLine();
     if (ImGui::Button("Breakpoints")) {
         breakpointsWindow_.setVisible(!breakpointsWindow_.isVisible());
+    }
+    
+    // Disassembly toggle (Stage 3.8)
+    ImGui::SameLine();
+    if (ImGui::Button("Disassembly")) {
+        disassemblyView_.setVisible(!disassemblyView_.isVisible());
     }
 }
 
