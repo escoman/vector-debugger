@@ -217,6 +217,9 @@ void DebuggerGui::render(DebugBackend &backend, Memory &memory)
     breakpointsWindow_.onGoToDisassembly = [this](uint16_t a) { gotoDisassembly(a); };
     breakpointsWindow_.onGoToMemoryInspector = [this](uint16_t a) { gotoMemory(a); };
     
+    executionTrace_.onGoToDisassembly = [this](uint16_t a) { gotoDisassembly(a); };
+    executionTrace_.onGoToMemoryInspector = [this](uint16_t a) { gotoMemory(a); };
+    
     // Render Memory Inspector window (separate, movable window)
     memoryInspector_.render(backend);
     
@@ -228,6 +231,9 @@ void DebuggerGui::render(DebugBackend &backend, Memory &memory)
     
     // Render Disassembly View window (Stage 3.8)
     disassemblyView_.render(backend);
+    
+    // Render Execution Trace window (Stage 3.10)
+    executionTrace_.render(backend);
 }
 
 // ---------------------------------------------------------------------------
@@ -437,6 +443,7 @@ void DebuggerGui::renderControls(DebugBackend &backend)
             memoryInspector_.requestRefresh();
             stackView_.requestRefresh();
             disassemblyView_.requestRefresh();
+            executionTrace_.requestRefresh();
         }
         ImGui::SameLine();
     }
@@ -449,6 +456,7 @@ void DebuggerGui::renderControls(DebugBackend &backend)
             memoryInspector_.requestRefresh();
             stackView_.requestRefresh();
             disassemblyView_.requestRefresh();
+            executionTrace_.requestRefresh();
         }
     } else {
         if (ImGui::Button("Run")) {
@@ -463,6 +471,7 @@ void DebuggerGui::renderControls(DebugBackend &backend)
         memoryInspector_.requestRefresh();
         stackView_.requestRefresh();
         disassemblyView_.requestRefresh();
+        executionTrace_.requestRefresh();
     }
     
     // Memory Inspector toggle
@@ -487,6 +496,12 @@ void DebuggerGui::renderControls(DebugBackend &backend)
     ImGui::SameLine();
     if (ImGui::Button("Disassembly")) {
         disassemblyView_.setVisible(!disassemblyView_.isVisible());
+    }
+    
+    // Execution Trace toggle (Stage 3.10)
+    ImGui::SameLine();
+    if (ImGui::Button("Execution Trace")) {
+        executionTrace_.setVisible(!executionTrace_.isVisible());
     }
 }
 

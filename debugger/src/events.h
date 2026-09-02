@@ -19,6 +19,11 @@ struct InstructionEvent
 
     int cycles;
 
+    // Instruction bytes at PC+1 and PC+2 (captured before execution).
+    // Together with opcode, these form the full instruction bytes.
+    // Correct even for self-modifying code (captured at execution time).
+    uint8_t operandBytes[2] = {0, 0};
+
     CpuState before;
     CpuState after;
 };

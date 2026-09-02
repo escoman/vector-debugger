@@ -654,6 +654,75 @@ static void test_board_smoke()
     
     printf("  Navigation API works with real Board\n");
     
+    // --- Test Execution Trace API (Stage 3.10) ---
+    printf("  Testing Execution Trace API...\n");
+    
+    // Reset to known state
+    Options.pc = 0;
+    board.reset(Board::ResetMode::LOADROM);
+    backend.clearHistory();
+    backend.clearBreakpoints();
+    
+    // Verify test program is still in memory
+    CHECK_EQ(0x3E, backend.readMemory(0x0000), "test program: MVI A opcode at 0000");
+    CHECK_EQ(0x55, backend.readMemory(0x0001), "test program: operand 55 at 0001");
+    CHECK_EQ(0x3C, backend.readMemory(0x0002), "test program: INR A at 0002");
+    
+    // Step 1: MVI A,55
+    backend.stepInstruction();
+    
+    auto trace1 = backend.instructionHistorySnapshot();
+    CHECK_EQ(1, trace1.size(), "trace has 1 entry after first step");
+    CHECK_EQ(0x0000, trace1[0].pcBefore, "trace[0].PC == 0000");
+    CHECK_EQ(0x3E, trace1[0].opcode, "trace[0].opcode == 0x3E (MVI A)");
+    CHECK_EQ(2, trace1[0].length, "trace[0].length == 2");
+    CHECK_EQ(0x55, trace1[0].operandBytes[0], "trace[0].operandBytes[0] == 0x55");
+    
+    CpuState traceCpu1 = backend.getCpuState();
+    CHECK_EQ(0x0002, traceCpu1.pc, "PC == 0002 after first step");
+    
+    // Step 2: INR A
+    backend.stepInstruction();
+    
+    auto trace2 = backend.instructionHistorySnapshot();
+    CHECK_EQ(2, trace2.size(), "trace has 2 entries after second step");
+    CHECK_EQ(0x0002, trace2[1].pcBefore, "trace[1].PC == 0002");
+    CHECK_EQ(0x3C, trace2[1].opcode, "trace[1].opcode == 0x3C (INR A)");
+    CHECK_EQ(1, trace2[1].length, "trace[1].length == 1");
+    
+    CpuState traceCpu2 = backend.getCpuState();
+    CHECK_EQ(0x0003, traceCpu2.pc, "PC == 0003 after second step");
+    
+    // Breakpoint test: BP at 0002, Run
+    backend.clearBreakpoints();
+    backend.clearHistory();
+    Options.pc = 0;
+    board.reset(Board::ResetMode::LOADROM);
+    backend.clearHistory();
+    
+    backend.addBreakpoint(0x0002);
+    backend.run();
+    
+    CpuState bpCpu = backend.getCpuState();
+    CHECK_EQ(0x0002, bpCpu.pc, "BP: PC == 0002");
+    CHECK_EQ((int)StopReason::Breakpoint, (int)backend.getStopReason(),
+             "stopReason == Breakpoint");
+    
+    auto traceBp = backend.instructionHistorySnapshot();
+    CHECK(traceBp.size() >= 1, "trace has entries at BP");
+    // Last trace entry should be the instruction BEFORE the BP
+    CHECK_EQ(0x0000, traceBp.back().pcBefore, "last trace PC == 0000 (before BP at 0002)");
+    
+    // Step from BP — should execute INR A
+    backend.stepInstruction();
+    
+    auto traceAfterStep = backend.instructionHistorySnapshot();
+    CHECK(traceAfterStep.size() > traceBp.size(), "trace grew after step");
+    CHECK_EQ(0x0002, traceAfterStep.back().pcBefore, "last trace PC == 0002 after step");
+    
+    backend.clearBreakpoints();
+    printf("  Execution Trace API works with real Board\n");
+    
     // --- Cleanup ---
     test_backend = nullptr;
     

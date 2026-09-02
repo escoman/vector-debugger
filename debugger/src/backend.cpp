@@ -431,6 +431,8 @@ StepResult DebugBackend::stepInstruction()
     ie.opcode    = r.opcode;
     ie.length    = r.length;
     ie.cycles    = cycles;
+    ie.operandBytes[0] = operandBytes[0];
+    ie.operandBytes[1] = operandBytes[1];
     ie.before    = r.before;
     ie.after     = r.after;
 
