@@ -85,6 +85,10 @@ bool DebuggerGui::initialize(int width, int height)
         return false;
     }
 
+    // Maximize after creation — ImGui viewport init may override the
+    // SDL_WINDOW_MAXIMIZED create flag, so we maximize explicitly.
+    SDL_MaximizeWindow(window_);
+
     glContext_ = SDL_GL_CreateContext(window_);
     if (!glContext_) {
         std::fprintf(stderr, "SDL_GL_CreateContext failed: %s\n", SDL_GetError());
@@ -956,10 +960,11 @@ void DebuggerGui::renderStatusBar(IDebugBackend &backend)
 
     // Vector Screen hover coordinates (Stage 5.1)
     if (vectorScreen_.isHoveringScreen()) {
-        auto video = backend.videoModeSnapshot();
         ImGui::SameLine();
-        ImGui::Text("Screen: %dx%d  X: %d  Y: %d",
-                    video.visibleWidth, video.visibleHeight,
+        ImGui::Text("Screen: 512x256  X: %d  Y: %d",
                     vectorScreen_.hoverScreenX(), vectorScreen_.hoverScreenY());
+    } else if (vectorScreen_.isHoveringBorder()) {
+        ImGui::SameLine();
+        ImGui::Text("Screen: 512x256  (border)");
     }
 }

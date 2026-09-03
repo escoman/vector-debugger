@@ -247,15 +247,26 @@ void VectorScreenWindow::renderToolbar(IDebugBackend &backend)
 void VectorScreenWindow::renderCoordinateInfo(IDebugBackend &backend)
 {
     auto video = backend.videoModeSnapshot();
+
+    // Display is always 512x256 physical pixels regardless of mode.
+    const int displayVisW = 512;
+    const int displayVisH = 256;
+    const int displayBorderL = (video.screenWidth  - displayVisW) / 2;
+    const int displayBorderT = (video.screenHeight - displayVisH) / 2;
+
+    // For VRAM mapping: in 256-mode each VRAM byte covers 16 display pixels
+    // (8 logical × 2 horizontal doubling).  In 512-mode it's 8 display pixels.
+    int displayPPB = video.pixelsPerByte * displayVisW / video.visibleWidth;
+
     VramMapping::VideoInfo vi = VramMapping::fromVideoMode(
         video.mode512, video.screenWidth, video.screenHeight,
-        video.visibleWidth, video.visibleHeight,
-        video.borderLeft, video.borderTop,
-        video.scrollValue, video.vramBase, video.pixelsPerByte);
+        displayVisW, displayVisH,
+        displayBorderL, displayBorderT,
+        video.scrollValue, video.vramBase, displayPPB);
 
     if (hoverScreenX_ >= 0 && hoverScreenY_ >= 0) {
         ImGui::Text("Screen: %dx%d  X: %d  Y: %d",
-                    video.visibleWidth, video.visibleHeight,
+                    displayVisW, displayVisH,
                     hoverScreenX_, hoverScreenY_);
 
         // VRAM mapping
@@ -294,9 +305,12 @@ void VectorScreenWindow::renderCoordinateInfo(IDebugBackend &backend)
             ImGui::SameLine();
             ImGui::TextDisabled("VRAM: N/A (border)");
         }
+    } else if (hoverBorder_) {
+        ImGui::Text("Screen: %dx%d  (border area)",
+                    displayVisW, displayVisH);
     } else {
         ImGui::Text("Screen: %dx%d  (hover for coordinates)",
-                    video.visibleWidth, video.visibleHeight);
+                    displayVisW, displayVisH);
     }
 }
 
@@ -309,11 +323,19 @@ void VectorScreenWindow::renderContextMenu(IDebugBackend &backend)
     if (!ImGui::BeginPopupContextWindow()) return;
 
     auto video = backend.videoModeSnapshot();
+
+    // Display is always 512x256 physical pixels.
+    const int displayVisW = 512;
+    const int displayVisH = 256;
+    const int displayBorderL = (video.screenWidth  - displayVisW) / 2;
+    const int displayBorderT = (video.screenHeight - displayVisH) / 2;
+    int displayPPB = video.pixelsPerByte * displayVisW / video.visibleWidth;
+
     VramMapping::VideoInfo vi = VramMapping::fromVideoMode(
         video.mode512, video.screenWidth, video.screenHeight,
-        video.visibleWidth, video.visibleHeight,
-        video.borderLeft, video.borderTop,
-        video.scrollValue, video.vramBase, video.pixelsPerByte);
+        displayVisW, displayVisH,
+        displayBorderL, displayBorderT,
+        video.scrollValue, video.vramBase, displayPPB);
 
     uint16_t vramAddr = 0;
     bool hasVramAddr = false;
@@ -364,11 +386,19 @@ void VectorScreenWindow::renderVramDebugOverlay(IDebugBackend &backend)
     if (!vramDebugMode_) return;
 
     auto video = backend.videoModeSnapshot();
+
+    // Display is always 512x256 physical pixels.
+    const int displayVisW = 512;
+    const int displayVisH = 256;
+    const int displayBorderL = (video.screenWidth  - displayVisW) / 2;
+    const int displayBorderT = (video.screenHeight - displayVisH) / 2;
+    int displayPPB = video.pixelsPerByte * displayVisW / video.visibleWidth;
+
     VramMapping::VideoInfo vi = VramMapping::fromVideoMode(
         video.mode512, video.screenWidth, video.screenHeight,
-        video.visibleWidth, video.visibleHeight,
-        video.borderLeft, video.borderTop,
-        video.scrollValue, video.vramBase, video.pixelsPerByte);
+        displayVisW, displayVisH,
+        displayBorderL, displayBorderT,
+        video.scrollValue, video.vramBase, displayPPB);
 
     int zoom = currentZoom();
     if (zoom < 8) return;  // Byte grid only at high zoom
@@ -379,12 +409,11 @@ void VectorScreenWindow::renderVramDebugOverlay(IDebugBackend &backend)
 
     ImDrawList *drawList = ImGui::GetWindowDrawList();
 
-    // Calculate the visible area in the rendered image
-    // The image shows the visible area (borderLeft..borderLeft+visibleWidth, etc.)
-    // scaled by zoom, with pan offset
-    int visW = video.visibleWidth;
-    int visH = video.visibleHeight;
-    int ppb  = video.pixelsPerByte;
+    // The image now includes borders.  The visible screen area starts at
+    // (displayBorderL, displayBorderT) within the image.
+    int visW = displayVisW;
+    int visH = displayVisH;
+    int ppb  = displayPPB;
 
     // Bytes per row in visible area
     int bytesPerRow = visW / ppb;  // 32 for 256-mode, 128 for 512-mode
@@ -404,32 +433,48 @@ void VectorScreenWindow::renderVramDebugOverlay(IDebugBackend &backend)
         vramSnap = backend.vramWriteSnapshot();
     }
 
-    // Calculate the offset due to pan
-    float offsetX = imgMin.x - panX_;
-    float offsetY = imgMin.y - panY_;
+    // Offset to the start of the visible screen area within the image
+    float borderOffsetX = static_cast<float>(displayBorderL * zoom);
+    float borderOffsetY = static_cast<float>(displayBorderT * zoom);
 
-    // Draw byte grid lines
+    // The visible area rect in screen coordinates
+    float visMinX = imgMin.x + borderOffsetX;
+    float visMinY = imgMin.y + borderOffsetY;
+    float visMaxX = visMinX + visW * static_cast<float>(zoom);
+    float visMaxY = visMinY + visH * static_cast<float>(zoom);
+
+    // Clip to the actual image widget bounds
+    visMinX = std::max(visMinX, imgMin.x);
+    visMinY = std::max(visMinY, imgMin.y);
+    visMaxX = std::min(visMaxX, imgMax.x);
+    visMaxY = std::min(visMaxY, imgMax.y);
+
+    // Calculate the offset due to pan (for the visible-area grid)
+    float gridStartX = visMinX - panX_;
+    float gridStartY = visMinY - panY_;
+
+    // Draw byte grid lines (clipped to the visible screen area)
     if (showByteGrid_) {
         ImU32 gridColor = IM_COL32(128, 128, 128, 80);
 
         // Vertical lines (byte column boundaries)
         for (int col = 0; col <= bytesPerRow; ++col) {
-            float x = offsetX + col * cellW;
-            if (x < imgMin.x || x > imgMax.x) continue;
-            drawList->AddLine(ImVec2(x, imgMin.y), ImVec2(x, imgMax.y), gridColor);
+            float x = gridStartX + col * cellW;
+            if (x < visMinX || x > visMaxX) continue;
+            drawList->AddLine(ImVec2(x, visMinY), ImVec2(x, visMaxY), gridColor);
         }
 
         // Horizontal lines (one per scanline)
         // Only draw every 8th line to avoid clutter
         int lineStep = (zoom >= 16) ? 1 : 8;
         for (int row = 0; row <= bytesPerCol; row += lineStep) {
-            float y = offsetY + row * cellH;
-            if (y < imgMin.y || y > imgMax.y) continue;
-            drawList->AddLine(ImVec2(imgMin.x, y), ImVec2(imgMax.x, y), gridColor);
+            float y = gridStartY + row * cellH;
+            if (y < visMinY || y > visMaxY) continue;
+            drawList->AddLine(ImVec2(visMinX, y), ImVec2(visMaxX, y), gridColor);
         }
     }
 
-    // Draw changed byte highlights and write counts
+    // Draw changed byte highlights and write counts (within visible screen area)
     if (showChangedBytes_ && highlightTimer_ > 0) {
         float alpha = static_cast<float>(highlightTimer_) / highlightFadeFrames_;
         ImU32 highlightColor = ImGui::ColorConvertFloat4ToU32(
@@ -440,16 +485,16 @@ void VectorScreenWindow::renderVramDebugOverlay(IDebugBackend &backend)
                 uint16_t addr = static_cast<uint16_t>(0xC000 + col * 256 + row);
                 int idx = addr - 0xC000;
                 if (idx >= 0 && idx < 256 && changedFlags_[idx]) {
-                    float x0 = offsetX + col * cellW;
-                    float y0 = offsetY + row * cellH;
+                    float x0 = gridStartX + col * cellW;
+                    float y0 = gridStartY + row * cellH;
                     float x1 = x0 + cellW;
                     float y1 = y0 + cellH;
-                    // Clip to visible region
-                    if (x1 > imgMin.x && x0 < imgMax.x &&
-                        y1 > imgMin.y && y0 < imgMax.y) {
+                    // Clip to visible screen region
+                    if (x1 > visMinX && x0 < visMaxX &&
+                        y1 > visMinY && y0 < visMaxY) {
                         drawList->AddRectFilled(
-                            ImVec2(std::max(x0, imgMin.x), std::max(y0, imgMin.y)),
-                            ImVec2(std::min(x1, imgMax.x), std::min(y1, imgMax.y)),
+                            ImVec2(std::max(x0, visMinX), std::max(y0, visMinY)),
+                            ImVec2(std::min(x1, visMaxX), std::min(y1, visMaxY)),
                             highlightColor);
                     }
                 }
@@ -462,12 +507,12 @@ void VectorScreenWindow::renderVramDebugOverlay(IDebugBackend &backend)
         for (int row = 0; row < 256; row += 8) {
             for (int col = 0; col < bytesPerRow; ++col) {
                 uint16_t addr = static_cast<uint16_t>(0xC000 + col * 256 + row);
-                float x = offsetX + col * cellW + 2;
-                float y = offsetY + row * cellH + 2;
+                float x = gridStartX + col * cellW + 2;
+                float y = gridStartY + row * cellH + 2;
 
                 // Clip
-                if (x + 30 < imgMin.x || x > imgMax.x ||
-                    y + 10 < imgMin.y || y > imgMax.y) continue;
+                if (x + 30 < visMinX || x > visMaxX ||
+                    y + 10 < visMinY || y > visMaxY) continue;
 
                 char buf[8];
                 snprintf(buf, sizeof(buf), "%04X", addr);
@@ -489,13 +534,21 @@ void VectorScreenWindow::renderScreen(IDebugBackend &backend)
     }
 
     auto video = backend.videoModeSnapshot();
-    int visW = video.visibleWidth;
-    int visH = video.visibleHeight;
+
+    // The framebuffer always includes borders: 576x288 total.
+    // The visible screen area is 512x256 centered within it.
+    const int fullW = video.screenWidth;   // 576
+    const int fullH = video.screenHeight;  // 288
+    const int displayVisW = 512;
+    const int displayVisH = 256;
+    const int displayBorderL = (fullW - displayVisW) / 2;  // 32
+    const int displayBorderT = (fullH - displayVisH) / 2;  // 16
+
     int zoom = currentZoom();
 
-    // Calculate display size for the visible area
-    float totalW = static_cast<float>(visW * zoom);
-    float totalH = static_cast<float>(visH * zoom);
+    // Calculate display size for the full framebuffer (including borders)
+    float totalW = static_cast<float>(fullW * zoom);
+    float totalH = static_cast<float>(fullH * zoom);
 
     ImVec2 avail = ImGui::GetContentRegionAvail();
     // Reserve space for status bar at the bottom
@@ -504,7 +557,7 @@ void VectorScreenWindow::renderScreen(IDebugBackend &backend)
 
     ImVec2 imageSize;
     if (fitToWindow_) {
-        float aspect = static_cast<float>(visH) / visW;
+        float aspect = static_cast<float>(fullH) / fullW;
         float w = avail.x;
         float h = w * aspect;
         if (h > avail.y) {
@@ -516,11 +569,11 @@ void VectorScreenWindow::renderScreen(IDebugBackend &backend)
         imageSize = ImVec2(totalW, totalH);
     }
 
-    // Calculate UV coordinates for the visible area (crop borders)
-    float u0 = static_cast<float>(video.borderLeft) / texWidth_;
-    float v0 = static_cast<float>(video.borderTop) / texHeight_;
-    float u1 = static_cast<float>(video.borderLeft + visW) / texWidth_;
-    float v1 = static_cast<float>(video.borderTop + visH) / texHeight_;
+    // UV coordinates: show the entire framebuffer (including borders)
+    float u0 = 0.0f;
+    float v0 = 0.0f;
+    float u1 = static_cast<float>(fullW) / texWidth_;
+    float v1 = static_cast<float>(fullH) / texHeight_;
 
     // Create a child region for scrolling/panning
     ImVec2 childSize;
@@ -542,11 +595,11 @@ void VectorScreenWindow::renderScreen(IDebugBackend &backend)
     handleZoomInput();
 
     // Handle pan input (middle mouse drag)
-    handlePanInput(visW, visH, zoom, childSize.x, childSize.y);
+    handlePanInput(fullW, fullH, zoom, childSize.x, childSize.y);
 
     // Clamp pan
     if (!fitToWindow_) {
-        clampPan(visW, visH, zoom, childSize.x, childSize.y);
+        clampPan(fullW, fullH, zoom, childSize.x, childSize.y);
     }
 
     // Calculate image position with pan offset
@@ -575,20 +628,33 @@ void VectorScreenWindow::renderScreen(IDebugBackend &backend)
     // Detect hover position
     ImVec2 mousePos = ImGui::GetMousePos();
     ImVec2 relPos(mousePos.x - imgPos.x, mousePos.y - imgPos.y);
+    hoverBorder_ = false;
 
     if (relPos.x >= 0 && relPos.x < imageSize.x &&
         relPos.y >= 0 && relPos.y < imageSize.y &&
         ImGui::IsWindowHovered()) {
 
-        // Convert to visible-area coordinates
-        float fx = relPos.x / imageSize.x * visW;
-        float fy = relPos.y / imageSize.y * visH;
-        hoverScreenX_ = static_cast<int>(fx);
-        hoverScreenY_ = static_cast<int>(fy);
-
         // Convert to framebuffer coordinates
-        hoverBufX_ = hoverScreenX_ + video.borderLeft;
-        hoverBufY_ = hoverScreenY_ + video.borderTop;
+        float fx = relPos.x / imageSize.x * fullW;
+        float fy = relPos.y / imageSize.y * fullH;
+        int bufX = static_cast<int>(fx);
+        int bufY = static_cast<int>(fy);
+
+        hoverBufX_ = bufX;
+        hoverBufY_ = bufY;
+
+        // Check if within the visible screen area (not border)
+        int screenX = bufX - displayBorderL;
+        int screenY = bufY - displayBorderT;
+        if (screenX >= 0 && screenX < displayVisW &&
+            screenY >= 0 && screenY < displayVisH) {
+            hoverScreenX_ = screenX;
+            hoverScreenY_ = screenY;
+        } else {
+            hoverScreenX_ = -1;
+            hoverScreenY_ = -1;
+            hoverBorder_ = true;
+        }
     } else {
         hoverScreenX_ = -1;
         hoverScreenY_ = -1;

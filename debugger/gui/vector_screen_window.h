@@ -37,6 +37,7 @@ public:
     bool isHoveringScreen() const { return hoverScreenX_ >= 0 && hoverScreenY_ >= 0; }
     int hoverScreenX() const { return hoverScreenX_; }
     int hoverScreenY() const { return hoverScreenY_; }
+    bool isHoveringBorder() const { return hoverBorder_; }
 
     // Navigation callbacks (set by GUI main)
     std::function<void(uint16_t address)> onGoToMemoryInspector;
@@ -91,6 +92,7 @@ private:
     // -- Hover state ---------------------------------------------------------
     int hoverBufX_ = -1, hoverBufY_ = -1;        // framebuffer coordinates
     int hoverScreenX_ = -1, hoverScreenY_ = -1;   // visible-area coordinates
+    bool hoverBorder_ = false;                     // mouse over border area
 
     // -- Write highlight overlay ---------------------------------------------
     std::vector<uint64_t> prevWriteCounts_;   // previous per-address write counts
