@@ -174,6 +174,12 @@ bool DebuggerGui::shouldQuit() const
     return quit_;
 }
 
+void DebuggerGui::applyPendingWorkspace()
+{
+    workspaceManager_.applyPendingWorkspace();
+    workspaceManager_.processDeferredOps();
+}
+
 // ---------------------------------------------------------------------------
 // Central Navigation API (Stage 3.9)
 // ---------------------------------------------------------------------------
@@ -202,12 +208,35 @@ void DebuggerGui::gotoStack(uint16_t address)
 
 void DebuggerGui::render(IDebugBackend &backend)
 {
-    // --- DockSpace (Stage 5.0/5.1) ---
     ImGuiViewport *viewport = ImGui::GetMainViewport();
-    ImGuiID dockspaceId = ImGui::DockSpaceOverViewport(0, viewport, ImGuiDockNodeFlags_PassthruCentralNode);
 
-    // --- Toolbar with menu bar ---
+    // --- Main menu bar (rendered first, on top of everything) ---
     renderToolbar(backend);
+
+    // --- Adjust work area below the main menu bar ---
+    float menuBarHeight = ImGui::GetFrameHeight();
+    viewport->WorkPos.y += menuBarHeight;
+    viewport->WorkSize.y -= menuBarHeight;
+
+    // --- DockSpace (Stage 5.0/5.1) ---
+    // Fills the adjusted work area — windows cannot overlap the menu bar.
+    ImGui::SetNextWindowPos(viewport->WorkPos);
+    ImGui::SetNextWindowSize(viewport->WorkSize);
+    ImGui::SetNextWindowViewport(viewport->ID);
+
+    ImGuiWindowFlags hostFlags = 0;
+    hostFlags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBringToFrontOnFocus |
+        ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoBackground;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::Begin("##DockSpaceHost", nullptr, hostFlags);
+    mainDockId_ = ImGui::GetID("MainDock");
+    ImGui::DockSpace(mainDockId_, ImVec2(0, 0),
+        ImGuiDockNodeFlags_PassthruCentralNode);
+    ImGui::End();
+    ImGui::PopStyleVar();
 
     // Get CPU state for this frame
     CpuState cpu = backend.getCpuState();
@@ -303,6 +332,11 @@ void DebuggerGui::render(IDebugBackend &backend)
     vectorScreen_.onGoToMemoryInspector = [this](uint16_t a) { gotoMemory(a); };
     vectorScreen_.onGoToDisassembly = [this](uint16_t a) { gotoDisassembly(a); };
     
+    // --- Apply cascade layout BEFORE rendering windows ---
+    if (cascadeRequested_) {
+        applyCascade();
+    }
+
     // Render all debugger windows (dockable)
     memoryInspector_.render(backend);
     stackView_.render(backend);
@@ -602,10 +636,8 @@ void DebuggerGui::renderInstructionHistory(IDebugBackend &backend)
 
 void DebuggerGui::renderToolbar(IDebugBackend &backend)
 {
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
-        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
-        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking;
-    if (ImGui::Begin("##Toolbar", nullptr, flags)) {
+    if (ImGui::BeginMainMenuBar())
+    {
         // File menu
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("Open ROM...")) {
@@ -615,7 +647,7 @@ void DebuggerGui::renderToolbar(IDebugBackend &backend)
             ImGui::EndMenu();
         }
 
-        // View menu — window visibility toggles
+        // View menu — window visibility toggles + layout
         if (ImGui::BeginMenu("View")) {
             ImGui::MenuItem("CPU Registers", nullptr, &showCpuRegisters_);
             ImGui::MenuItem("Instruction History", nullptr, &showInstructionHistory_);
@@ -632,6 +664,13 @@ void DebuggerGui::renderToolbar(IDebugBackend &backend)
             ImGui::MenuItem("Cross References", nullptr, &xrefsWindow_.getVisibleRef());
             ImGui::MenuItem("Call Graph", nullptr, &callGraphWindow_.getVisibleRef());
             ImGui::MenuItem("Search", nullptr, &searchWindow_.getVisibleRef());
+            ImGui::Separator();
+            if (ImGui::MenuItem("Cascade")) {
+                layoutCascade();
+            }
+            if (ImGui::MenuItem("Tile")) {
+                layoutTile();
+            }
             ImGui::EndMenu();
         }
 
@@ -662,10 +701,12 @@ void DebuggerGui::renderToolbar(IDebugBackend &backend)
             ImGui::EndMenu();
         }
 
-        ImGui::SameLine();
+        // Debug controls on the right side
+        ImGui::SameLine(ImGui::GetContentRegionAvail().x - 200);
         renderControls(backend);
+
+        ImGui::EndMainMenuBar();
     }
-    ImGui::End();
 }
 
 // ---------------------------------------------------------------------------
@@ -735,6 +776,141 @@ void DebuggerGui::renderControls(IDebugBackend &backend)
 }
 
 // ---------------------------------------------------------------------------
+// Layout — Cascade / Tile (Stage 5.1)
+// ---------------------------------------------------------------------------
+
+void DebuggerGui::layoutCascade()
+{
+    // Collect visible window names (same order as render pass)
+    struct WinInfo { const char *name; bool *visible; };
+    WinInfo wins[] = {
+        {"CPU Registers", &showCpuRegisters_},
+        {"Instruction History", &showInstructionHistory_},
+        {"Vector Screen", &vectorScreen_.getVisibleRef()},
+        {"Memory Inspector", &memoryInspector_.getVisibleRef()},
+        {"Memory Map", &memoryMap_.getVisibleRef()},
+        {"Disassembly", &disassemblyView_.getVisibleRef()},
+        {"Stack View", &stackView_.getVisibleRef()},
+        {"Breakpoints", &breakpointsWindow_.getVisibleRef()},
+        {"Execution Trace", &executionTrace_.getVisibleRef()},
+        {"I/O & Hardware Inspector", &ioInspector_.getVisibleRef()},
+        {"Functions", &functionsWindow_.getVisibleRef()},
+        {"Cross References", &xrefsWindow_.getVisibleRef()},
+        {"Call Graph", &callGraphWindow_.getVisibleRef()},
+        {"Search", &searchWindow_.getVisibleRef()},
+    };
+
+    ImGuiViewport *vp = ImGui::GetMainViewport();
+    float baseX = vp->WorkPos.x + 40.0f;
+    float baseY = vp->WorkPos.y + 40.0f;
+    const int step = 24;
+    int offset = 0;
+
+    cascadePos_.clear();
+    for (auto &w : wins) {
+        if (!w.visible || !*w.visible) continue;
+        cascadePos_[w.name] = {baseX + offset, baseY + offset};
+        offset += step;
+    }
+    cascadeRequested_ = true;
+}
+
+void DebuggerGui::applyCascade()
+{
+    struct WinInfo { const char *name; bool *visible; };
+    WinInfo wins[] = {
+        {"CPU Registers", &showCpuRegisters_},
+        {"Instruction History", &showInstructionHistory_},
+        {"Vector Screen", &vectorScreen_.getVisibleRef()},
+        {"Memory Inspector", &memoryInspector_.getVisibleRef()},
+        {"Memory Map", &memoryMap_.getVisibleRef()},
+        {"Disassembly", &disassemblyView_.getVisibleRef()},
+        {"Stack View", &stackView_.getVisibleRef()},
+        {"Breakpoints", &breakpointsWindow_.getVisibleRef()},
+        {"Execution Trace", &executionTrace_.getVisibleRef()},
+        {"I/O & Hardware Inspector", &ioInspector_.getVisibleRef()},
+        {"Functions", &functionsWindow_.getVisibleRef()},
+        {"Cross References", &xrefsWindow_.getVisibleRef()},
+        {"Call Graph", &callGraphWindow_.getVisibleRef()},
+        {"Search", &searchWindow_.getVisibleRef()},
+    };
+
+    for (auto &w : wins) {
+        if (!w.visible || !*w.visible) continue;
+        auto it = cascadePos_.find(w.name);
+        if (it == cascadePos_.end()) continue;
+
+        // Undock from dockspace
+        ImGuiWindow *win = ImGui::FindWindowByName(w.name);
+        if (win) {
+            ImGui::DockContextQueueUndockWindow(ImGui::GetCurrentContext(), win);
+        }
+        // Set position and size BEFORE Begin()
+        ImGui::SetNextWindowPos(ImVec2(it->second.x, it->second.y), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(600, 450), ImGuiCond_Always);
+    }
+    cascadePos_.clear();
+    cascadeRequested_ = false;
+}
+
+void DebuggerGui::layoutTile()
+{
+    // Collect visible window names
+    struct WinInfo { const char *name; bool *visible; };
+    std::vector<WinInfo> visible;
+    WinInfo all[] = {
+        {"CPU Registers", &showCpuRegisters_},
+        {"Instruction History", &showInstructionHistory_},
+        {"Vector Screen", &vectorScreen_.getVisibleRef()},
+        {"Memory Inspector", &memoryInspector_.getVisibleRef()},
+        {"Memory Map", &memoryMap_.getVisibleRef()},
+        {"Disassembly", &disassemblyView_.getVisibleRef()},
+        {"Stack View", &stackView_.getVisibleRef()},
+        {"Breakpoints", &breakpointsWindow_.getVisibleRef()},
+        {"Execution Trace", &executionTrace_.getVisibleRef()},
+        {"I/O & Hardware Inspector", &ioInspector_.getVisibleRef()},
+        {"Functions", &functionsWindow_.getVisibleRef()},
+        {"Cross References", &xrefsWindow_.getVisibleRef()},
+        {"Call Graph", &callGraphWindow_.getVisibleRef()},
+        {"Search", &searchWindow_.getVisibleRef()},
+    };
+    for (auto &w : all) {
+        if (w.visible && *w.visible) visible.push_back(w);
+    }
+    if (visible.empty()) return;
+
+    // Use the saved main dockspace ID (set during render)
+    ImGuiID dsId = mainDockId_;
+    if (dsId == 0) return;
+
+    int n = (int)visible.size();
+    if (n == 1) {
+        ImGui::DockBuilderDockWindow(visible[0].name, dsId);
+        return;
+    }
+
+    // Split dockspace: left column (1/3) and right area (2/3)
+    ImGuiID leftId, rightId;
+    ImGui::DockBuilderSplitNode(dsId, ImGuiDir_Left, 0.33f, &leftId, &rightId);
+
+    // Split right area into top-right and bottom-right
+    ImGuiID topRightId, bottomRightId;
+    ImGui::DockBuilderSplitNode(rightId, ImGuiDir_Up, 0.5f, &topRightId, &bottomRightId);
+
+    // Distribute windows evenly across the three regions
+    int perRegion = (n + 2) / 3;
+    for (int i = 0; i < n; i++) {
+        ImGuiID target;
+        if (i < perRegion) target = leftId;
+        else if (i < 2 * perRegion) target = topRightId;
+        else target = bottomRightId;
+        ImGui::DockBuilderDockWindow(visible[i].name, target);
+    }
+
+    ImGui::DockBuilderFinish(dsId);
+}
+
+// ---------------------------------------------------------------------------
 // Status bar
 // ---------------------------------------------------------------------------
 
@@ -776,5 +952,14 @@ void DebuggerGui::renderStatusBar(IDebugBackend &backend)
     } else {
         ImGui::Text("Status: %s%s   PC: %04X (%s)   Instructions: %llu",
                     stateStr, reasonStr, cpu.pc, funcName.c_str(), (unsigned long long)seq);
+    }
+
+    // Vector Screen hover coordinates (Stage 5.1)
+    if (vectorScreen_.isHoveringScreen()) {
+        auto video = backend.videoModeSnapshot();
+        ImGui::SameLine();
+        ImGui::Text("Screen: %dx%d  X: %d  Y: %d",
+                    video.visibleWidth, video.visibleHeight,
+                    vectorScreen_.hoverScreenX(), vectorScreen_.hoverScreenY());
     }
 }

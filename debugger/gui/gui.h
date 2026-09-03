@@ -54,6 +54,9 @@ public:
 
     // True after the user requested window close.
     bool shouldQuit() const;
+
+    // Apply pending workspace initialization (call between frames).
+    void applyPendingWorkspace();
     
     // Central Navigation API (Stage 3.9)
     void gotoMemory(uint16_t address);
@@ -72,6 +75,9 @@ private:
     void renderInstructionHistory(IDebugBackend &backend);
     void renderStatusBar(IDebugBackend &backend);
     void renderControls(IDebugBackend &backend);
+    void layoutCascade();
+    void layoutTile();
+    void applyCascade();
     
     // Memory Inspector window (Stage 3.3)
     MemoryInspectorWindow memoryInspector_;
@@ -134,4 +140,10 @@ private:
     bool showSaveAsDialog_ = false;
     char saveAsNameBuffer_[256] = "";
     bool showDeleteConfirm_ = false;
+
+    // Cascade / Tile layout state
+    struct CascadePos { float x, y; };
+    std::map<std::string, CascadePos> cascadePos_;
+    bool cascadeRequested_ = false;
+    unsigned int mainDockId_ = 0;
 };

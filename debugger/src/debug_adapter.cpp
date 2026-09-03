@@ -265,12 +265,12 @@ void DebugAdapter::writeCpuRegister(int reg, uint16_t val)
 
 void DebugAdapter::stepInstruction()
 {
-    board.single_step(false);  // false = don't update screen
+    board.single_step(true);  // true = update screen (for Vector Screen snapshot)
 }
 
 void DebugAdapter::executeFrame()
 {
-    board.execute_frame_with_cadence(false, false);
+    board.execute_frame_with_cadence(true, false);
 }
 
 void DebugAdapter::reset(bool loadRom)

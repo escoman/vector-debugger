@@ -91,6 +91,11 @@ int main(int argc, char *argv[])
         gui.beginFrame();
         gui.render(backend);  // DebugBackend& implicitly converts to IDebugBackend&
         gui.endFrame();
+
+        // Workspace init deferred to between frames (Stage 5.1 fix):
+        // writeBuiltinIfMissing creates a temp ImGui context which would
+        // corrupt the main frame state if called during render.
+        gui.applyPendingWorkspace();
     }
 
     // --- Shutdown ---

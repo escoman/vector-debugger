@@ -165,6 +165,19 @@ target_link_libraries(test_workspace
 )
 
 # ---------------------------------------------------------------------------
+# GUI Smoke Test (Stage 5.1)
+# ---------------------------------------------------------------------------
+# Standalone test that spawns v06c-debugger and checks it doesn't crash.
+# No project libraries needed — just POSIX fork/exec/wait.
+
+add_executable(test_gui_smoke
+    ${DBG_TST_DIR}/test_gui_smoke.cpp
+)
+
+# Ensure v06c-debugger is built before running this test
+add_dependencies(test_gui_smoke v06c-debugger)
+
+# ---------------------------------------------------------------------------
 # Dear ImGui sources
 # ---------------------------------------------------------------------------
 

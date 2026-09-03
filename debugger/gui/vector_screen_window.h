@@ -33,6 +33,11 @@ public:
     bool &getVisibleRef() { return visible_; }
     void requestRefresh() { needsRefresh_ = true; }
 
+    // Hover info for main status bar
+    bool isHoveringScreen() const { return hoverScreenX_ >= 0 && hoverScreenY_ >= 0; }
+    int hoverScreenX() const { return hoverScreenX_; }
+    int hoverScreenY() const { return hoverScreenY_; }
+
     // Navigation callbacks (set by GUI main)
     std::function<void(uint16_t address)> onGoToMemoryInspector;
     std::function<void(uint16_t address)> onGoToDisassembly;

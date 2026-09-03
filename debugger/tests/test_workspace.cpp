@@ -82,6 +82,13 @@ static void destroyTestContext(ImGuiContext *ctx)
     ImGui::DestroyContext(ctx);
 }
 
+// Helper: set refs and apply immediately (tests run between frames)
+static void setRefsAndApply(WorkspaceManager &wm, std::vector<WorkspaceManager::WindowVisibility> refs)
+{
+    wm.setWindowVisibilityRefs(std::move(refs));
+    wm.applyPendingWorkspace();
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -114,7 +121,7 @@ static void test_saveWorkspaceToFile()
     wm.initialize(kTestDir);
 
     bool vis = true;
-    wm.setWindowVisibilityRefs({{"TestWindow", &vis}});
+    setRefsAndApply(wm, {{"TestWindow", &vis}});
 
     wm.saveCurrentWorkspace();
 
@@ -136,7 +143,7 @@ static void test_loadWorkspaceFromFile()
     wm.initialize(kTestDir);
 
     bool vis = true;
-    wm.setWindowVisibilityRefs({{"TestWindow", &vis}});
+    setRefsAndApply(wm, {{"TestWindow", &vis}});
     wm.saveCurrentWorkspace();
 
     // Modify and reload
@@ -171,7 +178,7 @@ static void test_visibilitySaveRestoreRoundtrip()
         WorkspaceManager wm;
         wm.initialize(kTestDir);
         bool a = true, b = false;
-        wm.setWindowVisibilityRefs({{"WinA", &a}, {"WinB", &b}});
+        setRefsAndApply(wm, {{"WinA", &a}, {"WinB", &b}});
         wm.saveCurrentWorkspace();
     }
 
@@ -180,7 +187,7 @@ static void test_visibilitySaveRestoreRoundtrip()
         WorkspaceManager wm;
         wm.initialize(kTestDir);
         bool a = false, b = true;  // inverted
-        wm.setWindowVisibilityRefs({{"WinA", &a}, {"WinB", &b}});
+        setRefsAndApply(wm, {{"WinA", &a}, {"WinB", &b}});
         // setWindowVisibilityRefs loads the workspace
         CHECK(a == true, "WinA should be true after restore");
         CHECK(b == false, "WinB should be false after restore");
@@ -201,7 +208,7 @@ static void test_switchBetweenWorkspaces()
     wm.initialize(kTestDir);
 
     bool vis = true;
-    wm.setWindowVisibilityRefs({{"Win", &vis}});
+    setRefsAndApply(wm, {{"Win", &vis}});
 
     // Save Default with vis=true
     vis = true;
@@ -237,7 +244,7 @@ static void test_saveAsCreatesNewWorkspace()
     wm.initialize(kTestDir);
 
     bool vis = true;
-    wm.setWindowVisibilityRefs({{"Win", &vis}});
+    setRefsAndApply(wm, {{"Win", &vis}});
 
     wm.saveWorkspaceAs("MyWorkspace");
     CHECK(wm.currentWorkspaceName() == "MyWorkspace", "current should be MyWorkspace");
@@ -258,7 +265,7 @@ static void test_deleteUserWorkspace()
     wm.initialize(kTestDir);
 
     bool vis = true;
-    wm.setWindowVisibilityRefs({{"Win", &vis}});
+    setRefsAndApply(wm, {{"Win", &vis}});
 
     wm.saveWorkspaceAs("ToDelete");
     CHECK(fileExists(std::string(kTestDir) + "/ToDelete.ini"), "file should exist");
@@ -282,7 +289,7 @@ static void test_cannotDeleteBuiltInWorkspace()
     wm.initialize(kTestDir);
 
     bool vis = true;
-    wm.setWindowVisibilityRefs({{"Win", &vis}});
+    setRefsAndApply(wm, {{"Win", &vis}});
 
     wm.deleteWorkspace("Default");
     // Default should still exist
@@ -303,7 +310,7 @@ static void test_resetRestoresPresetLayout()
     wm.initialize(kTestDir);
 
     bool vis = true;
-    wm.setWindowVisibilityRefs({{"Win", &vis}});
+    setRefsAndApply(wm, {{"Win", &vis}});
 
     // Modify and save
     vis = false;
@@ -311,6 +318,7 @@ static void test_resetRestoresPresetLayout()
 
     // Reset should regenerate from preset
     wm.resetWorkspace();
+    wm.processDeferredOps();
     // After reset, the file should be regenerated
     CHECK(fileExists(std::string(kTestDir) + "/Default.ini"), "Default.ini should exist after reset");
 
@@ -329,7 +337,7 @@ static void test_missingFileFallsToDefault()
     wm.initialize(kTestDir);
 
     bool vis = true;
-    wm.setWindowVisibilityRefs({{"Win", &vis}});
+    setRefsAndApply(wm, {{"Win", &vis}});
 
     // Try to switch to non-existent workspace
     wm.switchWorkspace("NonExistent");
@@ -351,7 +359,7 @@ static void test_corruptedFileFallsToDefault()
     wm.initialize(kTestDir);
 
     bool vis = true;
-    wm.setWindowVisibilityRefs({{"Win", &vis}});
+    setRefsAndApply(wm, {{"Win", &vis}});
 
     // Write garbage to Default.ini
     {
@@ -364,7 +372,7 @@ static void test_corruptedFileFallsToDefault()
     WorkspaceManager wm2;
     wm2.initialize(kTestDir);
     bool vis2 = true;
-    wm2.setWindowVisibilityRefs({{"Win", &vis2}});
+    setRefsAndApply(wm2, {{"Win", &vis2}});
     // loadFromFile returns true even with garbage (no crash), visibility unchanged
     // This tests that it doesn't crash on corrupted data
 
@@ -385,7 +393,7 @@ static void test_persistenceAcrossRestart()
         WorkspaceManager wm;
         wm.initialize(kTestDir);
         bool vis = true;
-        wm.setWindowVisibilityRefs({{"Win", &vis}});
+        setRefsAndApply(wm, {{"Win", &vis}});
         vis = false;
         wm.saveCurrentWorkspace();
         wm.shutdown();
@@ -396,7 +404,7 @@ static void test_persistenceAcrossRestart()
         WorkspaceManager wm;
         wm.initialize(kTestDir);
         bool vis = true;
-        wm.setWindowVisibilityRefs({{"Win", &vis}});
+        setRefsAndApply(wm, {{"Win", &vis}});
         // After loading, vis should be restored to false
         CHECK(vis == false, "visibility should persist across restart");
     }
@@ -416,13 +424,13 @@ static void test_sanitizedFilenames()
     wm.initialize(kTestDir);
 
     bool vis = true;
-    wm.setWindowVisibilityRefs({{"Win", &vis}});
+    setRefsAndApply(wm, {{"Win", &vis}});
 
     // Try to save with path traversal
     wm.saveWorkspaceAs("../../../etc/evil");
-    // Sanitizer strips path components, so the file is just "evil.ini"
-    CHECK(fileExists(std::string(kTestDir) + "/evil.ini"),
-          "sanitized filename should strip path components");
+    // Sanitizer replaces '/' with '_', so the file is ".._.._.._etc_evil.ini"
+    CHECK(fileExists(std::string(kTestDir) + "/.._.._.._etc_evil.ini"),
+          "sanitized filename should replace slashes with underscores");
     CHECK(!fileExists("/etc/evil.ini"), "should not create file outside workspace dir");
 
     destroyTestContext(ctx);
@@ -440,7 +448,7 @@ static void test_builtInWorkspaceList()
     wm.initialize(kTestDir);
 
     bool vis = true;
-    wm.setWindowVisibilityRefs({{"Win", &vis}});
+    setRefsAndApply(wm, {{"Win", &vis}});
 
     CHECK(wm.isBuiltIn("Default"), "Default should be built-in");
     CHECK(wm.isBuiltIn("Screen Analysis"), "Screen Analysis should be built-in");
@@ -465,7 +473,7 @@ static void test_listWorkspacesReturnsAll()
     wm.initialize(kTestDir);
 
     bool vis = true;
-    wm.setWindowVisibilityRefs({{"Win", &vis}});
+    setRefsAndApply(wm, {{"Win", &vis}});
 
     wm.saveWorkspaceAs("Custom1");
     wm.saveWorkspaceAs("Custom2");

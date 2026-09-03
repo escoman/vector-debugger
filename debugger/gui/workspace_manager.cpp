@@ -74,14 +74,28 @@ void WorkspaceManager::shutdown()
 
 void WorkspaceManager::setWindowVisibilityRefs(std::vector<WindowVisibility> refs)
 {
+    // Just store refs as pending — actual registration and workspace loading
+    // happen in applyPendingWorkspace() which must be called between frames.
+    pendingVisibilityRefs_ = std::move(refs);
+    pendingVisibilityRefsSet_ = true;
+}
+
+void WorkspaceManager::applyPendingWorkspace()
+{
+    if (!pendingVisibilityRefsSet_) return;
+
+    // Register visibility refs
     visibilityRefs_.clear();
-    for (auto &r : refs) {
+    for (auto &r : pendingVisibilityRefs_) {
         if (r.visiblePtr) {
             visibilityRefs_[r.name] = r.visiblePtr;
         }
     }
+    pendingVisibilityRefs_.clear();
+    pendingVisibilityRefsSet_ = false;
 
-    // Now that visibility refs are set, generate built-in preset files
+    // Generate built-in preset files (uses temp ImGui context — safe here
+    // because this is called between frames, not within a frame)
     for (const auto &name : builtInNames_) {
         writeBuiltinIfMissing(name);
     }
@@ -153,17 +167,31 @@ void WorkspaceManager::deleteWorkspace(const std::string &name)
 
 void WorkspaceManager::resetWorkspace()
 {
-    auto it = presets_.find(currentName_);
-    if (it != presets_.end()) {
-        // Regenerate from preset
-        writeBuiltinIfMissing(currentName_);
-        loadFromFile(currentName_);
+    // Delete the current workspace file so writeBuiltinIfMissing regenerates it.
+    // The actual regeneration happens in processDeferredOps() between frames,
+    // because it requires a temporary ImGui context.
+    if (isBuiltIn(currentName_)) {
+        std::string path = workspaceFilePath(currentName_);
+        unlink(path.c_str());
+        deferredResetNeeded_ = true;
     } else {
         // User workspace — reset to Default layout
-        writeBuiltinIfMissing("Default");
-        loadFromFile("Default");
+        std::string path = workspaceFilePath("Default");
+        unlink(path.c_str());
+        deferredResetNeeded_ = true;
     }
     dirty_ = false;
+}
+
+void WorkspaceManager::processDeferredOps()
+{
+    if (deferredResetNeeded_) {
+        deferredResetNeeded_ = false;
+        std::string target = currentName_;
+        if (!isBuiltIn(target)) target = "Default";
+        writeBuiltinIfMissing(target);
+        loadFromFile(target);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -333,11 +361,14 @@ void WorkspaceManager::writeBuiltinIfMissing(const std::string &name)
     auto it = presets_.find(name);
     if (it == presets_.end()) return;
 
-    // Generate preset layout using a temporary ImGui context
+    // Generate preset layout using a temporary ImGui context.
+    // This MUST be called between frames (after Render, before NewFrame)
+    // to avoid corrupting the main context's frame state.
     ImGuiContext *tempCtx = ImGui::CreateContext();
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.DisplaySize = ImVec2(1920, 1080);
+    io.DeltaTime = 1.0f / 60.0f;
 
     // Build font atlas (required before NewFrame in v1.93+)
     io.Fonts->GetTexDataAsRGBA32(nullptr, nullptr, nullptr, nullptr);
@@ -356,7 +387,8 @@ void WorkspaceManager::writeBuiltinIfMissing(const std::string &name)
     it->second(dockspaceId);
     ImGui::DockBuilderFinish(dockspaceId);
 
-    // Process one frame to finalize dock tree and generate ini settings.
+    // Complete a full frame cycle in the temp context so that
+    // FrameCountEnded == FrameCount (required by NewFrame sanity checks).
     // LoadIniSettingsFromMemory("") marks settings as loaded, preventing
     // the assertion in UpdateSettings() that expects SettingsWindows empty.
     ImGui::LoadIniSettingsFromMemory("");
@@ -379,6 +411,8 @@ void WorkspaceManager::writeBuiltinIfMissing(const std::string &name)
     }
 
     ImGui::DestroyContext(tempCtx);
+    // CreateContext/DestroyContext automatically save/restore GImGui,
+    // so the caller's context is restored with its frame state intact.
 }
 
 // ---------------------------------------------------------------------------
@@ -427,15 +461,16 @@ std::string WorkspaceManager::sanitizeFilename(const std::string &name)
 {
     std::string result = name;
 
-    // Remove path components
-    size_t lastSlash = result.find_last_of("/\\");
+    // Strip Windows-style path components (backslash is never valid in names)
+    size_t lastSlash = result.find_last_of("\\");
     if (lastSlash != std::string::npos) {
         result = result.substr(lastSlash + 1);
     }
 
-    // Replace invalid characters with underscore
+    // Replace all other invalid characters with underscore
+    // (including forward slash — "I/O Analysis" → "I_O Analysis")
     for (char &c : result) {
-        if (c == '/' || c == '\\' || c == ':' || c == '*' ||
+        if (c == '/' || c == ':' || c == '*' ||
             c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
             c = '_';
         }
