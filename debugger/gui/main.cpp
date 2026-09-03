@@ -120,9 +120,25 @@ int main(int argc, char *argv[])
     if (argc > 1) {
         std::string rom_path = argv[1];
         uint32_t org = 0;
+        
         if (argc > 2) {
+            // Explicit address provided
             org = std::strtoul(argv[2], nullptr, 0);
+        } else {
+            // Auto-detect load address based on file extension
+            // .rom files load at 0x0100 (after interrupt vectors)
+            // .r0m files load at 0x0000 (raw memory image)
+            size_t dot_pos = rom_path.rfind('.');
+            if (dot_pos != std::string::npos) {
+                std::string ext = rom_path.substr(dot_pos);
+                if (ext == ".rom") {
+                    org = 0x0100;
+                } else if (ext == ".r0m") {
+                    org = 0x0000;
+                }
+            }
         }
+        
         if (!backend.loadRom(rom_path, org)) {
             std::fprintf(stderr, "Failed to load ROM: %s\n", rom_path.c_str());
         }
