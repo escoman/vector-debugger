@@ -7,6 +7,12 @@
 #include "disassembly_window.h"
 #include "execution_trace_window.h"
 #include "io_inspector_window.h"
+#include "vector_screen_window.h"
+#include "memory_map_window.h"
+#include "functions_window.h"
+#include "xrefs_window.h"
+#include "call_graph_window.h"
+#include "search_window.h"
 #include "backend.h"
 #include "events.h"
 
@@ -83,6 +89,24 @@ private:
     
     // I/O Inspector window (Stage 3.11)
     IoInspectorWindow ioInspector_;
+    
+    // Vector Screen window (Stage 4.3)
+    VectorScreenWindow vectorScreen_;
+    
+    // Memory Map window (Stage 4.4)
+    MemoryMapWindow memoryMap_;
+    
+    // Functions window (Stage 4.5)
+    FunctionsWindow functionsWindow_;
+    
+    // Xrefs window (Stage 4.7)
+    XrefsWindow xrefsWindow_;
+    
+    // Call Graph window (Stage 4.7)
+    CallGraphWindow callGraphWindow_;
+    
+    // Search window (Stage 4.8)
+    SearchWindow searchWindow_;
     
     // Instruction History cache (Stage 3.12 — avoid per-frame snapshot)
     std::vector<InstructionEvent> cachedHistEntries_;

@@ -1,5 +1,6 @@
 #include "breakpoints_window.h"
 #include "disassembler.h"
+#include "symbol_database.h"
 
 // Dear ImGui
 #include "imgui.h"
@@ -39,6 +40,7 @@ void BreakpointsWindow::render(DebugBackend &backend)
     
     // -- Breakpoint list --
     auto bps = backend.getBreakpoints();
+    auto &symbols = backend.symbolDatabase();  // Stage 4.10: for function names
     
     if (bps.empty()) {
         ImGui::TextDisabled("(no breakpoints)");
@@ -62,9 +64,14 @@ void BreakpointsWindow::render(DebugBackend &backend)
             }
             ImGui::NextColumn();
             
-            // Address (clickable to select)
-            char addrStr[16];
-            snprintf(addrStr, sizeof(addrStr), "%04X", bp.address);
+            // Address (clickable to select) — Stage 4.10: show function name
+            char addrStr[32];
+            std::string funcName = symbols.displayName(bp.address);
+            if (funcName.empty()) {
+                snprintf(addrStr, sizeof(addrStr), "%04X", bp.address);
+            } else {
+                snprintf(addrStr, sizeof(addrStr), "%04X (%s)", bp.address, funcName.c_str());
+            }
             if (ImGui::Selectable(addrStr, i == selectedBpIndex_,
                                    ImGuiSelectableFlags_SpanAllColumns)) {
                 selectedBpIndex_ = i;

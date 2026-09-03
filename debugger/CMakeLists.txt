@@ -63,6 +63,9 @@ set(DBG_SOURCES
     ${DBG_SRC_DIR}/backend.cpp
     ${DBG_SRC_DIR}/disassembler.cpp
     ${DBG_SRC_DIR}/debug_memory.cpp
+    ${DBG_SRC_DIR}/symbol_database.cpp
+    ${DBG_SRC_DIR}/project_file.cpp
+    ${DBG_SRC_DIR}/vram_mapping.cpp
 )
 
 set(TEST_SOURCES
@@ -95,6 +98,24 @@ target_compile_definitions(test_backend PRIVATE DEBUGGER_NO_BOARD)
 
 target_link_libraries(test_backend
     ${Boost_LIBRARIES}
+)
+
+# ---------------------------------------------------------------------------
+# Symbol Database test executable (Stage 4.1)
+# ---------------------------------------------------------------------------
+
+add_executable(test_symbol_database
+    ${DBG_TST_DIR}/test_symbol_database.cpp
+    ${DBG_SRC_DIR}/symbol_database.cpp
+)
+
+# ---------------------------------------------------------------------------
+# VRAM Mapping test executable (Stage 4 Enhanced)
+# ---------------------------------------------------------------------------
+
+add_executable(test_vram_mapping
+    ${DBG_TST_DIR}/test_vram_mapping.cpp
+    ${DBG_SRC_DIR}/vram_mapping.cpp
 )
 
 # ---------------------------------------------------------------------------
@@ -151,6 +172,12 @@ set(GUI_SOURCES
     ${DBG_GUI_DIR}/disassembly_window.cpp
     ${DBG_GUI_DIR}/execution_trace_window.cpp
     ${DBG_GUI_DIR}/io_inspector_window.cpp
+    ${DBG_GUI_DIR}/vector_screen_window.cpp
+    ${DBG_GUI_DIR}/memory_map_window.cpp
+    ${DBG_GUI_DIR}/functions_window.cpp
+    ${DBG_GUI_DIR}/xrefs_window.cpp
+    ${DBG_GUI_DIR}/call_graph_window.cpp
+    ${DBG_GUI_DIR}/search_window.cpp
 )
 
 add_executable(debugger_gui

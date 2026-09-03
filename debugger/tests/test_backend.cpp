@@ -24,6 +24,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <chrono>
 
 #include "memory.h"
@@ -132,6 +133,19 @@ static uint16_t cpu_hl(const CpuState &s)
                 _test_ok = false; \
             } else { \
                 printf("  \033[46;30m ok \033[0m %s = 0x%X\n", msg, _a); \
+            } \
+        } while(0)
+
+#define CHECK_STR(exp, act, msg) \
+        do { \
+            std::string _e(exp); \
+            std::string _a(act); \
+            if (_e != _a) { \
+                printf("  \033[41;97m FAIL \033[0m %s: expected \"%s\", got \"%s\" (line %d)\n", \
+                       msg, _e.c_str(), _a.c_str(), __LINE__); \
+                _test_ok = false; \
+            } else { \
+                printf("  \033[46;30m ok \033[0m %s = \"%s\"\n", msg, _a.c_str()); \
             } \
         } while(0)
 
@@ -3948,6 +3962,131 @@ static void test_integration_quit_while_running()
 }
 
 // ---------------------------------------------------------------------------
+// Stage 4.2 — Backend integration tests
+// ---------------------------------------------------------------------------
+
+static void test_s42_symbol_database_access()
+{
+    TEST_BEGIN("S4.2: Symbol database access through backend");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+
+    // Symbol database should be accessible
+    SymbolDatabase &db = dbg->symbolDatabase();
+    CHECK(db.addSymbol(0x0345, "DRAW_SPRITE", SymbolType::Function), "add symbol via backend");
+    CHECK(db.addSymbol(0x4000, "PLAYER_X", SymbolType::Label), "add label via backend");
+
+    const DebugSymbol *sym = db.findSymbol(0x0345);
+    CHECK(sym != nullptr, "find symbol via backend");
+    CHECK_STR("DRAW_SPRITE", sym->name, "correct name");
+
+    CHECK_EQ(2u, (unsigned)db.symbolCount(), "2 symbols");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+static void test_s42_activity_execute_counter()
+{
+    TEST_BEGIN("S4.2: Activity execute counter increments on step");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_test_rom(mem);
+
+    // Step 3 instructions
+    dbg->stepInstruction();
+    dbg->stepInstruction();
+    dbg->stepInstruction();
+
+    auto activity = dbg->activitySnapshot();
+    CHECK_EQ(65536u, (unsigned)activity.executeCount.size(), "executeCount size = 64K");
+
+    // Test ROM: 0000: LXI H,C000 (3 bytes), 0003: MVI A,42 (2 bytes)
+    // After 3 steps: 0000 executed once, 0003 executed once, 0005 executed once
+    CHECK(activity.executeCount[0x0000] >= 1, "0000 executed at least once");
+    CHECK(activity.executeCount[0x0003] >= 1, "0003 executed at least once");
+    CHECK(activity.executeCount[0x0005] >= 1, "0005 executed at least once");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+static void test_s42_activity_read_write_counters()
+{
+    TEST_BEGIN("S4.2: Activity read/write counters");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_test_rom(mem);
+
+    // Step a few instructions (test ROM writes to C000)
+    for (int i = 0; i < 5; ++i) {
+        dbg->stepInstruction();
+    }
+
+    auto activity = dbg->activitySnapshot();
+    CHECK_EQ(65536u, (unsigned)activity.readCount.size(), "readCount size = 64K");
+    CHECK_EQ(65536u, (unsigned)activity.writeCount.size(), "writeCount size = 64K");
+
+    // Memory writes should have happened (ROM writes to C000 via MOV M,A)
+    // At least some writes should be recorded
+    uint64_t totalWrites = 0;
+    for (int i = 0; i < 65536; ++i) {
+        totalWrites += activity.writeCount[i];
+    }
+    CHECK(totalWrites > 0, "some writes recorded");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+static void test_s42_activity_reset_clears()
+{
+    TEST_BEGIN("S4.2: Activity counters cleared on reset");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_test_rom(mem);
+
+    dbg->stepInstruction();
+    dbg->stepInstruction();
+
+    auto before = dbg->activitySnapshot();
+    CHECK(before.executeCount[0x0000] > 0, "execute count > 0 before reset");
+
+    dbg->reset();
+
+    auto after = dbg->activitySnapshot();
+    CHECK_EQ(0u, (unsigned)after.executeCount[0x0000], "execute count = 0 after reset");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+static void test_s42_screen_snapshot_no_board()
+{
+    TEST_BEGIN("S4.2: Screen snapshot returns empty without board");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+
+    auto snap = dbg->screenSnapshot();
+    CHECK_EQ(0u, (unsigned)snap.width, "width = 0 without board");
+    CHECK_EQ(0u, (unsigned)snap.height, "height = 0 without board");
+    CHECK(snap.pixels.empty(), "no pixels without board");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -4086,6 +4225,13 @@ int main()
     test_integration_reset_bp_preserved();
     test_integration_reset_history_preserved();
     test_integration_quit_while_running();
+
+    // Stage 4.2 — Backend integration tests
+    test_s42_symbol_database_access();
+    test_s42_activity_execute_counter();
+    test_s42_activity_read_write_counters();
+    test_s42_activity_reset_clears();
+    test_s42_screen_snapshot_no_board();
 
     printf("\n\033[0;36m=== Results: %d/%d passed", tests_passed, tests_run);
     if (tests_failed > 0) {

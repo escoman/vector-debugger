@@ -9,6 +9,7 @@
 #include "memory.h"
 #ifndef DEBUGGER_NO_BOARD
 #include "board.h"
+#include "tv.h"
 #include "util.h"
 #endif
 
@@ -70,6 +71,7 @@ DebugBackend::DebugBackend(Memory &memory)
     , fetchRemaining_(0)
     , impl_(new Impl())
 {
+    clearActivityCounters();
     installMemoryCallbacks();
 }
 
@@ -368,6 +370,7 @@ void DebugBackend::reset()
     impl_->memHistory.clear();
     impl_->ioHistory.clear();
     impl_->clearStats();
+    clearActivityCounters();
 }
 
 StepResult DebugBackend::stepInstruction()
@@ -437,6 +440,9 @@ StepResult DebugBackend::stepInstruction()
     ie.after     = r.after;
 
     impl_->instrHistory.push(ie);
+
+    // Stage 4.2: increment per-address execute counter
+    executeCount_[r.pcBefore]++;
 
     // --- trace output (Stage 1 backward compatibility) ---
     if (onTrace) {
@@ -660,6 +666,15 @@ void DebugBackend::onMemoryWrite(uint32_t virt, uint32_t phys,
     uint16_t addr = ev.virt;
     impl_->memStats[addr].writes++;
     impl_->memStats[addr].lastWriteSequence = instructionSequence_;
+
+    // Enhanced Vector Screen: track VRAM writes (0xC000..0xC0FF)
+    if (addr >= 0xC000 && addr < 0xC100) {
+        std::lock_guard<std::mutex> lock(vramWriteMutex_);
+        int idx = addr - 0xC000;
+        vramLastWrite_[idx].value    = value;
+        vramLastWrite_[idx].pc       = static_cast<uint16_t>(i8080_pc());
+        vramLastWrite_[idx].sequence = instructionSequence_;
+    }
 }
 
 void DebugBackend::onIoInput(uint8_t port, uint8_t value)
@@ -686,6 +701,17 @@ void DebugBackend::onIoOutput(uint8_t port, uint8_t value)
     ev.value = value;
 
     impl_->ioHistory.push(ev);
+
+    // Enhanced Vector Screen: track PPI port writes for video mode.
+    // Port 0x03 → PA (ScrollStart), Port 0x02 → PB (Mode512 = bit 4).
+    // This mirrors IO::realoutput() register updates through the HAL path.
+    if (port == 0x03) {
+        std::lock_guard<std::mutex> lock(ioRegMutex_);
+        ioPA_ = value;
+    } else if (port == 0x02) {
+        std::lock_guard<std::mutex> lock(ioRegMutex_);
+        ioPB_ = value;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -763,6 +789,132 @@ std::vector<MemoryStats> DebugBackend::memoryStatsSnapshot() const
     // This is ~2MB; acceptable for UI refresh at low frequency.
     return std::vector<MemoryStats>(
         impl_->memStats, impl_->memStats + 65536);
+}
+
+// ---------------------------------------------------------------------------
+// Stage 4.2: Symbol database
+// ---------------------------------------------------------------------------
+
+SymbolDatabase &DebugBackend::symbolDatabase()
+{
+    return symbols_;
+}
+
+const SymbolDatabase &DebugBackend::symbolDatabase() const
+{
+    return symbols_;
+}
+
+// ---------------------------------------------------------------------------
+// Stage 4.2: Screen snapshot
+// ---------------------------------------------------------------------------
+
+DebugBackend::ScreenSnapshot DebugBackend::screenSnapshot() const
+{
+    ScreenSnapshot snap;
+
+#ifndef DEBUGGER_NO_BOARD
+    if (!board_) return snap;
+
+    std::lock_guard<std::mutex> lock(screenMutex_);
+
+    TV &tv = board_->get_tv();
+    uint32_t *pixels = tv.pixels();
+    if (!pixels) return snap;
+
+    snap.width  = DEFAULT_SCREEN_WIDTH;
+    snap.height = DEFAULT_SCREEN_HEIGHT;
+    size_t total = static_cast<size_t>(snap.width) * snap.height;
+    snap.pixels.assign(pixels, pixels + total);
+#endif
+
+    return snap;
+}
+
+// ---------------------------------------------------------------------------
+// Stage 4.2: Activity snapshot
+// ---------------------------------------------------------------------------
+
+DebugBackend::ActivitySnapshot DebugBackend::activitySnapshot() const
+{
+    ActivitySnapshot snap;
+    snap.executeCount.assign(executeCount_, executeCount_ + 65536);
+    snap.readCount.resize(65536);
+    snap.writeCount.resize(65536);
+    for (int i = 0; i < 65536; ++i) {
+        snap.readCount[i]  = impl_->memStats[i].reads;
+        snap.writeCount[i] = impl_->memStats[i].writes;
+    }
+    return snap;
+}
+
+void DebugBackend::clearActivityCounters()
+{
+    std::memset(executeCount_, 0, sizeof(executeCount_));
+
+    // Also clear VRAM write tracking
+    {
+        std::lock_guard<std::mutex> lock(vramWriteMutex_);
+        for (int i = 0; i < 256; ++i) {
+            vramLastWrite_[i] = VramWriteInfo();
+        }
+    }
+
+    // Reset tracked IO port values to defaults
+    {
+        std::lock_guard<std::mutex> lock(ioRegMutex_);
+        ioPA_ = 0xFF;
+        ioPB_ = 0xFF;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Enhanced Vector Screen: Video mode snapshot
+// ---------------------------------------------------------------------------
+
+DebugBackend::VideoModeSnapshot DebugBackend::videoModeSnapshot() const
+{
+    VideoModeSnapshot snap;
+
+#ifndef DEBUGGER_NO_BOARD
+    if (!board_) return snap;
+
+    // Framebuffer dimensions from TV
+    snap.screenWidth  = DEFAULT_SCREEN_WIDTH;
+    snap.screenHeight = DEFAULT_SCREEN_HEIGHT;
+
+    // Read video mode from tracked IO port values (not from IO directly).
+    // ioPB_ bit 4 = Mode512, ioPA_ = ScrollStart (PA).
+    // These are updated in onIoOutput() via the HAL instrumentation path.
+    {
+        std::lock_guard<std::mutex> lock(ioRegMutex_);
+        snap.mode512     = (ioPB_ & 0x10) != 0;
+        snap.scrollValue  = ioPA_;
+    }
+
+    snap.visibleWidth  = snap.mode512 ? 512 : 256;
+    snap.visibleHeight = 256;
+    snap.pixelsPerByte = snap.mode512 ? 4 : 8;
+
+    // Border offsets: (screenWidth - visibleWidth) / 2 for horizontal,
+    // (screenHeight - visibleHeight) / 2 for vertical
+    snap.borderLeft = (snap.screenWidth - snap.visibleWidth) / 2;
+    snap.borderTop  = (snap.screenHeight - snap.visibleHeight) / 2;
+#endif
+
+    return snap;
+}
+
+// ---------------------------------------------------------------------------
+// Enhanced Vector Screen: VRAM write snapshot
+// ---------------------------------------------------------------------------
+
+DebugBackend::VramWriteSnapshot DebugBackend::vramWriteSnapshot() const
+{
+    VramWriteSnapshot snap;
+    std::lock_guard<std::mutex> lock(vramWriteMutex_);
+    snap.lastWrite.assign(vramLastWrite_, vramLastWrite_ + 256);
+    return snap;
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 #include "execution_trace_window.h"
 #include "disassembler.h"
 #include "opcode_info.h"
+#include "symbol_database.h"
 
 // Dear ImGui
 #include "imgui.h"
@@ -95,6 +96,9 @@ void ExecutionTraceWindow::renderTraceTable(DebugBackend &backend)
         return;
     }
 
+    // Get symbol database for function name resolution (Stage 4.10)
+    auto &symbols = backend.symbolDatabase();
+
     // Determine the range of entries to display (last maxEntries_)
     size_t totalEntries = cachedEntries_.size();
     size_t startIdx = 0;
@@ -110,8 +114,8 @@ void ExecutionTraceWindow::renderTraceTable(DebugBackend &backend)
 
     // Column header
     ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f),
-                       "%-8s  %-4s  %-10s  %-20s  %-6s",
-                       "Seq", "PC", "Bytes", "Instruction", "Cycles");
+                       "%-8s  %-4s  %-10s  %-20s  %-6s  %-15s",
+                       "Seq", "PC", "Bytes", "Instruction", "Cycles", "Function");
 
     int displayedCount = 0;
     int lastDisplayedIndex = -1;
@@ -154,14 +158,21 @@ void ExecutionTraceWindow::renderTraceTable(DebugBackend &backend)
                      ev.opcode, ev.operandBytes[0], ev.operandBytes[1]);
         }
 
+        // Stage 4.10: Get function name for this address
+        std::string funcName = symbols.displayName(ev.pcBefore);
+        if (funcName.empty()) {
+            funcName = "-";
+        }
+
         // Render as selectable line
-        char line[128];
-        snprintf(line, sizeof(line), "%-8llu  %04X  %-10s  %-20s  %-6d",
+        char line[160];
+        snprintf(line, sizeof(line), "%-8llu  %04X  %-10s  %-20s  %-6d  %-15s",
                  (unsigned long long)ev.sequence,
                  ev.pcBefore,
                  bytesStr,
                  instr.text.c_str(),
-                 ev.cycles);
+                 ev.cycles,
+                 funcName.c_str());
 
         bool isSelected = false;
         bool clicked = ImGui::Selectable(line, isSelected,

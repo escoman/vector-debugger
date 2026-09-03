@@ -223,6 +223,21 @@ void DebuggerGui::render(DebugBackend &backend, Memory &memory)
     ioInspector_.onGoToDisassembly = [this](uint16_t a) { gotoDisassembly(a); };
     ioInspector_.onGoToMemoryInspector = [this](uint16_t a) { gotoMemory(a); };
     
+    memoryMap_.onGoToDisassembly = [this](uint16_t a) { gotoDisassembly(a); };
+    memoryMap_.onGoToMemoryInspector = [this](uint16_t a) { gotoMemory(a); };
+    
+    functionsWindow_.onGoToDisassembly = [this](uint16_t a) { gotoDisassembly(a); };
+    functionsWindow_.onGoToMemoryInspector = [this](uint16_t a) { gotoMemory(a); };
+    
+    xrefsWindow_.onGoToDisassembly = [this](uint16_t a) { gotoDisassembly(a); };
+    
+    searchWindow_.onGoToDisassembly = [this](uint16_t a) { gotoDisassembly(a); };
+    searchWindow_.onGoToMemoryInspector = [this](uint16_t a) { gotoMemory(a); };
+    
+    // Stage 4 Enhanced: Vector Screen navigation callbacks
+    vectorScreen_.onGoToMemoryInspector = [this](uint16_t a) { gotoMemory(a); };
+    vectorScreen_.onGoToDisassembly = [this](uint16_t a) { gotoDisassembly(a); };
+    
     // Render Memory Inspector window (separate, movable window)
     memoryInspector_.render(backend);
     
@@ -240,6 +255,24 @@ void DebuggerGui::render(DebugBackend &backend, Memory &memory)
     
     // Render I/O Inspector window (Stage 3.11)
     ioInspector_.render(backend);
+    
+    // Render Vector Screen window (Stage 4.3)
+    vectorScreen_.render(backend);
+    
+    // Render Memory Map window (Stage 4.4)
+    memoryMap_.render(backend);
+    
+    // Render Functions window (Stage 4.5)
+    functionsWindow_.render(backend);
+    
+    // Render Xrefs window (Stage 4.7)
+    xrefsWindow_.render(backend);
+    
+    // Render Call Graph window (Stage 4.7)
+    callGraphWindow_.render(backend);
+    
+    // Render Search window (Stage 4.8)
+    searchWindow_.render(backend);
 }
 
 // ---------------------------------------------------------------------------
@@ -453,6 +486,11 @@ void DebuggerGui::renderControls(DebugBackend &backend)
             disassemblyView_.requestRefresh();
             executionTrace_.requestRefresh();
             ioInspector_.requestRefresh();
+            vectorScreen_.requestRefresh();
+            memoryMap_.requestRefresh();
+            functionsWindow_.requestRefresh();
+            xrefsWindow_.requestRefresh();
+            callGraphWindow_.requestRefresh();
             histNeedsRefresh_ = true;
         }
         ImGui::SameLine();
@@ -468,6 +506,11 @@ void DebuggerGui::renderControls(DebugBackend &backend)
             disassemblyView_.requestRefresh();
             executionTrace_.requestRefresh();
             ioInspector_.requestRefresh();
+            vectorScreen_.requestRefresh();
+            memoryMap_.requestRefresh();
+            functionsWindow_.requestRefresh();
+            xrefsWindow_.requestRefresh();
+            callGraphWindow_.requestRefresh();
             histNeedsRefresh_ = true;
         }
     } else {
@@ -485,6 +528,7 @@ void DebuggerGui::renderControls(DebugBackend &backend)
         disassemblyView_.requestRefresh();
         executionTrace_.requestRefresh();
         ioInspector_.requestRefresh();
+        vectorScreen_.requestRefresh();
         histNeedsRefresh_ = true;
     }
     
@@ -523,6 +567,36 @@ void DebuggerGui::renderControls(DebugBackend &backend)
     if (ImGui::Button("I/O Inspector")) {
         ioInspector_.setVisible(!ioInspector_.isVisible());
     }
+    
+    // Vector Screen toggle (Stage 4.3)
+    ImGui::SameLine();
+    if (ImGui::Button("Vector Screen")) {
+        vectorScreen_.setVisible(!vectorScreen_.isVisible());
+    }
+    
+    // Memory Map toggle (Stage 4.4)
+    ImGui::SameLine();
+    if (ImGui::Button("Memory Map")) {
+        memoryMap_.setVisible(!memoryMap_.isVisible());
+    }
+    
+    // Functions toggle (Stage 4.5)
+    ImGui::SameLine();
+    if (ImGui::Button("Functions")) {
+        functionsWindow_.setVisible(!functionsWindow_.isVisible());
+    }
+    
+    // Call Graph toggle (Stage 4.7)
+    ImGui::SameLine();
+    if (ImGui::Button("Call Graph")) {
+        callGraphWindow_.setVisible(!callGraphWindow_.isVisible());
+    }
+    
+    // Search toggle (Stage 4.8)
+    ImGui::SameLine();
+    if (ImGui::Button("Search")) {
+        searchWindow_.setVisible(!searchWindow_.isVisible());
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -559,6 +633,13 @@ void DebuggerGui::renderStatusBar(DebugBackend &backend)
         default: break;
     }
 
-    ImGui::Text("Status: %s%s   PC: %04X   Instructions: %llu",
-                stateStr, reasonStr, cpu.pc, (unsigned long long)seq);
+    // Stage 4.10: Show current function name if PC is inside a function
+    std::string funcName = backend.symbolDatabase().displayName(cpu.pc);
+    if (funcName.empty()) {
+        ImGui::Text("Status: %s%s   PC: %04X   Instructions: %llu",
+                    stateStr, reasonStr, cpu.pc, (unsigned long long)seq);
+    } else {
+        ImGui::Text("Status: %s%s   PC: %04X (%s)   Instructions: %llu",
+                    stateStr, reasonStr, cpu.pc, funcName.c_str(), (unsigned long long)seq);
+    }
 }

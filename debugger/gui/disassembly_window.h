@@ -60,6 +60,13 @@ private:
     
     char addressInput_[8] = "0000";
     
+    // Stage 4.6: inline editing for symbols/comments
+    bool editingDefineFunc_ = false;
+    bool editingDefineLabel_ = false;
+    bool editingComment_ = false;
+    uint16_t editingAddress_ = 0;
+    char editBuffer_[64] = "";
+    
     // Render sub-components
     void renderToolbar(DebugBackend &backend);
     void renderDisassemblyList(DebugBackend &backend);

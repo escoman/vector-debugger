@@ -1,6 +1,7 @@
 #include "disassembly_window.h"
 #include "disassembler.h"
 #include "opcode_info.h"
+#include "symbol_database.h"
 
 // Dear ImGui
 #include "imgui.h"
@@ -115,6 +116,9 @@ void DisassemblyWindow::renderDisassemblyList(DebugBackend &backend)
     CpuState cpu = backend.getCpuState();
     uint16_t pc = cpu.pc;
     
+    // Get symbol database for name resolution
+    auto &symbols = backend.symbolDatabase();
+    
     // Determine the start address for decoding
     uint16_t startAddr;
     if (followPc_) {
@@ -215,9 +219,23 @@ void DisassemblyWindow::renderDisassemblyList(DebugBackend &backend)
         
         if (isPc) pcLineIndex = displayedCount;
         
+        // Stage 4.6: Check if this address has a symbol label
+        const DebugSymbol *sym = symbols.findSymbol(lineAddr);
+        bool hasLabel = (sym != nullptr);
+        
+        // Stage 4.6: Check if this address has a comment
+        bool hasComment = hasLabel && !sym->comment.empty();
+        
         // Highlight PC line
         if (isPc) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 0.5f, 1.0f));
+        }
+        
+        // Stage 4.6: Show label before address if symbol exists
+        if (hasLabel) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 1.0f, 0.6f, 1.0f));
+            ImGui::Text("%s:", sym->name.c_str());
+            ImGui::PopStyleColor();
         }
         
         // Build the line text
@@ -255,15 +273,35 @@ void DisassemblyWindow::renderDisassemblyList(DebugBackend &backend)
             }
         }
         
+        // Stage 4.6: Resolve symbol names in operands
+        std::string displayText = instr.text;
+        if (instr.hasTarget) {
+            const char *symName = symbols.displayName(instr.target).c_str();
+            if (symName[0] != '\0') {
+                // Replace address with symbol name in the text
+                char addrStr[8];
+                snprintf(addrStr, sizeof(addrStr), "%04X", instr.target);
+                size_t pos = displayText.find(addrStr);
+                if (pos != std::string::npos) {
+                    displayText.replace(pos, 4, symName);
+                }
+            }
+        }
+        
         // Render as selectable line
         char fullLine[128];
-        snprintf(fullLine, sizeof(fullLine), "%s  %s  %s",
-                 addrStr, bytesStr, instr.text.c_str());
+        if (hasComment) {
+            snprintf(fullLine, sizeof(fullLine), "%s  %s  %s  ; %s",
+                     addrStr, bytesStr, displayText.c_str(), sym->comment.c_str());
+        } else {
+            snprintf(fullLine, sizeof(fullLine), "%s  %s  %s",
+                     addrStr, bytesStr, displayText.c_str());
+        }
         
         bool clicked = ImGui::Selectable(fullLine, isPc,
                                           ImGuiSelectableFlags_AllowDoubleClick);
         
-        // Context menu for breakpoint toggle
+        // Context menu for breakpoint toggle and symbol operations
         if (ImGui::BeginPopupContextItem("dasmctx")) {
             if (hasBp) {
                 if (ImGui::MenuItem("Remove Breakpoint")) {
@@ -279,6 +317,47 @@ void DisassemblyWindow::renderDisassemblyList(DebugBackend &backend)
                 if (onGoToMemoryInspector) {
                     onGoToMemoryInspector(lineAddr);
                 }
+            }
+            // Stage 4.6: Symbol operations
+            ImGui::Separator();
+            if (!hasLabel || sym->type != SymbolType::Function) {
+                if (ImGui::MenuItem("Define Function")) {
+                    editingDefineFunc_ = true;
+                    editingAddress_ = lineAddr;
+                    editBuffer_[0] = '\0';
+                }
+            }
+            if (!hasLabel || sym->type != SymbolType::Label) {
+                if (ImGui::MenuItem("Define Label")) {
+                    editingDefineLabel_ = true;
+                    editingAddress_ = lineAddr;
+                    editBuffer_[0] = '\0';
+                }
+            }
+            if (hasLabel) {
+                if (ImGui::MenuItem("Edit Comment")) {
+                    editingComment_ = true;
+                    editingAddress_ = lineAddr;
+                    snprintf(editBuffer_, sizeof(editBuffer_), "%s", sym->comment.c_str());
+                }
+                if (ImGui::MenuItem("Delete Symbol")) {
+                    symbols.removeSymbol(lineAddr);
+                    needsRefresh_ = true;
+                }
+            }
+            // Memory region marking
+            ImGui::Separator();
+            if (ImGui::MenuItem("Mark as Code")) {
+                symbols.setRegion(lineAddr, lineAddr, MemoryRegionType::Code);
+                needsRefresh_ = true;
+            }
+            if (ImGui::MenuItem("Mark as Data")) {
+                symbols.setRegion(lineAddr, lineAddr, MemoryRegionType::Data);
+                needsRefresh_ = true;
+            }
+            if (ImGui::MenuItem("Mark as Unknown")) {
+                symbols.removeRegion(lineAddr);
+                needsRefresh_ = true;
             }
             ImGui::EndPopup();
         }
@@ -312,6 +391,45 @@ void DisassemblyWindow::renderDisassemblyList(DebugBackend &backend)
     
     if (lineCount == 0) {
         ImGui::TextDisabled("(no disassembly)");
+    }
+    
+    // Stage 4.6: Inline editing dialogs
+    if (editingDefineFunc_ || editingDefineLabel_ || editingComment_) {
+        ImGui::Separator();
+        
+        if (editingDefineFunc_) {
+            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "Define Function at %04X:", editingAddress_);
+        } else if (editingDefineLabel_) {
+            ImGui::TextColored(ImVec4(0.6f, 1.0f, 0.6f, 1.0f), "Define Label at %04X:", editingAddress_);
+        } else {
+            ImGui::Text("Edit Comment at %04X:", editingAddress_);
+        }
+        
+        ImGui::SetNextItemWidth(200);
+        bool enterPressed = ImGui::InputText("##editinline", editBuffer_, sizeof(editBuffer_),
+            ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::SameLine();
+        if (ImGui::Button("OK") || enterPressed) {
+            if (editBuffer_[0] != '\0') {
+                if (editingDefineFunc_) {
+                    symbols.addSymbol(editingAddress_, editBuffer_, SymbolType::Function);
+                } else if (editingDefineLabel_) {
+                    symbols.addSymbol(editingAddress_, editBuffer_, SymbolType::Label);
+                } else if (editingComment_) {
+                    symbols.setComment(editingAddress_, editBuffer_);
+                }
+                needsRefresh_ = true;
+            }
+            editingDefineFunc_ = false;
+            editingDefineLabel_ = false;
+            editingComment_ = false;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            editingDefineFunc_ = false;
+            editingDefineLabel_ = false;
+            editingComment_ = false;
+        }
     }
     
     ImGui::EndChild();

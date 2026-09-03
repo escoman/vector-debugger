@@ -8,6 +8,8 @@
 #include <mutex>
 #include <condition_variable>
 
+#include "symbol_database.h"
+
 // Forward declaration — avoid pulling full memory.h into debugger headers
 class Memory;
 #ifndef DEBUGGER_NO_BOARD
@@ -235,6 +237,76 @@ public:
 
     std::vector<struct MemoryStats> memoryStatsSnapshot() const;
 
+    // -- Stage 4.2: Symbol database -------------------------------------------
+
+    // Direct access (for GUI thread when emulation is paused).
+    SymbolDatabase &symbolDatabase();
+    const SymbolDatabase &symbolDatabase() const;
+
+    // -- Stage 4.2: Screen snapshot (for Vector Screen window) ----------------
+
+    struct ScreenSnapshot
+    {
+        std::vector<uint32_t> pixels;  // ARGB8888
+        int width  = 0;
+        int height = 0;
+    };
+
+    // Copy current framebuffer pixels. Thread-safe.
+    // Returns empty snapshot if no Board attached.
+    ScreenSnapshot screenSnapshot() const;
+
+    // -- Stage 4.2: Memory activity snapshot (for Memory Map) -----------------
+
+    struct ActivitySnapshot
+    {
+        std::vector<uint64_t> executeCount;  // indexed by address (64K)
+        std::vector<uint64_t> readCount;     // indexed by address (64K)
+        std::vector<uint64_t> writeCount;    // indexed by address (64K)
+    };
+
+    // Thread-safe snapshot of per-address activity counters.
+    ActivitySnapshot activitySnapshot() const;
+
+    // Clear all activity counters (runtime stats only, preserves symbols/breakpoints).
+    void clearActivityCounters();
+
+    // -- Enhanced Vector Screen: Video mode snapshot --------------------------
+
+    struct VideoModeSnapshot
+    {
+        bool mode512 = false;       // true = 512x256, false = 256x256
+        int screenWidth  = 576;     // framebuffer width (including borders)
+        int screenHeight = 288;     // framebuffer height (including borders)
+        int visibleWidth  = 512;    // visible area width
+        int visibleHeight = 256;    // visible area height
+        int borderLeft = 32;
+        int borderTop  = 16;
+        int scrollValue = 0;        // current scroll register (IO::ScrollStart)
+        uint16_t vramBase = 0xC000;
+        int pixelsPerByte = 8;      // 8 for 256-mode, 4 for 512-mode
+    };
+
+    // Thread-safe snapshot of current video mode state.
+    VideoModeSnapshot videoModeSnapshot() const;
+
+    // -- Enhanced Vector Screen: VRAM write tracking --------------------------
+
+    struct VramWriteInfo
+    {
+        uint8_t  value    = 0;
+        uint16_t pc       = 0;
+        uint64_t sequence = 0;
+    };
+
+    struct VramWriteSnapshot
+    {
+        std::vector<VramWriteInfo> lastWrite;  // 256 entries (one per VRAM byte)
+    };
+
+    // Thread-safe snapshot of per-VRAM-byte last write info.
+    VramWriteSnapshot vramWriteSnapshot() const;
+
     // -- thread-safe command API (Stage 3.1, for GUI) -------------------------
 
     // Called from GUI thread to request execution actions.
@@ -330,4 +402,37 @@ private:
     // Find breakpoint by address (returns iterator, or end())
     std::map<int, DebuggerBreakpoint>::iterator findBreakpointByAddress(uint16_t address);
     std::map<int, DebuggerBreakpoint>::const_iterator findBreakpointByAddress(uint16_t address) const;
+
+    // -- Stage 4.2: Symbol database -------------------------------------------
+
+    SymbolDatabase symbols_;
+
+    // -- Stage 4.2: Activity counters -----------------------------------------
+
+    // Per-address execute count (incremented in stepInstruction).
+    // reads/writes are already tracked in impl_->memStats[].
+    uint64_t executeCount_[65536];
+
+    // -- Enhanced Vector Screen: VRAM write tracking --------------------------
+
+    // Per-VRAM-byte last write info (256 bytes at 0xC000..0xC0FF).
+    // Updated in onMemoryWrite callback.
+    VramWriteInfo vramLastWrite_[256];
+    mutable std::mutex vramWriteMutex_;  // protects vramLastWrite_
+
+    // -- Enhanced Vector Screen: IO port tracking (video mode) -----------------
+
+    // Tracked PPI port values from onIoOutput() callbacks.
+    // Port 0x03 → PA (ScrollStart), Port 0x02 → PB (Mode512 = bit 4).
+    // This avoids accessing IO directly — we mirror the register state
+    // through the existing HAL instrumentation path.
+    uint8_t ioPA_ = 0xFF;   // last value written to PPI port 0x03 (PA = ScrollStart)
+    uint8_t ioPB_ = 0xFF;   // last value written to PPI port 0x02 (PB, bit 4 = Mode512)
+    mutable std::mutex ioRegMutex_;  // protects ioPA_, ioPB_
+
+    // -- Stage 4.2: Screen mutex ----------------------------------------------
+
+#ifndef DEBUGGER_NO_BOARD
+    mutable std::mutex screenMutex_;  // protects screen snapshot
+#endif
 };

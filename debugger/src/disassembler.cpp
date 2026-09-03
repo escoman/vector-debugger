@@ -241,6 +241,8 @@ DisassembledInstruction disassemble(uint16_t address, DisasmReadFn readByte)
     case F_JMP:
     case F_CALL:
         fmt_hex(hex4, sizeof(hex4), word, 4);
+        di.hasTarget = true;
+        di.target = word;
         if ((op & 0x07) != 0x03 && (op & 0x07) != 0x02 &&
             (op & 0x0F) != 0x0A && (op & 0x07) != 0x06 &&
             (op & 0x07) != 0x00 && (op & 0x07) != 0x04) {
@@ -259,6 +261,8 @@ DisassembledInstruction disassemble(uint16_t address, DisasmReadFn readByte)
     case F_RST:
         fmt_hex(hex2, sizeof(hex2), ((op >> 3) & 7) * 8, 2);
         di.operands = hex2;
+        di.hasTarget = true;
+        di.target = static_cast<uint16_t>(((op >> 3) & 7) * 8);
         break;
 
     case F_STA:

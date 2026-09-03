@@ -24,6 +24,10 @@ struct DisassembledInstruction
     std::string mnemonic;
     std::string operands;
     std::string text;       // "MNEMONIC OPERANDS"
+
+    // Branch target address (for CALL, JMP, RST)
+    bool     hasTarget = false;
+    uint16_t target    = 0;
 };
 
 // Read function type — the disassembler calls this to fetch bytes from memory.
