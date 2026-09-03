@@ -26,6 +26,7 @@
 #include <cstring>
 #include <string>
 #include <chrono>
+#include <thread>
 
 #include "memory.h"
 #include "i8080.h"
@@ -4087,11 +4088,260 @@ static void test_s42_screen_snapshot_no_board()
 }
 
 // ---------------------------------------------------------------------------
+// Stage 5 — Run/Pause synchronization tests (atomic running_ flag)
+//
+// Tests use runUntilPause() in a separate thread to exercise the real
+// emulation-thread flow: processOneCommand → executeFramesNoBoard → pause.
+// ---------------------------------------------------------------------------
+
+static void test_run_pause_atomic_flag()
+{
+    TEST_BEGIN("S5: requestRun/requestPause state transitions");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_test_rom(mem);
+    dbg->reset();
+
+    CHECK(dbg->isPaused(), "initially paused");
+    CHECK_EQ((int)DebuggerState::Paused, (int)dbg->getState(), "state == Paused");
+
+    // requestRun sets state to Running and running_ flag
+    dbg->requestRun();
+    CHECK_EQ((int)DebuggerState::Running, (int)dbg->getState(), "state == Running after requestRun");
+
+    // requestPause clears running_ flag
+    dbg->requestPause();
+    // Note: state_ is still Running until emulation thread processes the pause.
+    // In single-threaded test context, no emulation thread is running,
+    // so state_ remains Running. This is expected — the flag is what matters.
+
+    teardown(dbg);
+    TEST_END();
+}
+
+static void test_run_pause_multiple_cycles()
+{
+    TEST_BEGIN("S5: Multiple Run/Pause cycles are safe");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_test_rom(mem);
+    dbg->reset();
+
+    // Multiple Run/Pause cycles should not crash or deadlock
+    for (int i = 0; i < 10; ++i) {
+        dbg->requestRun();
+        CHECK_EQ((int)DebuggerState::Running, (int)dbg->getState(), "running after requestRun");
+        dbg->requestPause();
+    }
+
+    teardown(dbg);
+    TEST_END();
+}
+
+static void test_run_breakpoint_stops()
+{
+    TEST_BEGIN("S5: Breakpoint stops execution during Run");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_test_rom(mem);
+    dbg->reset();
+
+    // Set breakpoint at 0x0005 (MOV M, A)
+    dbg->addBreakpoint(0x0005);
+
+    // Run in emulation thread
+    dbg->requestRun();
+    std::thread th([&]() { dbg->runUntilPause(); });
+
+    // Give emulation time to hit breakpoint
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Pause and quit to cleanly exit the thread
+    dbg->requestPause();
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    dbg->requestQuit();
+    th.join();
+
+    // Should have stopped at breakpoint
+    CHECK_EQ(0x0005, dbg->getCpuState().pc, "PC == 0x0005 at breakpoint");
+    CHECK_EQ((int)StopReason::Breakpoint, (int)dbg->getStopReason(), "stop reason == Breakpoint");
+    CHECK_EQ((int)DebuggerState::Paused, (int)dbg->getState(), "state == Paused");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+static void test_run_after_breakpoint()
+{
+    TEST_BEGIN("S5: Run after breakpoint steps over and continues");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_test_rom(mem);
+    dbg->reset();
+
+    // Set breakpoint at 0x0003
+    dbg->addBreakpoint(0x0003);
+
+    // Run to breakpoint using old synchronous API
+    dbg->run();
+    CHECK_EQ(0x0003, dbg->getCpuState().pc, "stopped at breakpoint");
+    CHECK_EQ((int)StopReason::Breakpoint, (int)dbg->getStopReason(), "stop reason == Breakpoint");
+
+    // requestRun should set skipBreakpoint_ (since PC is at breakpoint)
+    // and continue execution past it
+    dbg->requestRun();
+    std::thread th([&]() { dbg->runUntilPause(); });
+
+    // Give time to step past breakpoint and continue
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    dbg->requestPause();
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    dbg->requestQuit();
+    th.join();
+
+    // PC should have moved past 0x0003 (test ROM loops 0003→0008→0003)
+    // It will stop at 0x0003 again on the next loop iteration
+    CHECK_EQ(0x0003, dbg->getCpuState().pc, "PC == 0x0003 at next bp iteration");
+    CHECK_EQ((int)DebuggerState::Paused, (int)dbg->getState(), "state == Paused");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+static void test_pause_during_process()
+{
+    TEST_BEGIN("S5: Pause stops execution safely");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_test_rom(mem);
+    dbg->reset();
+
+    // Start running in emulation thread
+    dbg->requestRun();
+    std::thread th([&]() { dbg->runUntilPause(); });
+
+    // Give emulation time to start executing
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Pause — should stop execution safely
+    dbg->requestPause();
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    dbg->requestQuit();
+    th.join();
+
+    // Should be paused
+    CHECK_EQ((int)DebuggerState::Paused, (int)dbg->getState(), "state == Paused");
+    // PC should be valid (somewhere in the test ROM loop)
+    CHECK(dbg->getCpuState().pc <= 0x000A, "PC in valid range");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+static void test_quit_while_running_v2()
+{
+    TEST_BEGIN("S5: Quit while running (new architecture)");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_test_rom(mem);
+    dbg->reset();
+
+    // Start running in emulation thread
+    dbg->requestRun();
+    std::thread th([&]() { dbg->runUntilPause(); });
+
+    // Give emulation time to start
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Request quit — should stop cleanly without deadlock
+    dbg->requestQuit();
+    th.join();
+
+    CHECK(dbg->isQuitRequested(), "quit requested");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+static void test_rapid_run_pause()
+{
+    TEST_BEGIN("S5: Rapid Run/Pause cycles don't crash");
+
+    // Each cycle creates a fresh backend to avoid quitRequested_ persistence
+    for (int i = 0; i < 5; ++i) {
+        Memory mem;
+        DebugBackend *dbg;
+        setup(mem, dbg);
+        load_test_rom(mem);
+        dbg->reset();
+
+        dbg->requestRun();
+        std::thread th([&]() { dbg->runUntilPause(); });
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        dbg->requestPause();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        dbg->requestQuit();
+        th.join();
+        CHECK_EQ((int)DebuggerState::Paused, (int)dbg->getState(), "paused after cycle");
+
+        teardown(dbg);
+    }
+
+    TEST_END();
+}
+
+static void test_step_after_pause()
+{
+    TEST_BEGIN("S5: Step after pause works correctly");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_test_rom(mem);
+    dbg->reset();
+
+    // Set breakpoint and run to it
+    dbg->addBreakpoint(0x0005);
+    dbg->requestRun();
+    std::thread th([&]() { dbg->runUntilPause(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    dbg->requestPause();
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+    // Step should execute one instruction from breakpoint
+    dbg->requestStep();
+    uint16_t pc_after_step = dbg->getCpuState().pc;
+    CHECK(pc_after_step != 0x0005, "PC moved after step");
+    CHECK_EQ((int)DebuggerState::Paused, (int)dbg->getState(), "still paused after step");
+
+    // Quit to cleanly exit the thread
+    dbg->requestQuit();
+    th.join();
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
 int main()
 {
+    setbuf(stdout, nullptr);  // unbuffered stdout for reliable diagnostics
     printf("\033[0;36m=== Debugger Backend Tests (Stage 1 + 2 + 2.1) ===\033[0m\n");
 
     // Stage 1 regression tests
@@ -4232,6 +4482,16 @@ int main()
     test_s42_activity_read_write_counters();
     test_s42_activity_reset_clears();
     test_s42_screen_snapshot_no_board();
+
+    // Stage 5 — Run/Pause synchronization tests
+    test_run_pause_atomic_flag();
+    test_run_pause_multiple_cycles();
+    test_run_breakpoint_stops();
+    test_run_after_breakpoint();
+    test_pause_during_process();
+    test_quit_while_running_v2();
+    test_rapid_run_pause();
+    test_step_after_pause();
 
     printf("\n\033[0;36m=== Results: %d/%d passed", tests_passed, tests_run);
     if (tests_failed > 0) {

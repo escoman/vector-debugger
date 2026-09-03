@@ -958,25 +958,30 @@ void DebugBackend::requestStep()
 
 void DebugBackend::requestRun()
 {
+    // "Run after breakpoint" step-over:
+    // If PC is currently at an enabled breakpoint, skip it on first check.
+    skipBreakpoint_ = checkBreakpoint();
+
     {
         std::lock_guard<std::mutex> lock(commandMutex_);
         state_ = DebuggerState::Running;
         pauseRequested_ = false;
-        pendingCommand_ = PendingCommand::None;
-
-        // "Run after breakpoint" step-over:
-        // If PC is currently at an enabled breakpoint, skip it on first check.
-        skipBreakpoint_ = checkBreakpoint();
     }
+    running_.store(true, std::memory_order_release);
     commandCv_.notify_one();
 }
 
 void DebugBackend::requestPause()
 {
+    running_.store(false, std::memory_order_release);
     {
         std::lock_guard<std::mutex> lock(commandMutex_);
         pauseRequested_ = true;
     }
+#ifndef DEBUGGER_NO_BOARD
+    // Break out of current frame immediately
+    if (board_) board_->debugger_break();
+#endif
     commandCv_.notify_one();
 }
 
@@ -1019,8 +1024,15 @@ void DebugBackend::processOneCommand()
 {
     std::unique_lock<std::mutex> lock(commandMutex_);
     commandCv_.wait(lock, [this]{
-        return pendingCommand_ != PendingCommand::None;
+        return pendingCommand_ != PendingCommand::None ||
+               running_.load(std::memory_order_acquire) ||
+               quitRequested_;
     });
+
+    if (quitRequested_) return;
+
+    // If running flag is set, just return — the main loop handles execution
+    if (running_.load(std::memory_order_acquire)) return;
 
     PendingCommand cmd = pendingCommand_;
     pendingCommand_ = PendingCommand::None;
@@ -1040,13 +1052,13 @@ void DebugBackend::processOneCommand()
         return;
     }
     else if (cmd == PendingCommand::Reset) {
+        running_.store(false, std::memory_order_release);
         reset();
         stepCompleted_ = true;
         resultCv_.notify_one();
         return;
     }
     else if (cmd == PendingCommand::MemoryWrite) {
-        // Release lock before writing to memory (Memory::write may fire callbacks)
         lock.unlock();
         processWriteCommand();
         {
@@ -1057,7 +1069,6 @@ void DebugBackend::processOneCommand()
         return;
     }
     else if (cmd == PendingCommand::RegisterWrite) {
-        // Release lock before modifying CPU registers
         lock.unlock();
         processRegisterWrite();
         {
@@ -1067,105 +1078,115 @@ void DebugBackend::processOneCommand()
         resultCv_.notify_one();
         return;
     }
-    else if (cmd == PendingCommand::Pause) {
-        pauseRequested_ = true;
-    }
-    // For Run: state_ is already set to Running by requestRun().
-    // Fall through to the execution loop below.
+    // Run and Pause are handled via running_ atomic, not command queue
+}
 
-    // Execution loop — runs until pause or breakpoint.
+// ---------------------------------------------------------------------------
+// executeFramesBoard_ — run frames until pause/breakpoint (Board attached)
+// ---------------------------------------------------------------------------
+
 #ifndef DEBUGGER_NO_BOARD
-    if (board_) {
-        // Sync debugger breakpoints to Board before running
-        syncBreakpointsToBoard();
+void DebugBackend::executeFramesBoard_()
+{
+    // Sync debugger breakpoints to Board before running
+    syncBreakpointsToBoard();
 
-        // Handle "run after breakpoint" step-over
-        if (skipBreakpoint_ && checkBreakpoint()) {
-            skipBreakpoint_ = false;
-            stepInstruction();  // step past the breakpoint
+    // Handle "run after breakpoint" step-over
+    if (skipBreakpoint_ && checkBreakpoint()) {
+        skipBreakpoint_ = false;
+        stepInstruction();  // step past the breakpoint
+    }
+
+    while (running_.load(std::memory_order_acquire)) {
+        if (quitRequested_) {
+            board_->debugger_break();
+            board_->debugger_detached();
+            return;
         }
 
-        while (state_ == DebuggerState::Running) {
-            {
-                std::lock_guard<std::mutex> lk(commandMutex_);
-                if (quitRequested_) {
-                    board_->debugger_break();
-                    board_->debugger_detached();
-                    return;
-                }
-            }
-            board_->debugger_continue();
-            uint16_t pcBeforeFrame = static_cast<uint16_t>(i8080_pc());
-            board_->execute_frame_with_cadence(false, false);
-            uint16_t pcAfterFrame = static_cast<uint16_t>(i8080_pc());
+        board_->debugger_continue();
+        uint16_t pcBeforeFrame = static_cast<uint16_t>(i8080_pc());
+        board_->execute_frame_with_cadence(false, false);
+        uint16_t pcAfterFrame = static_cast<uint16_t>(i8080_pc());
 
-            // If PC didn't change, Board stopped (breakpoint or debugger_interrupt)
-            if (pcAfterFrame == pcBeforeFrame && state_ == DebuggerState::Running) {
-                // Check if we're on a breakpoint
-                if (checkBreakpoint()) {
-                    stopReason_ = StopReason::Breakpoint;
+        // If PC didn't change, Board stopped (breakpoint or debugger_interrupt)
+        if (pcAfterFrame == pcBeforeFrame) {
+            if (checkBreakpoint()) {
+                stopReason_ = StopReason::Breakpoint;
+                running_.store(false, std::memory_order_release);
+                {
                     std::lock_guard<std::mutex> lk(commandMutex_);
                     state_ = DebuggerState::Paused;
-                    break;
                 }
-            }
-
-            if (pauseRequested_) {
-                std::lock_guard<std::mutex> lk(commandMutex_);
-                stopReason_ = StopReason::UserPause;
-                state_ = DebuggerState::Paused;
-                pauseRequested_ = false;
                 break;
             }
-
-            // Also check our own breakpoint list (in case Board's check didn't fire)
-            if (checkBreakpoint()) {
-                std::lock_guard<std::mutex> lk(commandMutex_);
-                stopReason_ = StopReason::Breakpoint;
-                state_ = DebuggerState::Paused;
-                break;
-            }
+            // If no breakpoint but PC didn't change, debugger_interrupt was set
+            // (e.g. by poll_debugger for pause/step). Just continue the loop —
+            // running_ will be checked.
         }
-    } else
-#endif
-    {
-        while (state_ == DebuggerState::Running) {
+
+        // Check pause requested (from GUI or poll_debugger)
+        if (pauseRequested_ || !running_.load(std::memory_order_acquire)) {
+            running_.store(false, std::memory_order_release);
             {
                 std::lock_guard<std::mutex> lk(commandMutex_);
-                if (quitRequested_) return;
-                if (pendingCommand_ == PendingCommand::Quit) return;
-                if (pendingCommand_ == PendingCommand::Step) {
-                    pendingCommand_ = PendingCommand::None;
-                    stepInstruction();
-                    stepCompleted_ = true;
-                    resultCv_.notify_one();
-                    break;
-                }
-                if (pendingCommand_ == PendingCommand::Pause) {
-                    pendingCommand_ = PendingCommand::None;
-                    pauseRequested_ = true;
-                }
-            }
-            if (checkBreakpoint()) {
-                if (skipBreakpoint_) {
-                    skipBreakpoint_ = false;
-                    stepInstruction();  // step past the breakpoint
-                    continue;
-                }
-                std::lock_guard<std::mutex> lk(commandMutex_);
-                stopReason_ = StopReason::Breakpoint;
+                stopReason_ = StopReason::UserPause;
                 state_ = DebuggerState::Paused;
-                break;
+                pauseRequested_ = false;
             }
-            if (pauseRequested_) {
+            break;
+        }
+
+        // Also check our own breakpoint list
+        if (checkBreakpoint()) {
+            stopReason_ = StopReason::Breakpoint;
+            running_.store(false, std::memory_order_release);
+            {
+                std::lock_guard<std::mutex> lk(commandMutex_);
+                state_ = DebuggerState::Paused;
+            }
+            break;
+        }
+    }
+}
+#endif // DEBUGGER_NO_BOARD
+
+// ---------------------------------------------------------------------------
+// executeFramesNoBoard_ — run instructions until pause/breakpoint (no Board)
+// ---------------------------------------------------------------------------
+
+void DebugBackend::executeFramesNoBoard_()
+{
+    while (running_.load(std::memory_order_acquire)) {
+        {
+            std::lock_guard<std::mutex> lk(commandMutex_);
+            if (quitRequested_) return;
+        }
+        if (checkBreakpoint()) {
+            if (skipBreakpoint_) {
+                skipBreakpoint_ = false;
+                stepInstruction();  // step past the breakpoint
+                continue;
+            }
+            stopReason_ = StopReason::Breakpoint;
+            running_.store(false, std::memory_order_release);
+            {
+                std::lock_guard<std::mutex> lk(commandMutex_);
+                state_ = DebuggerState::Paused;
+            }
+            break;
+        }
+        if (pauseRequested_ || !running_.load(std::memory_order_acquire)) {
+            running_.store(false, std::memory_order_release);
+            {
                 std::lock_guard<std::mutex> lk(commandMutex_);
                 stopReason_ = StopReason::UserPause;
                 state_ = DebuggerState::Paused;
                 pauseRequested_ = false;
-                break;
             }
-            stepInstruction();
+            break;
         }
+        stepInstruction();
     }
 }
 
@@ -1191,8 +1212,8 @@ void DebugBackend::runUntilPause()
                 return;
             }
             
-            if (pendingCommand_ == PendingCommand::Pause || pauseRequested_) {
-                pendingCommand_ = PendingCommand::None;
+            // Check if pause was requested (via running_ flag or pauseRequested_)
+            if (!running_.load(std::memory_order_relaxed) || pauseRequested_) {
                 pauseRequested_ = true;
                 board_->debugger_break();
                 return;
@@ -1222,16 +1243,36 @@ void DebugBackend::runUntilPause()
     }
 #endif
     
+    // Main emulation loop (PSP-style)
     while (true) {
+        // Wait for a command or running flag
         processOneCommand();
 
-        // If processOneCommand returned because of Run (fall-through),
-        // the execution loop is inside processOneCommand and it will
-        // return when paused/breakpoint. Then we loop back to wait.
-        // Check if we should exit (Quit was processed).
-        {
-            std::lock_guard<std::mutex> lock(commandMutex_);
-            if (quitRequested_) return;
+        if (quitRequested_) {
+#ifndef DEBUGGER_NO_BOARD
+            if (board_) board_->debugger_detached();
+#endif
+            return;
+        }
+
+        // If running, execute frames until pause/breakpoint
+        if (running_.load(std::memory_order_acquire)) {
+#ifndef DEBUGGER_NO_BOARD
+            if (board_) {
+                executeFramesBoard_();
+            } else
+#endif
+            {
+                executeFramesNoBoard_();
+            }
+
+            // After execution stopped, update state
+            {
+                std::lock_guard<std::mutex> lk(commandMutex_);
+                if (state_ != DebuggerState::Paused) {
+                    state_ = DebuggerState::Paused;
+                }
+            }
         }
     }
 }

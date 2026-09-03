@@ -7,6 +7,7 @@
 #include <functional>
 #include <mutex>
 #include <condition_variable>
+#include <atomic>
 
 #include "symbol_database.h"
 
@@ -368,6 +369,13 @@ private:
 
     void installMemoryCallbacks();
 
+    // -- Execution loops (called from runUntilPause) --------------------------
+
+#ifndef DEBUGGER_NO_BOARD
+    void executeFramesBoard_();     // run frames until pause/breakpoint
+#endif
+    void executeFramesNoBoard_();   // run instructions until pause/breakpoint (tests)
+
     // -- Stage 3.1: thread-safe command protocol ------------------------------
 
     enum class PendingCommand { None, Step, Run, Pause, Reset, Quit, MemoryWrite, RegisterWrite };
@@ -379,6 +387,11 @@ private:
     bool                    stepCompleted_  = false;
     bool                    quitRequested_  = false;
     mutable std::mutex      stateMutex_;  // protects state_ for cross-thread reads
+
+    // -- Atomic running flag (PSP-style Run/Pause) ----------------------------
+    // Run/Pause use this atomic flag instead of PendingCommand queue.
+    // The emulation thread checks this flag in its main loop.
+    std::atomic<bool>       running_{false};
 
     // -- Stage 3.5: memory write command state --------------------------------
 

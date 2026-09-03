@@ -17,6 +17,38 @@
 #include "debug_memory.h"
 
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+
+// ---------------------------------------------------------------------------
+// Native file dialog (zenity on Linux)
+// ---------------------------------------------------------------------------
+
+static std::string showNativeFileOpenDialog()
+{
+#ifdef __linux__
+    FILE *fp = popen(
+        "zenity --title='Open ROM' --file-selection"
+        " --file-filter='ROM files | *.rom *.r0m *.bin *.ROM *.R0M *.BIN'"
+        " --file-filter='All files | *'"
+        " 2>/dev/null", "r");
+    if (!fp) return {};
+
+    char buf[1024];
+    std::string result;
+    if (fgets(buf, sizeof(buf), fp)) {
+        result = buf;
+        // Remove trailing newline
+        while (!result.empty() && (result.back() == '\n' || result.back() == '\r'))
+            result.pop_back();
+    }
+    pclose(fp);
+    return result;
+#else
+    return {};
+#endif
+}
 
 // ---------------------------------------------------------------------------
 // Lifecycle
@@ -170,32 +202,35 @@ void DebuggerGui::render(DebugBackend &backend, Memory &memory)
     ImGui::Begin("Debugger", nullptr,
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
-        ImGuiWindowFlags_NoBringToFrontOnFocus);
-
-    // -- Menu bar --
-    if (ImGui::BeginMenuBar()) {
-        if (ImGui::BeginMenu("File")) {
-            if (ImGui::MenuItem("Open ROM...")) {
-                showOpenRomDialog_ = true;
-                romErrorBuffer_[0] = '\0';
-            }
-            ImGui::EndMenu();
-        }
-        ImGui::EndMenuBar();
-    }
+        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar);
 
     // -- Top: toolbar with Run / Pause buttons --
+    // File menu button (opens popup below toolbar)
+    if (ImGui::Button("File")) {
+        ImGui::OpenPopup("FileMenu");
+    }
+    if (ImGui::BeginPopup("FileMenu")) {
+        if (ImGui::MenuItem("Open ROM...")) {
+            showOpenRomDialog_ = true;
+            romErrorBuffer_[0] = '\0';
+        }
+        ImGui::EndPopup();
+    }
+
+    ImGui::SameLine();
     renderControls(backend);
     ImGui::Separator();
 
     // Get CPU state for this frame
     CpuState cpu = backend.getCpuState();
 
-    // -- Middle: two-column layout --
+    // -- Middle: two-column layout (reserve space for status bar at bottom) --
     float leftWidth = 280.0f;
+    float statusbarHeight = ImGui::GetFrameHeightWithSpacing();
+    float childHeight = ImGui::GetContentRegionAvail().y - statusbarHeight;
 
-    ImGui::BeginChild("LeftPanel", ImVec2(leftWidth, 0), ImGuiChildFlags_None,
-                       ImGuiWindowFlags_None);
+    ImGui::BeginChild("LeftPanel", ImVec2(leftWidth, childHeight), ImGuiChildFlags_None,
+                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     {
         renderCpuPanel(backend);
         ImGui::Separator();
@@ -205,8 +240,8 @@ void DebuggerGui::render(DebugBackend &backend, Memory &memory)
 
     ImGui::SameLine();
 
-    ImGui::BeginChild("RightPanel", ImVec2(0, 0), ImGuiChildFlags_None,
-                       ImGuiWindowFlags_None);
+    ImGui::BeginChild("RightPanel", ImVec2(0, childHeight), ImGuiChildFlags_None,
+                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     {
         renderInstructionHistory(backend);
     }
@@ -220,56 +255,38 @@ void DebuggerGui::render(DebugBackend &backend, Memory &memory)
 
     // --- Open ROM dialog ---
     if (showOpenRomDialog_) {
-        ImGui::OpenPopup("Open ROM");
         showOpenRomDialog_ = false;
-    }
-    if (ImGui::BeginPopupModal("Open ROM", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::SetNextItemWidth(400);
-        ImGui::InputText("ROM file", romPathBuffer_, sizeof(romPathBuffer_));
-
-        ImGui::Checkbox("Auto-detect address (.rom/.r0m)", &romAutoDetect_);
-        if (!romAutoDetect_) {
-            ImGui::SetNextItemWidth(120);
-            ImGui::InputText("Load address", romAddrBuffer_, sizeof(romAddrBuffer_),
-                ImGuiInputTextFlags_CharsHexadecimal);
-        }
-
-        if (romErrorBuffer_[0]) {
-            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", romErrorBuffer_);
-        }
-
-        if (ImGui::Button("Load") || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
-            std::string path(romPathBuffer_);
-            if (path.empty()) {
-                snprintf(romErrorBuffer_, sizeof(romErrorBuffer_), "File path is empty");
-            } else {
-                uint32_t org = 0;
-                if (romAutoDetect_) {
-                    size_t dot = path.rfind('.');
-                    if (dot != std::string::npos) {
-                        std::string ext = path.substr(dot);
-                        if (ext == ".rom") org = 0x0100;
-                        else if (ext == ".r0m") org = 0x0000;
-                    }
-                } else {
-                    org = std::strtoul(romAddrBuffer_, nullptr, 16);
-                }
-                backend.requestPause();
-                if (backend.loadRom(path, org)) {
-                    ImGui::CloseCurrentPopup();
-                    memoryInspector_.requestRefresh();
-                    disassemblyView_.requestRefresh();
-                    stackView_.requestRefresh();
-                    vectorScreen_.requestRefresh();
-                    histNeedsRefresh_ = true;
-                } else {
-                    snprintf(romErrorBuffer_, sizeof(romErrorBuffer_),
-                             "Failed to load: %s", path.c_str());
+        std::string path = showNativeFileOpenDialog();
+        if (!path.empty()) {
+            uint32_t org = 0;
+            if (true) { // auto-detect
+                size_t dot = path.rfind('.');
+                if (dot != std::string::npos) {
+                    std::string ext = path.substr(dot);
+                    if (ext == ".rom") org = 0x0100;
+                    else if (ext == ".r0m") org = 0x0000;
                 }
             }
+            backend.requestPause();
+            if (backend.loadRom(path, org)) {
+                memoryInspector_.requestRefresh();
+                disassemblyView_.requestRefresh();
+                stackView_.requestRefresh();
+                vectorScreen_.requestRefresh();
+                histNeedsRefresh_ = true;
+            } else {
+                snprintf(romErrorBuffer_, sizeof(romErrorBuffer_),
+                         "Failed to load: %s", path.c_str());
+            }
         }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+    }
+    if (romErrorBuffer_[0]) {
+        ImGui::OpenPopup("ROM Error");
+    }
+    if (ImGui::BeginPopupModal("ROM Error", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", romErrorBuffer_);
+        if (ImGui::Button("OK")) {
+            romErrorBuffer_[0] = '\0';
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -603,91 +620,157 @@ void DebuggerGui::renderControls(DebugBackend &backend)
     
     // Memory Inspector toggle
     ImGui::SameLine();
-    ImGui::BeginDisabled(!memoryInspector_.isVisible());
-    if (ImGui::Button("Memory Inspector")) {
-        memoryInspector_.setVisible(!memoryInspector_.isVisible());
+    {
+        bool hidden = !memoryInspector_.isVisible();
+        if (hidden) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
+        }
+        if (ImGui::Button("Memory Inspector"))
+            memoryInspector_.setVisible(!memoryInspector_.isVisible());
+        if (hidden) ImGui::PopStyleColor(3);
     }
-    ImGui::EndDisabled();
     
     // Stack View toggle
     ImGui::SameLine();
-    ImGui::BeginDisabled(!stackView_.isVisible());
-    if (ImGui::Button("Stack View")) {
-        stackView_.setVisible(!stackView_.isVisible());
+    {
+        bool hidden = !stackView_.isVisible();
+        if (hidden) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
+        }
+        if (ImGui::Button("Stack View"))
+            stackView_.setVisible(!stackView_.isVisible());
+        if (hidden) ImGui::PopStyleColor(3);
     }
-    ImGui::EndDisabled();
     
     // Breakpoints toggle (Stage 3.7)
     ImGui::SameLine();
-    ImGui::BeginDisabled(!breakpointsWindow_.isVisible());
-    if (ImGui::Button("Breakpoints")) {
-        breakpointsWindow_.setVisible(!breakpointsWindow_.isVisible());
+    {
+        bool hidden = !breakpointsWindow_.isVisible();
+        if (hidden) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
+        }
+        if (ImGui::Button("Breakpoints"))
+            breakpointsWindow_.setVisible(!breakpointsWindow_.isVisible());
+        if (hidden) ImGui::PopStyleColor(3);
     }
-    ImGui::EndDisabled();
     
     // Disassembly toggle (Stage 3.8)
     ImGui::SameLine();
-    ImGui::BeginDisabled(!disassemblyView_.isVisible());
-    if (ImGui::Button("Disassembly")) {
-        disassemblyView_.setVisible(!disassemblyView_.isVisible());
+    {
+        bool hidden = !disassemblyView_.isVisible();
+        if (hidden) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
+        }
+        if (ImGui::Button("Disassembly"))
+            disassemblyView_.setVisible(!disassemblyView_.isVisible());
+        if (hidden) ImGui::PopStyleColor(3);
     }
-    ImGui::EndDisabled();
     
     // Execution Trace toggle (Stage 3.10)
     ImGui::SameLine();
-    ImGui::BeginDisabled(!executionTrace_.isVisible());
-    if (ImGui::Button("Execution Trace")) {
-        executionTrace_.setVisible(!executionTrace_.isVisible());
+    {
+        bool hidden = !executionTrace_.isVisible();
+        if (hidden) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
+        }
+        if (ImGui::Button("Execution Trace"))
+            executionTrace_.setVisible(!executionTrace_.isVisible());
+        if (hidden) ImGui::PopStyleColor(3);
     }
-    ImGui::EndDisabled();
     
     // I/O Inspector toggle (Stage 3.11)
     ImGui::SameLine();
-    ImGui::BeginDisabled(!ioInspector_.isVisible());
-    if (ImGui::Button("I/O Inspector")) {
-        ioInspector_.setVisible(!ioInspector_.isVisible());
+    {
+        bool hidden = !ioInspector_.isVisible();
+        if (hidden) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
+        }
+        if (ImGui::Button("I/O Inspector"))
+            ioInspector_.setVisible(!ioInspector_.isVisible());
+        if (hidden) ImGui::PopStyleColor(3);
     }
-    ImGui::EndDisabled();
     
     // Vector Screen toggle (Stage 4.3)
     ImGui::SameLine();
-    ImGui::BeginDisabled(!vectorScreen_.isVisible());
-    if (ImGui::Button("Vector Screen")) {
-        vectorScreen_.setVisible(!vectorScreen_.isVisible());
+    {
+        bool hidden = !vectorScreen_.isVisible();
+        if (hidden) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
+        }
+        if (ImGui::Button("Vector Screen"))
+            vectorScreen_.setVisible(!vectorScreen_.isVisible());
+        if (hidden) ImGui::PopStyleColor(3);
     }
-    ImGui::EndDisabled();
     
     // Memory Map toggle (Stage 4.4)
     ImGui::SameLine();
-    ImGui::BeginDisabled(!memoryMap_.isVisible());
-    if (ImGui::Button("Memory Map")) {
-        memoryMap_.setVisible(!memoryMap_.isVisible());
+    {
+        bool hidden = !memoryMap_.isVisible();
+        if (hidden) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
+        }
+        if (ImGui::Button("Memory Map"))
+            memoryMap_.setVisible(!memoryMap_.isVisible());
+        if (hidden) ImGui::PopStyleColor(3);
     }
-    ImGui::EndDisabled();
     
     // Functions toggle (Stage 4.5)
     ImGui::SameLine();
-    ImGui::BeginDisabled(!functionsWindow_.isVisible());
-    if (ImGui::Button("Functions")) {
-        functionsWindow_.setVisible(!functionsWindow_.isVisible());
+    {
+        bool hidden = !functionsWindow_.isVisible();
+        if (hidden) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
+        }
+        if (ImGui::Button("Functions"))
+            functionsWindow_.setVisible(!functionsWindow_.isVisible());
+        if (hidden) ImGui::PopStyleColor(3);
     }
-    ImGui::EndDisabled();
     
     // Call Graph toggle (Stage 4.7)
     ImGui::SameLine();
-    ImGui::BeginDisabled(!callGraphWindow_.isVisible());
-    if (ImGui::Button("Call Graph")) {
-        callGraphWindow_.setVisible(!callGraphWindow_.isVisible());
+    {
+        bool hidden = !callGraphWindow_.isVisible();
+        if (hidden) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
+        }
+        if (ImGui::Button("Call Graph"))
+            callGraphWindow_.setVisible(!callGraphWindow_.isVisible());
+        if (hidden) ImGui::PopStyleColor(3);
     }
-    ImGui::EndDisabled();
     
     // Search toggle (Stage 4.8)
     ImGui::SameLine();
-    ImGui::BeginDisabled(!searchWindow_.isVisible());
-    if (ImGui::Button("Search")) {
-        searchWindow_.setVisible(!searchWindow_.isVisible());
+    {
+        bool hidden = !searchWindow_.isVisible();
+        if (hidden) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
+        }
+        if (ImGui::Button("Search"))
+            searchWindow_.setVisible(!searchWindow_.isVisible());
+        if (hidden) ImGui::PopStyleColor(3);
     }
-    ImGui::EndDisabled();
 }
 
 // ---------------------------------------------------------------------------

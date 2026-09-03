@@ -188,7 +188,7 @@ void VectorScreenWindow::renderToolbar(DebugBackend &backend)
     ImGui::SameLine();
     if (ImGui::Button("+")) zoomIn();
     ImGui::SameLine();
-    if (ImGui::Button("1x")) zoomReset();
+    if (ImGui::Button("1x##reset")) zoomReset();
 
     ImGui::SameLine();
     ImGui::Checkbox("Fit", &fitToWindow_);
@@ -694,9 +694,7 @@ void VectorScreenWindow::render(DebugBackend &backend)
     // Context menu
     renderContextMenu(backend);
 
-    // Status bar at the bottom — reserve space and draw separator
-    float statusBarHeight = ImGui::GetTextLineHeightWithSpacing() + 4;
-    ImGui::SetCursorPosY(ImGui::GetWindowHeight() - statusBarHeight);
+    // Status bar at the bottom using footer region
     ImGui::Separator();
     renderCoordinateInfo(backend);
 
