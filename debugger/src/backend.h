@@ -8,51 +8,10 @@
 #include <mutex>
 #include <condition_variable>
 #include <atomic>
+#include <memory>
 
-#include "symbol_database.h"
-
-// Forward declaration — avoid pulling full memory.h into debugger headers
-class Memory;
-#ifndef DEBUGGER_NO_BOARD
-class Board;
-#endif
-
-// ---------------------------------------------------------------------------
-// Memory snapshot for Inspector (Stage 3.3)
-// ---------------------------------------------------------------------------
-
-struct MemorySnapshot
-{
-    uint16_t start;
-    std::vector<uint8_t> data;
-};
-
-// ---------------------------------------------------------------------------
-// CPU state snapshot
-// ---------------------------------------------------------------------------
-
-struct CpuState
-{
-    uint16_t pc;
-    uint16_t sp;
-
-    uint8_t a;
-    uint8_t b;
-    uint8_t c;
-    uint8_t d;
-    uint8_t e;
-    uint8_t h;
-    uint8_t l;
-
-    uint8_t flags;   // S Z AC P CY packed as in F register
-
-    bool iff;        // interrupt flip-flop
-
-    // Stage 3.6 — additional CPU state
-    uint32_t cycles;       // cycles of last instruction
-    bool     ei_pending;   // EI pending flag
-    uint16_t last_pc;      // PC before last step
-};
+#include "idebug_backend.h"
+#include "debug_target.h"
 
 // ---------------------------------------------------------------------------
 // Result of a single-instruction step (kept for backward compatibility)
@@ -72,282 +31,156 @@ struct StepResult
 };
 
 // ---------------------------------------------------------------------------
-// Debugger state machine
-// ---------------------------------------------------------------------------
-
-enum class DebuggerState
-{
-    Running,
-    Paused,
-    Stopped
-};
-
-// ---------------------------------------------------------------------------
-// Breakpoint model (Stage 3.7)
-// ---------------------------------------------------------------------------
-
-struct DebuggerBreakpoint
-{
-    uint16_t address;
-    bool     enabled;
-};
-
-// ---------------------------------------------------------------------------
-// Stop reason (Stage 3.7)
-// ---------------------------------------------------------------------------
-
-enum class StopReason
-{
-    None,
-    Breakpoint,
-    UserPause,
-    Step,
-    Reset
-};
-
-// ---------------------------------------------------------------------------
 // DebugBackend
 //
-// Minimal debugger backend that works directly with the real CPU core
-// and memory of vector06sdl.  No GUI dependency.
-//
-// Stage 2 additions:
-//   - InstructionEvent / MemoryAccessEvent / IoAccessEvent recording
-//   - Ring-buffer history for all three event types
-//   - Per-address cumulative memory statistics
-//   - 8080 disassembler API
+// Implements IDebugBackend (GUI facade) and works through IDebugTarget
+// (emulator adapter). No direct access to Board, Memory, CPU, or IO.
 // ---------------------------------------------------------------------------
 
-class DebugBackend
+class DebugBackend : public IDebugBackend
 {
 public:
+    // New: work through IDebugTarget interface
+    explicit DebugBackend(IDebugTarget &target);
+
+    // Legacy: for tests that pass Memory directly.
+    // Creates an internal NoBoardTarget.
     explicit DebugBackend(Memory &memory);
+
     ~DebugBackend();
 
-    // -- Board integration (Stage 3.2) --------------------------------------
+    // -- Target integration (Stage 3.13a) -----------------------------------
 
-#ifndef DEBUGGER_NO_BOARD
-    // Attach real Board for full emulator integration.
-    // When Board is attached, stepInstruction() uses Board::single_step()
-    // and runUntilPause() uses Board::execute_frame().
-    void attachBoard(Board *board);
-    Board *getBoard() const { return board_; }
+    void attachTarget(IDebugTarget *target);
+    IDebugTarget *getTarget() const { return target_; }
 
-    // Load ROM file into memory and reset Board.
-    bool loadRom(const std::string &path, uint32_t org = 0);
-#endif
+    // -- IDebugBackend: ROM -------------------------------------------------
 
-    // -- memory access (Stage 3.3, for Memory Inspector) -------------------
+    bool loadRom(const std::string &path, uint32_t org = 0) override;
 
-    // Read single byte through DebugMemoryAccess (respects banking)
-    uint8_t readMemory(uint16_t address);
+    // -- IDebugBackend: memory access ---------------------------------------
 
-    // Read memory range as snapshot
-    MemorySnapshot readMemorySnapshot(uint16_t start, size_t size);
+    uint8_t readMemory(uint16_t address) override;
+    MemorySnapshot readMemorySnapshot(uint16_t start, size_t size) override;
+    bool writeMemoryByte(uint16_t address, uint8_t value) override;
+    bool writeMemory(uint16_t address, const uint8_t* data, size_t size) override;
 
-    // -- memory write (Stage 3.5, through emulation thread) ----------------
+    // -- IDebugBackend: register write --------------------------------------
 
-    // Write single byte. Posts command to emulation thread, blocks until done.
-    // Returns false if not Paused or address invalid.
-    bool writeMemoryByte(uint16_t address, uint8_t value);
+    bool writeRegister(RegisterId id, uint16_t value) override;
 
-    // Write range of bytes. Posts command to emulation thread, blocks until done.
-    // Returns false if not Paused or any address invalid.
-    bool writeMemory(uint16_t address, const uint8_t* data, size_t size);
+    // -- IDebugBackend: state queries ---------------------------------------
 
-    // -- register write (Stage 3.6, through emulation thread) --------------
+    CpuState       getCpuState()    const override;
+    DebuggerState  getState()       const override;
+    bool           isPaused()       const override;
+    StopReason     getStopReason()  const override;
 
-    // Register identifiers for writeRegister()
-    enum class RegisterId { AF, BC, DE, HL, SP, PC };
+    // -- IDebugBackend: execution control -----------------------------------
 
-    // Write a CPU register. Posts command to emulation thread, blocks until done.
-    // Returns false if not Paused or invalid register.
-    bool writeRegister(RegisterId id, uint16_t value);
+    void requestRun()      override;
+    void requestPause()    override;
+    void requestStep()     override;
+    void requestReset()    override;
+    void requestQuit()     override;
+    void stepInstruction() override;  // IDebugBackend: execute 1 instruction (void)
 
-    // -- state queries ------------------------------------------------------
+    // Extended step that returns detailed result (for tests/tracing)
+    StepResult stepInstructionDetailed();
 
-    CpuState       getCpuState() const;
-    DebuggerState  getState()    const;
-    bool           isPaused()    const;
+    // -- IDebugBackend: breakpoints -----------------------------------------
 
-    // -- execution control --------------------------------------------------
-
-    void run();       // run until breakpoint or pause()
-    void pause();     // request pause (next instruction boundary)
-    void reset();     // soft-reset CPU + clear all debug state
-
-    // Execute exactly one 8080 instruction and return detailed result.
-    StepResult stepInstruction();
-
-    // -- breakpoints (Stage 3.7) --------------------------------------------
-
-    int  addBreakpoint(uint16_t address);       // returns id, or -1 if duplicate
-    bool removeBreakpoint(uint16_t address);    // remove by address
-    bool setBreakpointEnabled(uint16_t address, bool enabled);
-    bool hasBreakpoint(uint16_t address) const;
-    std::vector<DebuggerBreakpoint> getBreakpoints() const; // thread-safe snapshot
-    void clearBreakpoints();
+    int  addBreakpoint(uint16_t address) override;
+    bool removeBreakpoint(uint16_t address) override;
+    bool setBreakpointEnabled(uint16_t address, bool enabled) override;
+    bool hasBreakpoint(uint16_t address) const override;
+    std::vector<DebuggerBreakpoint> getBreakpoints() const override;
+    void clearBreakpoints() override;
 
     // Legacy: remove by id (backward compat with tests)
     void removeBreakpoint(int id);
 
-    StopReason getStopReason() const;
+    // -- IDebugBackend: history ---------------------------------------------
 
-    // -- debug logging (Stage 1, kept for backward compatibility) -----------
-
-    std::function<void(const char *line)> onTrace;
-
-    // -- event callbacks (Stage 2) ------------------------------------------
-
-    // Called after every executed instruction with the full event.
-    std::function<void(const struct InstructionEvent &)> onInstruction;
-
-    // -- instrumentation hooks (Stage 2) ------------------------------------
-
-    // These are installed as Memory::onread / onwrite in the constructor.
-    // They can also be called manually from a test HAL.
-    void onMemoryRead(uint32_t virt, uint32_t phys, bool stack, uint8_t value);
-    void onMemoryWrite(uint32_t virt, uint32_t phys, bool stack, uint8_t value);
-
-    // I/O hooks — call from IO::onread / onwrite adapters.
-    void onIoInput(uint8_t port, uint8_t value);
-    void onIoOutput(uint8_t port, uint8_t value);
-
-    // -- Instrumentation enable/disable (Stage 2.1) --------------------------
-
-    void setInstrumentationEnabled(bool enabled);
-    bool isInstrumentationEnabled() const;
-
-    // -- history access (Stage 2.1, thread-safe snapshots) --------------------
-
-    uint64_t instructionSequence() const;
-
-    size_t   instructionHistorySize() const;
-    std::vector<struct InstructionEvent> instructionHistorySnapshot() const;
+    uint64_t instructionSequence() const override;
+    size_t   instructionHistorySize() const override;
+    std::vector<InstructionEvent> instructionHistorySnapshot() const override;
 
     size_t   memoryHistorySize() const;
     std::vector<struct MemoryAccessEvent> memoryHistorySnapshot() const;
 
-    size_t   ioHistorySize() const;
-    std::vector<struct IoAccessEvent> ioHistorySnapshot() const;
+    size_t   ioHistorySize() const override;
+    std::vector<IoAccessEvent> ioHistorySnapshot() const override;
 
-    void clearHistory();
-    void clearIoHistory();  // Stage 3.11 — clear I/O history only
+    void clearHistory() override;
+    void clearIoHistory() override;
 
-    // -- memory statistics (Stage 2.1, thread-safe snapshot) ------------------
+    // -- IDebugBackend: screen ----------------------------------------------
+
+    ScreenSnapshot     screenSnapshot() const override;
+    VideoModeSnapshot  videoModeSnapshot() const override;
+    VramWriteSnapshot  vramWriteSnapshot() const override;
+
+    // -- IDebugBackend: activity --------------------------------------------
+
+    ActivitySnapshot activitySnapshot() const override;
+    void clearActivityCounters() override;
+
+    // -- IDebugBackend: symbols ---------------------------------------------
+
+    SymbolDatabase       &symbolDatabase() override;
+    const SymbolDatabase &symbolDatabase() const override;
+
+    // -- debug logging (backward compatibility) -----------------------------
+
+    std::function<void(const char *line)> onTrace;
+
+    // -- event callbacks ----------------------------------------------------
+
+    std::function<void(const InstructionEvent &)> onInstruction;
+
+    // -- instrumentation hooks ----------------------------------------------
+
+    void onMemoryRead(uint32_t virt, uint32_t phys, bool stack, uint8_t value);
+    void onMemoryWrite(uint32_t virt, uint32_t phys, bool stack, uint8_t value);
+    void onIoInput(uint8_t port, uint8_t value);
+    void onIoOutput(uint8_t port, uint8_t value);
+
+    void setInstrumentationEnabled(bool enabled);
+    bool isInstrumentationEnabled() const;
+
+    // -- memory statistics --------------------------------------------------
 
     std::vector<struct MemoryStats> memoryStatsSnapshot() const;
 
-    // -- Stage 4.2: Symbol database -------------------------------------------
+    // -- emulation thread API (not part of IDebugBackend) --------------------
 
-    // Direct access (for GUI thread when emulation is paused).
-    SymbolDatabase &symbolDatabase();
-    const SymbolDatabase &symbolDatabase() const;
-
-    // -- Stage 4.2: Screen snapshot (for Vector Screen window) ----------------
-
-    struct ScreenSnapshot
-    {
-        std::vector<uint32_t> pixels;  // ARGB8888
-        int width  = 0;
-        int height = 0;
-    };
-
-    // Copy current framebuffer pixels. Thread-safe.
-    // Returns empty snapshot if no Board attached.
-    ScreenSnapshot screenSnapshot() const;
-
-    // -- Stage 4.2: Memory activity snapshot (for Memory Map) -----------------
-
-    struct ActivitySnapshot
-    {
-        std::vector<uint64_t> executeCount;  // indexed by address (64K)
-        std::vector<uint64_t> readCount;     // indexed by address (64K)
-        std::vector<uint64_t> writeCount;    // indexed by address (64K)
-    };
-
-    // Thread-safe snapshot of per-address activity counters.
-    ActivitySnapshot activitySnapshot() const;
-
-    // Clear all activity counters (runtime stats only, preserves symbols/breakpoints).
-    void clearActivityCounters();
-
-    // -- Enhanced Vector Screen: Video mode snapshot --------------------------
-
-    struct VideoModeSnapshot
-    {
-        bool mode512 = false;       // true = 512x256, false = 256x256
-        int screenWidth  = 576;     // framebuffer width (including borders)
-        int screenHeight = 288;     // framebuffer height (including borders)
-        int visibleWidth  = 512;    // visible area width
-        int visibleHeight = 256;    // visible area height
-        int borderLeft = 32;
-        int borderTop  = 16;
-        int scrollValue = 0;        // current scroll register (IO::ScrollStart)
-        uint16_t vramBase = 0xC000;
-        int pixelsPerByte = 8;      // 8 for 256-mode, 4 for 512-mode
-    };
-
-    // Thread-safe snapshot of current video mode state.
-    VideoModeSnapshot videoModeSnapshot() const;
-
-    // -- Enhanced Vector Screen: VRAM write tracking --------------------------
-
-    struct VramWriteInfo
-    {
-        uint8_t  value    = 0;
-        uint16_t pc       = 0;
-        uint64_t sequence = 0;
-    };
-
-    struct VramWriteSnapshot
-    {
-        std::vector<VramWriteInfo> lastWrite;  // 256 entries (one per VRAM byte)
-    };
-
-    // Thread-safe snapshot of per-VRAM-byte last write info.
-    VramWriteSnapshot vramWriteSnapshot() const;
-
-    // -- thread-safe command API (Stage 3.1, for GUI) -------------------------
-
-    // Called from GUI thread to request execution actions.
-    // The emulation thread calls runUntilPause() to process them.
-    void requestStep();       // execute exactly 1 instruction (blocks until done)
-    void requestRun();        // start continuous execution
-    void requestPause();      // request pause at next instruction boundary
-    void requestReset();      // request CPU reset
-    void waitForCompletion(); // block until current step/reset completes
-
-    // Called from emulation thread — runs until paused or breakpoint.
     void runUntilPause();
-
-    // Process one pending command (called from emulation thread loop).
-    // Also callable from tests to synchronously process posted commands.
     void processOneCommand();
-
-    // Signal the emulation thread to quit.
-    void requestQuit();
+    void waitForCompletion();
     bool isQuitRequested() const;
 
+    // Legacy execution (used internally, not via IDebugBackend)
+    void run();
+    void pause();
+    void reset();
+
 private:
-    Memory &memory_;
-#ifndef DEBUGGER_NO_BOARD
-    Board *board_ = nullptr;  // optional, for real emulator mode
-#endif
+    IDebugTarget *target_;
+    Memory       *rawMemory_;   // for callback installation (may be nullptr)
 
     DebuggerState state_;
 
-    // Breakpoints: id → DebuggerBreakpoint (Stage 3.7)
     std::map<int, DebuggerBreakpoint> breakpoints_;
     int nextId_;
 
     bool pauseRequested_;
 
     StopReason stopReason_ = StopReason::None;
-    bool       skipBreakpoint_ = false;  // "run after breakpoint" step-over
+    bool       skipBreakpoint_ = false;
 
     bool checkBreakpoint();
-    void syncBreakpointsToBoard();
+    void syncBreakpointsToTarget();
 
     void formatTraceLine(char *buf, size_t bufsize,
                          uint16_t pc, uint8_t opcode,
@@ -357,24 +190,20 @@ private:
 
     uint64_t instructionSequence_;
     bool     instrumentationEnabled_;
-    int      fetchRemaining_;   // fetch window: counts down during instruction execution
+    int      fetchRemaining_;
 
-    // Ring buffers (heap-allocated to avoid large stack frames)
     struct Impl;
     Impl *impl_;
 
-    // Saved previous Memory callbacks (for chaining)
     std::function<void(uint32_t,uint32_t,bool,uint8_t)> prevOnRead_;
     std::function<void(uint32_t,uint32_t,bool,uint8_t)> prevOnWrite_;
 
     void installMemoryCallbacks();
 
-    // -- Execution loops (called from runUntilPause) --------------------------
+    // -- Execution loops ----------------------------------------------------
 
-#ifndef DEBUGGER_NO_BOARD
-    void executeFramesBoard_();     // run frames until pause/breakpoint
-#endif
-    void executeFramesNoBoard_();   // run instructions until pause/breakpoint (tests)
+    void executeFramesTarget_();
+    void executeFramesNoTarget_();
 
     // -- Stage 3.1: thread-safe command protocol ------------------------------
 
@@ -386,19 +215,12 @@ private:
     PendingCommand          pendingCommand_ = PendingCommand::None;
     bool                    stepCompleted_  = false;
     bool                    quitRequested_  = false;
-    mutable std::mutex      stateMutex_;  // protects state_ for cross-thread reads
+    mutable std::mutex      stateMutex_;
 
-    // -- Atomic running flag (PSP-style Run/Pause) ----------------------------
-    // Run/Pause use this atomic flag instead of PendingCommand queue.
-    // The emulation thread checks this flag in its main loop.
     std::atomic<bool>       running_{false};
-
-    // -- Stage 3.13: Break request flag ---------------------------------------
-    // Set by requestPause() from GUI thread. Checked by poll_debugger callback
-    // in emulation thread, which calls board_->debugger_break() safely.
     std::atomic<bool>       breakRequested_{false};
 
-    // -- Stage 3.5: memory write command state --------------------------------
+    // -- memory write command state -----------------------------------------
 
     uint16_t                writeAddress_   = 0;
     std::vector<uint8_t>    writeData_;
@@ -407,50 +229,43 @@ private:
     void processWriteCommand();
     void executeWriteMemory();
 
-    // -- Stage 3.6: register write command state ------------------------------
+    // -- register write command state ---------------------------------------
 
     RegisterId  writeRegId_    = RegisterId::AF;
     uint16_t    writeRegValue_ = 0;
     bool        writeRegResult_ = false;
-    uint16_t    lastPc_        = 0;  // PC before last stepInstruction
+    uint16_t    lastPc_        = 0;
 
     void processRegisterWrite();
     void executeRegisterWrite();
 
-    // Find breakpoint by address (returns iterator, or end())
     std::map<int, DebuggerBreakpoint>::iterator findBreakpointByAddress(uint16_t address);
     std::map<int, DebuggerBreakpoint>::const_iterator findBreakpointByAddress(uint16_t address) const;
 
-    // -- Stage 4.2: Symbol database -------------------------------------------
+    // -- Symbol database ----------------------------------------------------
 
     SymbolDatabase symbols_;
 
-    // -- Stage 4.2: Activity counters -----------------------------------------
+    // -- Activity counters --------------------------------------------------
 
-    // Per-address execute count (incremented in stepInstruction).
-    // reads/writes are already tracked in impl_->memStats[].
     uint64_t executeCount_[65536];
 
-    // -- Enhanced Vector Screen: VRAM write tracking --------------------------
+    // -- VRAM write tracking ------------------------------------------------
 
-    // Per-VRAM-byte last write info (256 bytes at 0xC000..0xC0FF).
-    // Updated in onMemoryWrite callback.
     VramWriteInfo vramLastWrite_[256];
-    mutable std::mutex vramWriteMutex_;  // protects vramLastWrite_
+    mutable std::mutex vramWriteMutex_;
 
-    // -- Enhanced Vector Screen: IO port tracking (video mode) -----------------
+    // -- IO port tracking ---------------------------------------------------
 
-    // Tracked PPI port values from onIoOutput() callbacks.
-    // Port 0x03 → PA (ScrollStart), Port 0x02 → PB (Mode512 = bit 4).
-    // This avoids accessing IO directly — we mirror the register state
-    // through the existing HAL instrumentation path.
-    uint8_t ioPA_ = 0xFF;   // last value written to PPI port 0x03 (PA = ScrollStart)
-    uint8_t ioPB_ = 0xFF;   // last value written to PPI port 0x02 (PB, bit 4 = Mode512)
-    mutable std::mutex ioRegMutex_;  // protects ioPA_, ioPB_
+    uint8_t ioPA_ = 0xFF;
+    uint8_t ioPB_ = 0xFF;
+    mutable std::mutex ioRegMutex_;
 
-    // -- Stage 4.2: Screen mutex ----------------------------------------------
+    // -- Screen mutex -------------------------------------------------------
 
-#ifndef DEBUGGER_NO_BOARD
-    mutable std::mutex screenMutex_;  // protects screen snapshot
-#endif
+    mutable std::mutex screenMutex_;
+
+    // -- Legacy test support ------------------------------------------------
+
+    std::unique_ptr<IDebugTarget> ownedTarget_;
 };

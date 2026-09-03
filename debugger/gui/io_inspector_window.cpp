@@ -28,7 +28,7 @@ uint16_t IoInspectorWindow::resolvePc(uint64_t instructionSequence) const
 // Main render
 // ---------------------------------------------------------------------------
 
-void IoInspectorWindow::render(DebugBackend &backend)
+void IoInspectorWindow::render(IDebugBackend &backend)
 {
     if (!visible_) return;
 
@@ -69,7 +69,7 @@ void IoInspectorWindow::render(DebugBackend &backend)
 // Toolbar
 // ---------------------------------------------------------------------------
 
-void IoInspectorWindow::renderToolbar(DebugBackend &backend)
+void IoInspectorWindow::renderToolbar(IDebugBackend &backend)
 {
     // Follow I/O checkbox
     ImGui::Checkbox("Follow I/O", &followIo_);
@@ -128,7 +128,7 @@ void IoInspectorWindow::renderToolbar(DebugBackend &backend)
 // I/O table
 // ---------------------------------------------------------------------------
 
-void IoInspectorWindow::renderIoTable(DebugBackend &backend)
+void IoInspectorWindow::renderIoTable(IDebugBackend &backend)
 {
     if (cachedEntries_.empty()) {
         ImGui::TextDisabled("(no I/O events recorded)");
@@ -224,7 +224,7 @@ void IoInspectorWindow::renderIoTable(DebugBackend &backend)
 // Hardware State
 // ---------------------------------------------------------------------------
 
-void IoInspectorWindow::renderHardwareState(DebugBackend &backend)
+void IoInspectorWindow::renderHardwareState(IDebugBackend &backend)
 {
     if (!ImGui::CollapsingHeader("Hardware State")) {
         return;

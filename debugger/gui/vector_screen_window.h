@@ -5,7 +5,7 @@
 #include <functional>
 
 // Forward declarations
-class DebugBackend;
+class IDebugBackend;
 
 // ---------------------------------------------------------------------------
 // Vector Screen Window — Enhanced with zoom, pan, VRAM debug
@@ -26,7 +26,7 @@ public:
     VectorScreenWindow() = default;
     ~VectorScreenWindow();
 
-    void render(DebugBackend &backend);
+    void render(IDebugBackend &backend);
 
     void setVisible(bool v) { visible_ = v; }
     bool isVisible() const { return visible_; }
@@ -93,16 +93,16 @@ private:
     int highlightTimer_ = 0;                   // countdown
 
     // -- Sub-render methods --------------------------------------------------
-    void renderToolbar(DebugBackend &backend);
-    void renderScreen(DebugBackend &backend);
-    void renderCoordinateInfo(DebugBackend &backend);
-    void renderVramDebugOverlay(DebugBackend &backend);
-    void renderContextMenu(DebugBackend &backend);
+    void renderToolbar(IDebugBackend &backend);
+    void renderScreen(IDebugBackend &backend);
+    void renderCoordinateInfo(IDebugBackend &backend);
+    void renderVramDebugOverlay(IDebugBackend &backend);
+    void renderContextMenu(IDebugBackend &backend);
 
     // -- Helpers -------------------------------------------------------------
     void handleZoomInput();
     void handlePanInput(int visibleW, int visibleH, int zoomFactor,
                         float regionW, float regionH);
-    void updateWriteHighlights(DebugBackend &backend);
-    void captureCurrentFrame(DebugBackend &backend);
+    void updateWriteHighlights(IDebugBackend &backend);
+    void captureCurrentFrame(IDebugBackend &backend);
 };

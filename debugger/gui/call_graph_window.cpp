@@ -1,5 +1,5 @@
 #include "call_graph_window.h"
-#include "backend.h"
+#include "idebug_backend.h"
 #include "symbol_database.h"
 
 // Dear ImGui
@@ -11,7 +11,7 @@
 // Build call graph
 // ---------------------------------------------------------------------------
 
-void CallGraphWindow::buildCallGraph(DebugBackend &backend)
+void CallGraphWindow::buildCallGraph(IDebugBackend &backend)
 {
     callGraph_.clear();
     functionAddresses_.clear();
@@ -41,7 +41,7 @@ void CallGraphWindow::buildCallGraph(DebugBackend &backend)
 // Render node recursively
 // ---------------------------------------------------------------------------
 
-void CallGraphWindow::renderNode(uint16_t addr, DebugBackend &backend, int depth,
+void CallGraphWindow::renderNode(uint16_t addr, IDebugBackend &backend, int depth,
                                   std::set<uint16_t> &visited)
 {
     auto &symbols = backend.symbolDatabase();
@@ -92,7 +92,7 @@ void CallGraphWindow::renderNode(uint16_t addr, DebugBackend &backend, int depth
 // Render
 // ---------------------------------------------------------------------------
 
-void CallGraphWindow::render(DebugBackend &backend)
+void CallGraphWindow::render(IDebugBackend &backend)
 {
     if (!visible_) return;
 

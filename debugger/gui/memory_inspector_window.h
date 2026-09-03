@@ -3,10 +3,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <functional>
-#include "backend.h"
+#include "idebug_backend.h"
 
 // Forward declarations
-class DebugBackend;
+class IDebugBackend;
 
 // ---------------------------------------------------------------------------
 // Memory Inspector Window (Stage 3.3)
@@ -23,7 +23,7 @@ public:
     }
     
     // Render the window. Call every frame.
-    void render(DebugBackend &backend);
+    void render(IDebugBackend &backend);
     
     // Request snapshot refresh on next render
     void requestRefresh() { needsRefresh_ = true; }
@@ -70,18 +70,18 @@ private:
     bool writeFailed_ = false;       // status: write rejected (not paused)
     
     // Render sub-components
-    void renderToolbar(DebugBackend &backend);
-    void renderMemoryView(DebugBackend &backend);
-    void renderDisassembly(DebugBackend &backend);
+    void renderToolbar(IDebugBackend &backend);
+    void renderMemoryView(IDebugBackend &backend);
+    void renderDisassembly(IDebugBackend &backend);
     
     // Snapshot management
-    void refreshSnapshot(DebugBackend &backend);
+    void refreshSnapshot(IDebugBackend &backend);
     
     // Address parsing
     bool parseAddress(const char *input, uint16_t &address) const;
     
     // Byte editing
     void beginEditByte(uint16_t address);
-    void confirmEdit(DebugBackend &backend);
+    void confirmEdit(IDebugBackend &backend);
     void cancelEdit();
 };

@@ -13,7 +13,7 @@
 // Main render
 // ---------------------------------------------------------------------------
 
-void MemoryInspectorWindow::render(DebugBackend &backend)
+void MemoryInspectorWindow::render(IDebugBackend &backend)
 {
     if (!visible_) return;
     
@@ -53,7 +53,7 @@ void MemoryInspectorWindow::render(DebugBackend &backend)
 // Toolbar
 // ---------------------------------------------------------------------------
 
-void MemoryInspectorWindow::renderToolbar(DebugBackend &backend)
+void MemoryInspectorWindow::renderToolbar(IDebugBackend &backend)
 {
     // Byte editing mode (Stage 3.5)
     if (editingByte_) {
@@ -126,7 +126,7 @@ void MemoryInspectorWindow::renderToolbar(DebugBackend &backend)
 // Memory View (hex + ASCII)
 // ---------------------------------------------------------------------------
 
-void MemoryInspectorWindow::renderMemoryView(DebugBackend &backend)
+void MemoryInspectorWindow::renderMemoryView(IDebugBackend &backend)
 {
     if (snapshot_.data.empty()) {
         ImGui::Text("No data. Click Refresh to load memory.");
@@ -304,7 +304,7 @@ void MemoryInspectorWindow::renderMemoryView(DebugBackend &backend)
 // Disassembly
 // ---------------------------------------------------------------------------
 
-void MemoryInspectorWindow::renderDisassembly(DebugBackend &backend)
+void MemoryInspectorWindow::renderDisassembly(IDebugBackend &backend)
 {
     ImGui::Text("Disassembly at %04X:", selectedAddress_);
     
@@ -345,7 +345,7 @@ void MemoryInspectorWindow::renderDisassembly(DebugBackend &backend)
 // Snapshot management
 // ---------------------------------------------------------------------------
 
-void MemoryInspectorWindow::refreshSnapshot(DebugBackend &backend)
+void MemoryInspectorWindow::refreshSnapshot(IDebugBackend &backend)
 {
     // Load entire 64 KB
     snapshot_ = backend.readMemorySnapshot(0x0000, 0x10000);
@@ -413,7 +413,7 @@ void MemoryInspectorWindow::beginEditByte(uint16_t address)
     }
 }
 
-void MemoryInspectorWindow::confirmEdit(DebugBackend &backend)
+void MemoryInspectorWindow::confirmEdit(IDebugBackend &backend)
 {
     // Parse hex value
     unsigned int value = 0;

@@ -2,16 +2,16 @@
 
 #include <cstdint>
 #include <functional>
-#include "backend.h"
+#include "idebug_backend.h"
 
 // Forward declarations
-class DebugBackend;
+class IDebugBackend;
 
 // ---------------------------------------------------------------------------
 // Breakpoints Window (Stage 3.7)
 //
 // Displays all breakpoints with enable/disable toggle, add/remove controls.
-// Uses DebugBackend API — no direct access to Board or CPU.
+// Uses IDebugBackend API — no direct access to Board or CPU.
 // ---------------------------------------------------------------------------
 
 class BreakpointsWindow
@@ -20,7 +20,7 @@ public:
     BreakpointsWindow() {}
     
     // Render the window. Call every frame.
-    void render(DebugBackend &backend);
+    void render(IDebugBackend &backend);
     
     // Check if window is visible
     bool isVisible() const { return visible_; }

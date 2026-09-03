@@ -1,5 +1,5 @@
 #include "vector_screen_window.h"
-#include "backend.h"
+#include "idebug_backend.h"
 #include "vram_mapping.h"
 
 // Dear ImGui
@@ -111,7 +111,7 @@ void VectorScreenWindow::clampPan(int visibleW, int visibleH, int zoomFactor,
 // Write highlight detection
 // ---------------------------------------------------------------------------
 
-void VectorScreenWindow::updateWriteHighlights(DebugBackend &backend)
+void VectorScreenWindow::updateWriteHighlights(IDebugBackend &backend)
 {
     auto activity = backend.activitySnapshot();
 
@@ -149,7 +149,7 @@ void VectorScreenWindow::updateWriteHighlights(DebugBackend &backend)
 // Capture current frame
 // ---------------------------------------------------------------------------
 
-void VectorScreenWindow::captureCurrentFrame(DebugBackend &backend)
+void VectorScreenWindow::captureCurrentFrame(IDebugBackend &backend)
 {
     auto snap = backend.screenSnapshot();
     if (!snap.pixels.empty()) {
@@ -163,7 +163,7 @@ void VectorScreenWindow::captureCurrentFrame(DebugBackend &backend)
 // Toolbar
 // ---------------------------------------------------------------------------
 
-void VectorScreenWindow::renderToolbar(DebugBackend &backend)
+void VectorScreenWindow::renderToolbar(IDebugBackend &backend)
 {
     // Zoom buttons
     for (int i = 0; i < ZOOM_LEVELS; ++i) {
@@ -244,7 +244,7 @@ void VectorScreenWindow::renderToolbar(DebugBackend &backend)
 // Coordinate info bar
 // ---------------------------------------------------------------------------
 
-void VectorScreenWindow::renderCoordinateInfo(DebugBackend &backend)
+void VectorScreenWindow::renderCoordinateInfo(IDebugBackend &backend)
 {
     auto video = backend.videoModeSnapshot();
     VramMapping::VideoInfo vi = VramMapping::fromVideoMode(
@@ -304,7 +304,7 @@ void VectorScreenWindow::renderCoordinateInfo(DebugBackend &backend)
 // Context menu
 // ---------------------------------------------------------------------------
 
-void VectorScreenWindow::renderContextMenu(DebugBackend &backend)
+void VectorScreenWindow::renderContextMenu(IDebugBackend &backend)
 {
     if (!ImGui::BeginPopupContextWindow()) return;
 
@@ -359,7 +359,7 @@ void VectorScreenWindow::renderContextMenu(DebugBackend &backend)
 // VRAM Debug overlay (drawn on top of the screen image)
 // ---------------------------------------------------------------------------
 
-void VectorScreenWindow::renderVramDebugOverlay(DebugBackend &backend)
+void VectorScreenWindow::renderVramDebugOverlay(IDebugBackend &backend)
 {
     if (!vramDebugMode_) return;
 
@@ -395,8 +395,8 @@ void VectorScreenWindow::renderVramDebugOverlay(DebugBackend &backend)
     float cellH = static_cast<float>(zoom);
 
     // Get activity snapshot for write counts and changed detection
-    DebugBackend::ActivitySnapshot activity;
-    DebugBackend::VramWriteSnapshot vramSnap;
+    IDebugBackend::ActivitySnapshot activity;
+    IDebugBackend::VramWriteSnapshot vramSnap;
     if (showChangedBytes_ || showWriteCount_) {
         activity = backend.activitySnapshot();
     }
@@ -481,7 +481,7 @@ void VectorScreenWindow::renderVramDebugOverlay(DebugBackend &backend)
 // Screen rendering (main area)
 // ---------------------------------------------------------------------------
 
-void VectorScreenWindow::renderScreen(DebugBackend &backend)
+void VectorScreenWindow::renderScreen(IDebugBackend &backend)
 {
     if (textureId_ == 0) {
         ImGui::TextDisabled("(texture not created)");
@@ -651,7 +651,7 @@ void VectorScreenWindow::handlePanInput(int visibleW, int visibleH, int zoomFact
 // Main render
 // ---------------------------------------------------------------------------
 
-void VectorScreenWindow::render(DebugBackend &backend)
+void VectorScreenWindow::render(IDebugBackend &backend)
 {
     if (!visible_) return;
 

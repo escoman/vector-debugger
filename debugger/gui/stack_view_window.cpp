@@ -10,7 +10,7 @@
 // Main render
 // ---------------------------------------------------------------------------
 
-void StackViewWindow::render(DebugBackend &backend)
+void StackViewWindow::render(IDebugBackend &backend)
 {
     if (!visible_) return;
     
@@ -52,7 +52,7 @@ void StackViewWindow::render(DebugBackend &backend)
 // Toolbar
 // ---------------------------------------------------------------------------
 
-void StackViewWindow::renderToolbar(DebugBackend &backend)
+void StackViewWindow::renderToolbar(IDebugBackend &backend)
 {
     CpuState cpu = backend.getCpuState();
     
@@ -76,7 +76,7 @@ void StackViewWindow::renderToolbar(DebugBackend &backend)
 // Stack View
 // ---------------------------------------------------------------------------
 
-void StackViewWindow::renderStackView(DebugBackend &backend)
+void StackViewWindow::renderStackView(IDebugBackend &backend)
 {
     if (snapshot_.data.empty()) {
         ImGui::Text("No data. Click Refresh to load stack.");
@@ -199,7 +199,7 @@ void StackViewWindow::renderStackView(DebugBackend &backend)
 // Snapshot management
 // ---------------------------------------------------------------------------
 
-void StackViewWindow::refreshSnapshot(DebugBackend &backend)
+void StackViewWindow::refreshSnapshot(IDebugBackend &backend)
 {
     // Stage 3.9: use SP if followSP_, else use viewCenter_
     uint16_t center = followSP_ ? currentSP_ : viewCenter_;

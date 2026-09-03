@@ -14,7 +14,7 @@
 // Main render
 // ---------------------------------------------------------------------------
 
-void ExecutionTraceWindow::render(DebugBackend &backend)
+void ExecutionTraceWindow::render(IDebugBackend &backend)
 {
     if (!visible_) return;
 
@@ -53,7 +53,7 @@ void ExecutionTraceWindow::render(DebugBackend &backend)
 // Toolbar
 // ---------------------------------------------------------------------------
 
-void ExecutionTraceWindow::renderToolbar(DebugBackend &backend)
+void ExecutionTraceWindow::renderToolbar(IDebugBackend &backend)
 {
     // Follow Execution checkbox
     ImGui::Checkbox("Follow Execution", &followExecution_);
@@ -89,7 +89,7 @@ void ExecutionTraceWindow::renderToolbar(DebugBackend &backend)
 // Trace table
 // ---------------------------------------------------------------------------
 
-void ExecutionTraceWindow::renderTraceTable(DebugBackend &backend)
+void ExecutionTraceWindow::renderTraceTable(IDebugBackend &backend)
 {
     if (cachedEntries_.empty()) {
         ImGui::TextDisabled("(no instructions recorded)");

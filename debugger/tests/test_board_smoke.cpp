@@ -13,6 +13,8 @@
 #include "i8080.h"
 #include "i8080_hal.h"
 #include "backend.h"
+#include "debug_target.h"
+#include "debug_memory.h"
 #include "events.h"
 #include "options.h"
 #include "board.h"
@@ -105,8 +107,66 @@ static const uint8_t test_program[] = {
 
 static DebugBackend *test_backend = nullptr;
 
-// Forward declarations from hal.cpp
-extern void i8080_hal_bind(Memory & _mem, IO & _io, Board & _board);
+// ---------------------------------------------------------------------------
+// TestBoardTarget — IDebugTarget wrapping a real Board for testing
+// ---------------------------------------------------------------------------
+
+class TestBoardTarget : public IDebugTarget {
+public:
+    TestBoardTarget(Memory &mem, Board &brd) : memory_(mem), board_(brd) {}
+
+    uint8_t readMemory(uint16_t addr) override { return memory_.read(addr, false); }
+    uint8_t peekMemory(uint16_t addr) override { return DebugMemoryAccess::peek(memory_, addr); }
+    void writeMemory(uint16_t addr, uint8_t val) override { memory_.write(addr, val, false); }
+
+    CpuState getCpuState() override {
+        CpuState s;
+        s.pc = (uint16_t)i8080_pc(); s.sp = (uint16_t)i8080_regs_sp();
+        s.a = (uint8_t)i8080_regs_a(); s.b = (uint8_t)i8080_regs_b();
+        s.c = (uint8_t)i8080_regs_c(); s.d = (uint8_t)i8080_regs_d();
+        s.e = (uint8_t)i8080_regs_e(); s.h = (uint8_t)i8080_regs_h();
+        s.l = (uint8_t)i8080_regs_l(); s.flags = (uint8_t)i8080_regs_f();
+        s.iff = i8080_iff(); s.cycles = (uint32_t)i8080_cycles();
+        s.ei_pending = false; s.last_pc = 0;
+        return s;
+    }
+    void writeCpuRegister(int reg, uint16_t val) override {
+        switch(reg) {
+            case 0: i8080_setreg_a((val>>8)&0xFF); i8080_setreg_f(val&0xFF); break;
+            case 1: i8080_setreg_b((val>>8)&0xFF); i8080_setreg_c(val&0xFF); break;
+            case 2: i8080_setreg_d((val>>8)&0xFF); i8080_setreg_e(val&0xFF); break;
+            case 3: i8080_setreg_h((val>>8)&0xFF); i8080_setreg_l(val&0xFF); break;
+            case 4: i8080_setreg_sp(val); break;
+            case 5: i8080_jump(val); break;
+        }
+    }
+
+    Memory* rawMemory() override { return &memory_; }
+
+    void stepInstruction() override { board_.single_step(false); }
+    void executeFrame() override { board_.execute_frame_with_cadence(false, false); }
+    void reset(bool loadRom) override {
+        board_.reset(loadRom ? Board::ResetMode::LOADROM : Board::ResetMode::BLKSBR);
+    }
+    void debuggerBreak() override { board_.debugger_break(); }
+    void debuggerContinue() override { board_.debugger_continue(); }
+    void debuggerAttached() override { board_.debugger_attached(); }
+    void debuggerDetached() override { board_.debugger_detached(); }
+    void setPollCallback(std::function<void()> cb) override { board_.poll_debugger = cb; }
+    void syncBreakpoints(const DebuggerBreakpoint *bps, size_t count) override {
+        for (size_t i = 0; i < count; ++i)
+            if (bps[i].enabled) board_.insert_breakpoint(0, bps[i].address, 1);
+    }
+    ScreenData screenSnapshot() override { return {}; }
+    bool loadRom(const std::string&, uint32_t) override { return false; }
+    void initCpu(uint16_t pc, uint16_t sp) override {
+        i8080_jump(pc); i8080_setreg_sp(sp); i8080_init();
+    }
+
+private:
+    Memory &memory_;
+    Board  &board_;
+};
 
 // ---------------------------------------------------------------------------
 // Test: Simplified Board integration smoke test
@@ -152,9 +212,9 @@ static void test_board_smoke()
     printf("  Initializing Board...\n");
     board.init();  // This calls i8080_hal_bind()
     
-    // --- Create DebugBackend and attach real Board ---
-    DebugBackend backend(memory);
-    backend.attachBoard(&board);
+    // --- Create DebugBackend with TestBoardTarget wrapping real Board ---
+    TestBoardTarget target(memory, board);
+    DebugBackend backend(target);
     test_backend = &backend;
     
     // --- Wire I/O callbacks so DebugBackend records I/O events ---
@@ -190,7 +250,7 @@ static void test_board_smoke()
     
     // --- Step 1: Execute MVI A, 55h ---
     printf("  Stepping: MVI A, 55h...\n");
-    StepResult step1 = backend.stepInstruction();
+    StepResult step1 = backend.stepInstructionDetailed();
     CHECK_EQ(0x0000, step1.pcBefore, "Step 1: PC before == 0x0000");
     CHECK_EQ(0x0002, step1.pcAfter,  "Step 1: PC after == 0x0002");
     CHECK_EQ(0x3E,   step1.opcode,   "Step 1: opcode == 0x3E (MVI A)");
@@ -200,7 +260,7 @@ static void test_board_smoke()
     
     // --- Step 2: Execute INR A ---
     printf("  Stepping: INR A...\n");
-    StepResult step2 = backend.stepInstruction();
+    StepResult step2 = backend.stepInstructionDetailed();
     CHECK_EQ(0x0002, step2.pcBefore, "Step 2: PC before == 0x0002");
     CHECK_EQ(0x0003, step2.pcAfter,  "Step 2: PC after == 0x0003");
     CHECK_EQ(0x3C,   step2.opcode,   "Step 2: opcode == 0x3C (INR A)");
@@ -409,7 +469,7 @@ static void test_board_smoke()
              "stopReason == Breakpoint");
     
     // Step — should execute INR A, A becomes 0x56, PC becomes 0x0003
-    StepResult bpStep = backend.stepInstruction();
+    StepResult bpStep = backend.stepInstructionDetailed();
     CHECK_EQ(0x0002, bpStep.pcBefore, "step from 0x0002");
     CHECK_EQ(0x0003, bpStep.pcAfter, "now at 0x0003");
     

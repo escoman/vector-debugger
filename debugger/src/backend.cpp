@@ -1,23 +1,17 @@
 #include "backend.h"
+#include "no_board_target.h"
 #include "events.h"
 #include "opcode_info.h"
 #include "ring_buffer.h"
 #include "debug_memory.h"
 
-#include "i8080.h"
-#include "i8080_hal.h"
-#include "memory.h"
-#ifndef DEBUGGER_NO_BOARD
-#include "board.h"
-#include "tv.h"
-#include "util.h"
-#endif
+#include "memory.h"  // rawMemory_ callback installation (onread/onwrite)
 
 #include <cstdio>
 #include <cstring>
 #include <climits>
+#include <memory>
 
-using namespace i8080cpu;
 
 // ---------------------------------------------------------------------------
 // Default ring-buffer capacities
@@ -61,8 +55,9 @@ struct DebugBackend::Impl
 // Construction / destruction
 // ---------------------------------------------------------------------------
 
-DebugBackend::DebugBackend(Memory &memory)
-    : memory_(memory)
+DebugBackend::DebugBackend(IDebugTarget &target)
+    : target_(&target)
+    , rawMemory_(target.rawMemory())
     , state_(DebuggerState::Paused)
     , nextId_(1)
     , pauseRequested_(false)
@@ -75,63 +70,65 @@ DebugBackend::DebugBackend(Memory &memory)
     installMemoryCallbacks();
 }
 
+DebugBackend::DebugBackend(Memory &memory)
+    : target_(nullptr)
+    , rawMemory_(&memory)
+    , state_(DebuggerState::Paused)
+    , nextId_(1)
+    , pauseRequested_(false)
+    , instructionSequence_(0)
+    , instrumentationEnabled_(true)
+    , fetchRemaining_(0)
+    , impl_(new Impl())
+{
+    // Legacy constructor for tests: create NoBoardTarget internally
+    ownedTarget_ = std::make_unique<NoBoardTarget>(memory);
+    target_ = ownedTarget_.get();
+    clearActivityCounters();
+    installMemoryCallbacks();
+}
+
 DebugBackend::~DebugBackend()
 {
     // Restore previous callbacks before destroying
-    memory_.onread  = prevOnRead_;
-    memory_.onwrite = prevOnWrite_;
+    if (rawMemory_) {
+        rawMemory_->onread  = prevOnRead_;
+        rawMemory_->onwrite = prevOnWrite_;
+    }
     delete impl_;
 }
 
 // ---------------------------------------------------------------------------
-// Board integration (Stage 3.2)
+// Target integration (Stage 3.13a)
 // ---------------------------------------------------------------------------
 
-#ifndef DEBUGGER_NO_BOARD
-
-void DebugBackend::attachBoard(Board *board)
+void DebugBackend::attachTarget(IDebugTarget *target)
 {
-    board_ = board;
+    target_ = target;
 }
 
 bool DebugBackend::loadRom(const std::string &path, uint32_t org)
 {
-    // Load ROM file
-    std::vector<uint8_t> rom_data = util::load_binfile(path);
-    if (rom_data.empty()) {
+    if (!target_) return false;
+
+    // Delegate ROM loading to target (handles memory + CPU/board init)
+    if (!target_->loadRom(path, org)) {
         printf("DebugBackend::loadRom(): failed to load %s\n", path.c_str());
         return false;
     }
-    
-    printf("DebugBackend::loadRom(): loaded %s (%zu bytes) at %04x\n",
-           path.c_str(), rom_data.size(), org);
-    
-    // Load into Memory
-    memory_.init_from_vector(rom_data, org);
-    
-    // Reset Board in LOADROM mode
-    if (board_) {
-        Options.pc = org;  // Set PC for reset
-        board_->reset(Board::ResetMode::LOADROM);
-    } else {
-        // No Board attached, just reset CPU
-        i8080_jump(org);
-        i8080_setreg_sp(0xc300);
-        i8080_init();
-    }
-    
+
+    printf("DebugBackend::loadRom(): loaded %s at %04x\n", path.c_str(), org);
+
     // Clear debug history
     clearHistory();
     instructionSequence_ = 0;
-    
+
     // Set state to Paused
     state_ = DebuggerState::Paused;
     pauseRequested_ = false;
-    
+
     return true;
 }
-
-#endif // DEBUGGER_NO_BOARD
 
 // ---------------------------------------------------------------------------
 // Memory callback installation (with chaining)
@@ -139,13 +136,15 @@ bool DebugBackend::loadRom(const std::string &path, uint32_t org)
 
 void DebugBackend::installMemoryCallbacks()
 {
+    if (!rawMemory_) return;
+
     // Save existing callbacks for chaining
-    prevOnRead_  = memory_.onread;
-    prevOnWrite_ = memory_.onwrite;
+    prevOnRead_  = rawMemory_->onread;
+    prevOnWrite_ = rawMemory_->onwrite;
 
     DebugBackend *self = this;
 
-    memory_.onread = [self](uint32_t virt, uint32_t phys,
+    rawMemory_->onread = [self](uint32_t virt, uint32_t phys,
                             bool stack, uint8_t value) {
         self->onMemoryRead(virt, phys, stack, value);
         if (self->prevOnRead_) {
@@ -153,7 +152,7 @@ void DebugBackend::installMemoryCallbacks()
         }
     };
 
-    memory_.onwrite = [self](uint32_t virt, uint32_t phys,
+    rawMemory_->onwrite = [self](uint32_t virt, uint32_t phys,
                              bool stack, uint8_t value) {
         self->onMemoryWrite(virt, phys, stack, value);
         if (self->prevOnWrite_) {
@@ -168,7 +167,7 @@ void DebugBackend::installMemoryCallbacks()
 
 uint8_t DebugBackend::readMemory(uint16_t address)
 {
-    return DebugMemoryAccess::peek(memory_, address);
+    return target_->readMemory(address);
 }
 
 MemorySnapshot DebugBackend::readMemorySnapshot(uint16_t start, size_t size)
@@ -176,12 +175,12 @@ MemorySnapshot DebugBackend::readMemorySnapshot(uint16_t start, size_t size)
     MemorySnapshot snapshot;
     snapshot.start = start;
     snapshot.data.reserve(size);
-    
+
     for (size_t i = 0; i < size; ++i) {
         uint16_t addr = static_cast<uint16_t>((start + i) & 0xFFFF);
-        snapshot.data.push_back(DebugMemoryAccess::peek(memory_, addr));
+        snapshot.data.push_back(target_->readMemory(addr));
     }
-    
+
     return snapshot;
 }
 
@@ -218,8 +217,6 @@ bool DebugBackend::writeMemory(uint16_t address, const uint8_t* data, size_t siz
 
 void DebugBackend::processWriteCommand()
 {
-    // Check state — write only allowed when Paused.
-    // State check happens in the emulation thread context.
     std::lock_guard<std::mutex> lock(stateMutex_);
     if (state_ != DebuggerState::Paused) {
         writeResult_ = false;
@@ -232,11 +229,9 @@ void DebugBackend::processWriteCommand()
 
 void DebugBackend::executeWriteMemory()
 {
-    // Write through Memory::write() — handles virtual address translation
-    // and banking automatically. Do NOT use Memory::buffer().
     for (size_t i = 0; i < writeData_.size(); ++i) {
         uint16_t addr = static_cast<uint16_t>((writeAddress_ + i) & 0xFFFF);
-        memory_.write(addr, writeData_[i], false);
+        target_->writeMemory(addr, writeData_[i]);
     }
 }
 
@@ -246,7 +241,6 @@ void DebugBackend::executeWriteMemory()
 
 bool DebugBackend::writeRegister(RegisterId id, uint16_t value)
 {
-    // Post register write command for emulation thread
     {
         std::lock_guard<std::mutex> lock(commandMutex_);
         writeRegId_     = id;
@@ -257,7 +251,6 @@ bool DebugBackend::writeRegister(RegisterId id, uint16_t value)
     }
     commandCv_.notify_one();
 
-    // Wait for the emulation thread to complete the write
     std::unique_lock<std::mutex> lock(commandMutex_);
     resultCv_.wait(lock, [this]{ return stepCompleted_; });
 
@@ -266,7 +259,6 @@ bool DebugBackend::writeRegister(RegisterId id, uint16_t value)
 
 void DebugBackend::processRegisterWrite()
 {
-    // Check state — write only allowed when Paused.
     std::lock_guard<std::mutex> lock(stateMutex_);
     if (state_ != DebuggerState::Paused) {
         writeRegResult_ = false;
@@ -279,30 +271,7 @@ void DebugBackend::processRegisterWrite()
 
 void DebugBackend::executeRegisterWrite()
 {
-    switch (writeRegId_) {
-        case RegisterId::AF:
-            i8080_setreg_a((writeRegValue_ >> 8) & 0xFF);
-            i8080_setreg_f(writeRegValue_ & 0xFF);
-            break;
-        case RegisterId::BC:
-            i8080_setreg_b((writeRegValue_ >> 8) & 0xFF);
-            i8080_setreg_c(writeRegValue_ & 0xFF);
-            break;
-        case RegisterId::DE:
-            i8080_setreg_d((writeRegValue_ >> 8) & 0xFF);
-            i8080_setreg_e(writeRegValue_ & 0xFF);
-            break;
-        case RegisterId::HL:
-            i8080_setreg_h((writeRegValue_ >> 8) & 0xFF);
-            i8080_setreg_l(writeRegValue_ & 0xFF);
-            break;
-        case RegisterId::SP:
-            i8080_setreg_sp(writeRegValue_);
-            break;
-        case RegisterId::PC:
-            i8080_jump(writeRegValue_);
-            break;
-    }
+    target_->writeCpuRegister(static_cast<int>(writeRegId_), writeRegValue_);
 }
 
 // ---------------------------------------------------------------------------
@@ -311,24 +280,8 @@ void DebugBackend::executeRegisterWrite()
 
 CpuState DebugBackend::getCpuState() const
 {
-    CpuState s;
-    s.pc    = static_cast<uint16_t>(i8080_pc());
-    s.sp    = static_cast<uint16_t>(i8080_regs_sp());
-    s.a     = static_cast<uint8_t>(i8080_regs_a());
-    s.b     = static_cast<uint8_t>(i8080_regs_b());
-    s.c     = static_cast<uint8_t>(i8080_regs_c());
-    s.d     = static_cast<uint8_t>(i8080_regs_d());
-    s.e     = static_cast<uint8_t>(i8080_regs_e());
-    s.h     = static_cast<uint8_t>(i8080_regs_h());
-    s.l     = static_cast<uint8_t>(i8080_regs_l());
-    s.flags = static_cast<uint8_t>(i8080_regs_f());
-    s.iff   = i8080_iff();
-    // Stage 3.6 — additional CPU state
-    s.cycles     = static_cast<uint32_t>(i8080_cycles());
-    // Not exposed by the current emulator core.
-    // Do not modify src/ just for debugger access.
-    s.ei_pending = false;
-    s.last_pc    = lastPc_;
+    CpuState s = target_->getCpuState();
+    s.last_pc = lastPc_;
     return s;
 }
 
@@ -349,22 +302,12 @@ bool DebugBackend::isPaused() const
 
 void DebugBackend::reset()
 {
-#ifndef DEBUGGER_NO_BOARD
-    if (board_) {
-        // Use Board's reset for full emulator integration
-        board_->reset(Board::ResetMode::BLKSBR);
-    } else
-#endif
-    {
-        // Direct CPU reset (for tests)
-        i8080_init();
-    }
-    
+    target_->reset(false);
+
     state_ = DebuggerState::Paused;
     pauseRequested_ = false;
     stopReason_ = StopReason::Reset;
 
-    // Clear all debug state (but NOT breakpoints — they survive reset)
     instructionSequence_ = 0;
     impl_->instrHistory.clear();
     impl_->memHistory.clear();
@@ -373,56 +316,50 @@ void DebugBackend::reset()
     clearActivityCounters();
 }
 
-StepResult DebugBackend::stepInstruction()
+void DebugBackend::stepInstruction()
+{
+    stepInstructionDetailed();
+}
+
+StepResult DebugBackend::stepInstructionDetailed()
 {
     StepResult r;
 
     // Track last_pc before execution (Stage 3.6)
-    lastPc_ = static_cast<uint16_t>(i8080_pc());
+    lastPc_ = target_->getCpuState().pc;
     stopReason_ = StopReason::Step;
 
     // --- before ---
-    r.before   = getCpuState();
+    r.before   = target_->getCpuState();
+    r.before.last_pc = lastPc_;
     r.pcBefore = r.before.pc;
 
-    // Use DebugMemoryAccess::peek() — performs bank translation without triggering callbacks.
-    r.opcode  = DebugMemoryAccess::peek(memory_, r.pcBefore);
+    // Read opcode via peek (no callbacks)
+    r.opcode  = target_->peekMemory(r.pcBefore);
     r.length  = opcode_info::get_length(r.opcode);
 
-    // Capture operand bytes BEFORE execution (for trace formatting).
+    // Capture operand bytes BEFORE execution
     uint8_t operandBytes[2] = {0, 0};
-    if (r.length >= 2) operandBytes[0] = DebugMemoryAccess::peek(memory_, (r.pcBefore + 1) & 0xffff);
-    if (r.length >= 3) operandBytes[1] = DebugMemoryAccess::peek(memory_, (r.pcBefore + 2) & 0xffff);
+    if (r.length >= 2) operandBytes[0] = target_->peekMemory((r.pcBefore + 1) & 0xffff);
+    if (r.length >= 3) operandBytes[1] = target_->peekMemory((r.pcBefore + 2) & 0xffff);
 
-    // Set fetch window: the first r.length memory reads are Fetches.
+    // Set fetch window
     fetchRemaining_ = r.length;
 
     // --- execute exactly one 8080 instruction ---
-    int cycles;
-#ifndef DEBUGGER_NO_BOARD
-    if (board_) {
-        // Use Board's single_step for full emulator integration
-        board_->single_step(false);  // false = don't update screen
-        // Board doesn't return cycles directly, estimate from instruction
-        cycles = i8080_cycles();  // This may not be accurate
-    } else
-#endif
-    {
-        // Direct CPU execution (for tests)
-        int report_opcode = 0;
-        cycles = i8080_instruction(&report_opcode);
-    }
+    target_->stepInstruction();
+    int cycles = target_->getCpuState().cycles;
 
     // Fetch window should be consumed; reset defensively.
     fetchRemaining_ = 0;
 
     // --- after ---
-    r.after   = getCpuState();
+    r.after   = target_->getCpuState();
+    r.after.last_pc = lastPc_;
     r.pcAfter = r.after.pc;
     r.cycles  = static_cast<uint32_t>(cycles > 0 ? cycles : 0);
 
     if (!instrumentationEnabled_) {
-        // Skip all recording when instrumentation is disabled.
         return r;
     }
 
@@ -444,19 +381,18 @@ StepResult DebugBackend::stepInstruction()
     // Stage 4.2: increment per-address execute counter
     executeCount_[r.pcBefore]++;
 
-    // --- trace output (Stage 1 backward compatibility) ---
+    // --- trace output ---
     if (onTrace) {
         char line[128];
         formatTraceLine(line, sizeof(line), r.pcBefore, r.opcode, operandBytes);
         onTrace(line);
     }
 
-    // --- event callback (Stage 2) ---
+    // --- event callback ---
     if (onInstruction) {
         onInstruction(ie);
     }
 
-    // Advance sequence AFTER recording
     instructionSequence_++;
 
     return r;
@@ -467,16 +403,13 @@ void DebugBackend::run()
     state_ = DebuggerState::Running;
     pauseRequested_ = false;
 
-    // "Run after breakpoint" step-over:
-    // If PC is currently at an enabled breakpoint, skip it on first check.
     skipBreakpoint_ = checkBreakpoint();
 
     while (state_ == DebuggerState::Running) {
-        // Check breakpoint BEFORE executing the instruction at PC.
         if (checkBreakpoint()) {
             if (skipBreakpoint_) {
                 skipBreakpoint_ = false;
-                stepInstruction();  // step past the breakpoint
+                stepInstruction();
                 continue;
             }
             stopReason_ = StopReason::Breakpoint;
@@ -484,7 +417,6 @@ void DebugBackend::run()
             break;
         }
 
-        // Check if pause was requested externally.
         if (pauseRequested_) {
             stopReason_ = StopReason::UserPause;
             state_ = DebuggerState::Paused;
@@ -492,7 +424,6 @@ void DebugBackend::run()
             break;
         }
 
-        // Same instrumentation path as stepInstruction()
         stepInstruction();
     }
 }
@@ -529,9 +460,8 @@ DebugBackend::findBreakpointByAddress(uint16_t address) const
 
 int DebugBackend::addBreakpoint(uint16_t address)
 {
-    // Check for duplicate
     if (findBreakpointByAddress(address) != breakpoints_.end()) {
-        return -1;  // duplicate
+        return -1;
     }
     int id = nextId_++;
     breakpoints_[id] = { address, true };
@@ -588,7 +518,7 @@ StopReason DebugBackend::getStopReason() const
 
 bool DebugBackend::checkBreakpoint()
 {
-    uint16_t pc = static_cast<uint16_t>(i8080_pc());
+    uint16_t pc = target_->getCpuState().pc;
     for (auto &kv : breakpoints_) {
         if (kv.second.enabled && kv.second.address == pc) {
             return true;
@@ -597,25 +527,22 @@ bool DebugBackend::checkBreakpoint()
     return false;
 }
 
-void DebugBackend::syncBreakpointsToBoard()
+void DebugBackend::syncBreakpointsToTarget()
 {
-#ifndef DEBUGGER_NO_BOARD
-    if (!board_) return;
+    if (!target_) return;
 
-    // Add all enabled debugger breakpoints to Board.
-    // Board::insert_breakpoint() adds to its internal list.
-    // Board::check_breakpoint() checks PC against this list.
-    // We use type=0 (software breakpoint), kind=1.
+    std::vector<DebuggerBreakpoint> bps;
+    bps.reserve(breakpoints_.size());
     for (auto &kv : breakpoints_) {
         if (kv.second.enabled) {
-            board_->insert_breakpoint(0, kv.second.address, 1);
+            bps.push_back(kv.second);
         }
     }
-#endif
+    target_->syncBreakpoints(bps.data(), bps.size());
 }
 
 // ---------------------------------------------------------------------------
-// Instrumentation hooks — called from Memory callbacks and test HAL
+// Instrumentation hooks
 // ---------------------------------------------------------------------------
 
 void DebugBackend::onMemoryRead(uint32_t virt, uint32_t phys,
@@ -626,7 +553,6 @@ void DebugBackend::onMemoryRead(uint32_t virt, uint32_t phys,
     MemoryAccessEvent ev;
     ev.instructionSequence = instructionSequence_;
 
-    // Fetch window: the first N reads after stepInstruction() are Fetches.
     if (fetchRemaining_ > 0) {
         ev.type = MemoryAccessType::Fetch;
         fetchRemaining_--;
@@ -641,7 +567,6 @@ void DebugBackend::onMemoryRead(uint32_t virt, uint32_t phys,
 
     impl_->memHistory.push(ev);
 
-    // Update statistics
     uint16_t addr = ev.virt;
     impl_->memStats[addr].reads++;
     impl_->memStats[addr].lastReadSequence = instructionSequence_;
@@ -662,7 +587,6 @@ void DebugBackend::onMemoryWrite(uint32_t virt, uint32_t phys,
 
     impl_->memHistory.push(ev);
 
-    // Update statistics
     uint16_t addr = ev.virt;
     impl_->memStats[addr].writes++;
     impl_->memStats[addr].lastWriteSequence = instructionSequence_;
@@ -672,7 +596,7 @@ void DebugBackend::onMemoryWrite(uint32_t virt, uint32_t phys,
         std::lock_guard<std::mutex> lock(vramWriteMutex_);
         int idx = addr - 0xC000;
         vramLastWrite_[idx].value    = value;
-        vramLastWrite_[idx].pc       = static_cast<uint16_t>(i8080_pc());
+        vramLastWrite_[idx].pc       = target_->getCpuState().pc;
         vramLastWrite_[idx].sequence = instructionSequence_;
     }
 }
@@ -702,9 +626,6 @@ void DebugBackend::onIoOutput(uint8_t port, uint8_t value)
 
     impl_->ioHistory.push(ev);
 
-    // Enhanced Vector Screen: track PPI port writes for video mode.
-    // Port 0x03 → PA (ScrollStart), Port 0x02 → PB (Mode512 = bit 4).
-    // This mirrors IO::realoutput() register updates through the HAL path.
     if (port == 0x03) {
         std::lock_guard<std::mutex> lock(ioRegMutex_);
         ioPA_ = value;
@@ -785,8 +706,6 @@ void DebugBackend::clearIoHistory()
 
 std::vector<MemoryStats> DebugBackend::memoryStatsSnapshot() const
 {
-    // Copy the entire 65536-entry array.
-    // This is ~2MB; acceptable for UI refresh at low frequency.
     return std::vector<MemoryStats>(
         impl_->memStats, impl_->memStats + 65536);
 }
@@ -813,20 +732,12 @@ DebugBackend::ScreenSnapshot DebugBackend::screenSnapshot() const
 {
     ScreenSnapshot snap;
 
-#ifndef DEBUGGER_NO_BOARD
-    if (!board_) return snap;
-
     std::lock_guard<std::mutex> lock(screenMutex_);
 
-    TV &tv = board_->get_tv();
-    uint32_t *pixels = tv.pixels();
-    if (!pixels) return snap;
-
-    snap.width  = DEFAULT_SCREEN_WIDTH;
-    snap.height = DEFAULT_SCREEN_HEIGHT;
-    size_t total = static_cast<size_t>(snap.width) * snap.height;
-    snap.pixels.assign(pixels, pixels + total);
-#endif
+    ScreenData data = target_->screenSnapshot();
+    snap.pixels = std::move(data.pixels);
+    snap.width  = data.width;
+    snap.height = data.height;
 
     return snap;
 }
@@ -852,7 +763,6 @@ void DebugBackend::clearActivityCounters()
 {
     std::memset(executeCount_, 0, sizeof(executeCount_));
 
-    // Also clear VRAM write tracking
     {
         std::lock_guard<std::mutex> lock(vramWriteMutex_);
         for (int i = 0; i < 256; ++i) {
@@ -860,7 +770,6 @@ void DebugBackend::clearActivityCounters()
         }
     }
 
-    // Reset tracked IO port values to defaults
     {
         std::lock_guard<std::mutex> lock(ioRegMutex_);
         ioPA_ = 0xFF;
@@ -876,16 +785,11 @@ DebugBackend::VideoModeSnapshot DebugBackend::videoModeSnapshot() const
 {
     VideoModeSnapshot snap;
 
-#ifndef DEBUGGER_NO_BOARD
-    if (!board_) return snap;
+    // Framebuffer dimensions
+    snap.screenWidth  = 576;   // DEFAULT_SCREEN_WIDTH
+    snap.screenHeight = 288;   // DEFAULT_SCREEN_HEIGHT
 
-    // Framebuffer dimensions from TV
-    snap.screenWidth  = DEFAULT_SCREEN_WIDTH;
-    snap.screenHeight = DEFAULT_SCREEN_HEIGHT;
-
-    // Read video mode from tracked IO port values (not from IO directly).
-    // ioPB_ bit 4 = Mode512, ioPA_ = ScrollStart (PA).
-    // These are updated in onIoOutput() via the HAL instrumentation path.
+    // Read video mode from tracked IO port values
     {
         std::lock_guard<std::mutex> lock(ioRegMutex_);
         snap.mode512     = (ioPB_ & 0x10) != 0;
@@ -896,11 +800,8 @@ DebugBackend::VideoModeSnapshot DebugBackend::videoModeSnapshot() const
     snap.visibleHeight = 256;
     snap.pixelsPerByte = snap.mode512 ? 4 : 8;
 
-    // Border offsets: (screenWidth - visibleWidth) / 2 for horizontal,
-    // (screenHeight - visibleHeight) / 2 for vertical
     snap.borderLeft = (snap.screenWidth - snap.visibleWidth) / 2;
     snap.borderTop  = (snap.screenHeight - snap.visibleHeight) / 2;
-#endif
 
     return snap;
 }
@@ -918,7 +819,7 @@ DebugBackend::VramWriteSnapshot DebugBackend::vramWriteSnapshot() const
 }
 
 // ---------------------------------------------------------------------------
-// Debug trace formatting (Stage 1, kept for backward compatibility)
+// Debug trace formatting
 // ---------------------------------------------------------------------------
 
 void DebugBackend::formatTraceLine(char *buf, size_t bufsize,
@@ -932,7 +833,6 @@ void DebugBackend::formatTraceLine(char *buf, size_t bufsize,
     } else if (len == 2) {
         snprintf(buf, bufsize, "PC=%04X  %02X %02X", pc, opcode, operandBytes[0]);
     } else { // len == 3
-        // operandBytes[0] = low byte, operandBytes[1] = high byte (little-endian)
         snprintf(buf, bufsize, "PC=%04X  %02X %02X%02X",
                  pc, opcode, operandBytes[1], operandBytes[0]);
     }
@@ -951,15 +851,12 @@ void DebugBackend::requestStep()
     }
     commandCv_.notify_one();
 
-    // Wait for the emulation thread to complete the step.
     std::unique_lock<std::mutex> lock(commandMutex_);
     resultCv_.wait(lock, [this]{ return stepCompleted_; });
 }
 
 void DebugBackend::requestRun()
 {
-    // "Run after breakpoint" step-over:
-    // If PC is currently at an enabled breakpoint, skip it on first check.
     skipBreakpoint_ = checkBreakpoint();
 
     {
@@ -1028,18 +925,13 @@ void DebugBackend::processOneCommand()
 
     if (quitRequested_) return;
 
-    // If running flag is set, just return — the main loop handles execution
     if (running_.load(std::memory_order_acquire)) return;
 
     PendingCommand cmd = pendingCommand_;
     pendingCommand_ = PendingCommand::None;
 
     if (cmd == PendingCommand::Quit) {
-#ifndef DEBUGGER_NO_BOARD
-        if (board_) {
-            board_->debugger_detached();
-        }
-#endif
+        if (target_) target_->debuggerDetached();
         return;
     }
     else if (cmd == PendingCommand::Step) {
@@ -1075,38 +967,34 @@ void DebugBackend::processOneCommand()
         resultCv_.notify_one();
         return;
     }
-    // Run and Pause are handled via running_ atomic, not command queue
 }
 
 // ---------------------------------------------------------------------------
-// executeFramesBoard_ — run frames until pause/breakpoint (Board attached)
+// executeFramesTarget_ — run frames until pause/breakpoint via IDebugTarget
 // ---------------------------------------------------------------------------
 
-#ifndef DEBUGGER_NO_BOARD
-void DebugBackend::executeFramesBoard_()
+void DebugBackend::executeFramesTarget_()
 {
-    // Sync debugger breakpoints to Board before running
-    syncBreakpointsToBoard();
+    syncBreakpointsToTarget();
 
-    // Handle "run after breakpoint" step-over
     if (skipBreakpoint_ && checkBreakpoint()) {
         skipBreakpoint_ = false;
-        stepInstruction();  // step past the breakpoint
+        stepInstruction();
     }
 
     while (running_.load(std::memory_order_acquire)) {
         if (quitRequested_) {
-            board_->debugger_break();
-            board_->debugger_detached();
+            target_->debuggerBreak();
+            target_->debuggerDetached();
             return;
         }
 
-        board_->debugger_continue();
-        uint16_t pcBeforeFrame = static_cast<uint16_t>(i8080_pc());
-        board_->execute_frame_with_cadence(false, false);
-        uint16_t pcAfterFrame = static_cast<uint16_t>(i8080_pc());
+        target_->debuggerContinue();
+        uint16_t pcBeforeFrame = target_->getCpuState().pc;
+        target_->executeFrame();
+        uint16_t pcAfterFrame = target_->getCpuState().pc;
 
-        // If PC didn't change, Board stopped (breakpoint or debugger_interrupt)
+        // If PC didn't change, target stopped (breakpoint or debugger_interrupt)
         if (pcAfterFrame == pcBeforeFrame) {
             if (checkBreakpoint()) {
                 stopReason_ = StopReason::Breakpoint;
@@ -1117,12 +1005,8 @@ void DebugBackend::executeFramesBoard_()
                 }
                 break;
             }
-            // If no breakpoint but PC didn't change, debugger_interrupt was set
-            // (e.g. by poll_debugger for pause/step). Just continue the loop —
-            // running_ will be checked.
         }
 
-        // Check pause requested (from GUI or poll_debugger)
         if (pauseRequested_ || !running_.load(std::memory_order_acquire)) {
             running_.store(false, std::memory_order_release);
             {
@@ -1134,7 +1018,6 @@ void DebugBackend::executeFramesBoard_()
             break;
         }
 
-        // Also check our own breakpoint list
         if (checkBreakpoint()) {
             stopReason_ = StopReason::Breakpoint;
             running_.store(false, std::memory_order_release);
@@ -1146,13 +1029,12 @@ void DebugBackend::executeFramesBoard_()
         }
     }
 }
-#endif // DEBUGGER_NO_BOARD
 
 // ---------------------------------------------------------------------------
-// executeFramesNoBoard_ — run instructions until pause/breakpoint (no Board)
+// executeFramesNoTarget_ — fallback (should not normally be called)
 // ---------------------------------------------------------------------------
 
-void DebugBackend::executeFramesNoBoard_()
+void DebugBackend::executeFramesNoTarget_()
 {
     while (running_.load(std::memory_order_acquire)) {
         {
@@ -1162,7 +1044,7 @@ void DebugBackend::executeFramesNoBoard_()
         if (checkBreakpoint()) {
             if (skipBreakpoint_) {
                 skipBreakpoint_ = false;
-                stepInstruction();  // step past the breakpoint
+                stepInstruction();
                 continue;
             }
             stopReason_ = StopReason::Breakpoint;
@@ -1189,88 +1071,71 @@ void DebugBackend::executeFramesNoBoard_()
 
 void DebugBackend::runUntilPause()
 {
-#ifndef DEBUGGER_NO_BOARD
-    // If Board is attached, set up poll_debugger callback for command checking
-    if (board_) {
-        board_->poll_debugger = [this]() {
-            std::lock_guard<std::mutex> lock(commandMutex_);
-            
-            if (quitRequested_ || pendingCommand_ == PendingCommand::Quit) {
-                board_->debugger_break();
-                return;
-            }
-            
-            // Stage 3.13: break requested from GUI thread — break frame safely
-            if (breakRequested_.load(std::memory_order_acquire)) {
-                breakRequested_.store(false, std::memory_order_release);
-                board_->debugger_break();
-                return;
-            }
+    if (!target_) return;
 
-            if (pendingCommand_ == PendingCommand::Step) {
-                pendingCommand_ = PendingCommand::None;
-                stepInstruction();
-                stepCompleted_ = true;
-                resultCv_.notify_one();
-                board_->debugger_break();
-                return;
-            }
-            
-            // Check if pause was requested (via running_ flag or pauseRequested_)
-            if (!running_.load(std::memory_order_relaxed) || pauseRequested_) {
-                pauseRequested_ = true;
-                board_->debugger_break();
-                return;
-            }
+    // Set up poll_debugger callback for command checking
+    target_->setPollCallback([this]() {
+        std::lock_guard<std::mutex> lock(commandMutex_);
 
-            // MemoryWrite while running: reject — must be Paused.
-            if (pendingCommand_ == PendingCommand::MemoryWrite) {
-                writeResult_ = false;
-                pendingCommand_ = PendingCommand::None;
-                stepCompleted_ = true;
-                resultCv_.notify_one();
-                return;
-            }
-
-            // RegisterWrite while running: reject — must be Paused.
-            if (pendingCommand_ == PendingCommand::RegisterWrite) {
-                writeRegResult_ = false;
-                pendingCommand_ = PendingCommand::None;
-                stepCompleted_ = true;
-                resultCv_.notify_one();
-                return;
-            }
-        };
-        
-        // Enable debugging mode for breakpoint checking
-        board_->debugger_attached();
-    }
-#endif
-    
-    // Main emulation loop (PSP-style)
-    while (true) {
-        // Wait for a command or running flag
-        processOneCommand();
-
-        if (quitRequested_) {
-#ifndef DEBUGGER_NO_BOARD
-            if (board_) board_->debugger_detached();
-#endif
+        if (quitRequested_ || pendingCommand_ == PendingCommand::Quit) {
+            target_->debuggerBreak();
             return;
         }
 
-        // If running, execute frames until pause/breakpoint
-        if (running_.load(std::memory_order_acquire)) {
-#ifndef DEBUGGER_NO_BOARD
-            if (board_) {
-                executeFramesBoard_();
-            } else
-#endif
-            {
-                executeFramesNoBoard_();
-            }
+        // Stage 3.13: break requested from GUI thread
+        if (breakRequested_.load(std::memory_order_acquire)) {
+            breakRequested_.store(false, std::memory_order_release);
+            target_->debuggerBreak();
+            return;
+        }
 
-            // After execution stopped, update state
+        if (pendingCommand_ == PendingCommand::Step) {
+            pendingCommand_ = PendingCommand::None;
+            stepInstruction();
+            stepCompleted_ = true;
+            resultCv_.notify_one();
+            target_->debuggerBreak();
+            return;
+        }
+
+        if (!running_.load(std::memory_order_relaxed) || pauseRequested_) {
+            pauseRequested_ = true;
+            target_->debuggerBreak();
+            return;
+        }
+
+        if (pendingCommand_ == PendingCommand::MemoryWrite) {
+            writeResult_ = false;
+            pendingCommand_ = PendingCommand::None;
+            stepCompleted_ = true;
+            resultCv_.notify_one();
+            return;
+        }
+
+        if (pendingCommand_ == PendingCommand::RegisterWrite) {
+            writeRegResult_ = false;
+            pendingCommand_ = PendingCommand::None;
+            stepCompleted_ = true;
+            resultCv_.notify_one();
+            return;
+        }
+    });
+
+    // Enable debugging mode
+    target_->debuggerAttached();
+
+    // Main emulation loop (PSP-style)
+    while (true) {
+        processOneCommand();
+
+        if (quitRequested_) {
+            target_->debuggerDetached();
+            return;
+        }
+
+        if (running_.load(std::memory_order_acquire)) {
+            executeFramesTarget_();
+
             {
                 std::lock_guard<std::mutex> lk(commandMutex_);
                 if (state_ != DebuggerState::Paused) {

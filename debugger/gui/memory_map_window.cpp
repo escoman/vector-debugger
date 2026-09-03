@@ -1,5 +1,5 @@
 #include "memory_map_window.h"
-#include "backend.h"
+#include "idebug_backend.h"
 #include "symbol_database.h"
 
 // Dear ImGui
@@ -97,7 +97,7 @@ uint32_t MemoryMapWindow::getColorForAddress(uint16_t baseAddr,
 // Map rebuild
 // ---------------------------------------------------------------------------
 
-void MemoryMapWindow::rebuildMap(DebugBackend &backend)
+void MemoryMapWindow::rebuildMap(IDebugBackend &backend)
 {
     mapPixels_.resize(MAP_WIDTH * MAP_HEIGHT);
 
@@ -163,7 +163,7 @@ void MemoryMapWindow::rebuildMap(DebugBackend &backend)
 // Render
 // ---------------------------------------------------------------------------
 
-void MemoryMapWindow::render(DebugBackend &backend)
+void MemoryMapWindow::render(IDebugBackend &backend)
 {
     if (!visible_) return;
 

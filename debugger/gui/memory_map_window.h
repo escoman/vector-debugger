@@ -5,7 +5,7 @@
 #include <functional>
 
 // Forward declarations
-class DebugBackend;
+class IDebugBackend;
 
 // ---------------------------------------------------------------------------
 // Memory Map Window — Stage 4.4
@@ -20,7 +20,7 @@ public:
     MemoryMapWindow() = default;
     ~MemoryMapWindow();
 
-    void render(DebugBackend &backend);
+    void render(IDebugBackend &backend);
 
     void setVisible(bool v) { visible_ = v; }
     bool isVisible() const { return visible_; }
@@ -46,7 +46,7 @@ private:
     bool showContextMenu_ = false;
 
     // Rebuild the map texture from backend data
-    void rebuildMap(DebugBackend &backend);
+    void rebuildMap(IDebugBackend &backend);
 
     // Clean up GL texture on destruction
     void destroyTexture();

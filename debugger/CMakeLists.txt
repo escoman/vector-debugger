@@ -66,9 +66,11 @@ set(DBG_SOURCES
     ${DBG_SRC_DIR}/symbol_database.cpp
     ${DBG_SRC_DIR}/project_file.cpp
     ${DBG_SRC_DIR}/vram_mapping.cpp
+    ${DBG_SRC_DIR}/no_board_target.cpp
 )
 
-# Debug Adapter — bridge between Debugger Core and Vector Emulator (Stage 3.13)
+# Debug Adapter — bridge between Debugger Core and Vector Emulator (Stage 3.13/3.13a)
+# Contains HAL function definitions and IDebugTarget implementation.
 set(ADAPTER_SOURCES
     ${DBG_SRC_DIR}/debug_adapter.cpp
 )
@@ -98,8 +100,6 @@ add_executable(test_backend
     ${DBG_SOURCES}
     ${CORE_SOURCES}
 )
-
-target_compile_definitions(test_backend PRIVATE DEBUGGER_NO_BOARD)
 
 target_link_libraries(test_backend
     ${Boost_LIBRARIES}
@@ -155,15 +155,15 @@ set(IMGUI_SOURCES
 )
 
 # ---------------------------------------------------------------------------
-# debugger_core — static library (Stage 3.13)
+# debugger_core — static library (Stage 3.13a)
 #
-# Contains Debugger Core + Debug Adapter.
-# Does NOT depend on ImGui, SDL2, or OpenGL.
+# Contains Debugger Core (backend, disassembler, etc.) + NoBoardTarget.
+# Does NOT depend on Board, ImGui, SDL2, or OpenGL.
+# Does NOT contain debug_adapter.cpp (which has HAL + Board dependencies).
 # ---------------------------------------------------------------------------
 
 add_library(debugger_core STATIC
     ${DBG_SOURCES}
-    ${ADAPTER_SOURCES}
 )
 
 target_include_directories(debugger_core PUBLIC
@@ -175,6 +175,31 @@ target_include_directories(debugger_core PUBLIC
 )
 
 target_link_libraries(debugger_core
+    ${Boost_LIBRARIES}
+    pthread
+)
+
+# ---------------------------------------------------------------------------
+# debugger_adapter — static library (Stage 3.13a)
+#
+# Contains DebugAdapter (IDebugTarget implementation + HAL functions).
+# Links with Board sources and CORE_SOURCES for full emulator integration.
+# ---------------------------------------------------------------------------
+
+add_library(debugger_adapter STATIC
+    ${ADAPTER_SOURCES}
+    ${BOARD_SOURCES}
+    ${CORE_SOURCES}
+)
+
+target_include_directories(debugger_adapter PUBLIC
+    ${DBG_SRC_DIR}
+    ${SRC_DIR}
+)
+
+target_link_libraries(debugger_adapter
+    debugger_core
+    ${SDL2_LIBRARY}
     ${Boost_LIBRARIES}
     pthread
 )
@@ -252,13 +277,12 @@ add_custom_command(
 add_executable(v06c-debugger
     ${GUI_SOURCES}
     ${IMGUI_SOURCES}
-    ${BOARD_SOURCES}
-    ${CORE_SOURCES}
     ${CMAKE_CURRENT_BINARY_DIR}/boots.bin.o
     ${CMAKE_CURRENT_BINARY_DIR}/icon64.rgba.o
 )
 
 target_link_libraries(v06c-debugger
+    debugger_adapter
     debugger_core
     ${SDL2_LIBRARY}
     ${OPENGL_LIBRARIES}

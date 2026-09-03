@@ -4,11 +4,11 @@
 #include <cstdio>
 #include <functional>
 #include <vector>
-#include "backend.h"
+#include "idebug_backend.h"
 #include "events.h"
 
 // Forward declarations
-class DebugBackend;
+class IDebugBackend;
 
 // ---------------------------------------------------------------------------
 // I/O Inspector Window (Stage 3.11)
@@ -30,7 +30,7 @@ public:
     IoInspectorWindow() {}
 
     // Render the window. Call every frame.
-    void render(DebugBackend &backend);
+    void render(IDebugBackend &backend);
 
     // Request refresh on next render
     void requestRefresh() { needsRefresh_ = true; }
@@ -86,9 +86,9 @@ private:
     std::vector<InstructionEvent> cachedInstrEvents_;  // for PC resolution
 
     // Render sub-components
-    void renderToolbar(DebugBackend &backend);
-    void renderIoTable(DebugBackend &backend);
-    void renderHardwareState(DebugBackend &backend);
+    void renderToolbar(IDebugBackend &backend);
+    void renderIoTable(IDebugBackend &backend);
+    void renderHardwareState(IDebugBackend &backend);
 
     // Resolve PC for an I/O event by cross-referencing instructionSequence
     uint16_t resolvePc(uint64_t instructionSequence) const;

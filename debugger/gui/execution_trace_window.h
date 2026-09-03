@@ -4,11 +4,11 @@
 #include <cstdio>
 #include <functional>
 #include <vector>
-#include "backend.h"
+#include "idebug_backend.h"
 #include "events.h"
 
 // Forward declarations
-class DebugBackend;
+class IDebugBackend;
 
 // ---------------------------------------------------------------------------
 // Execution Trace Window (Stage 3.10)
@@ -24,7 +24,7 @@ public:
     ExecutionTraceWindow() {}
 
     // Render the window. Call every frame.
-    void render(DebugBackend &backend);
+    void render(IDebugBackend &backend);
 
     // Request refresh on next render
     void requestRefresh() { needsRefresh_ = true; }
@@ -70,6 +70,6 @@ private:
     uint64_t lastSnapshotSeq_ = 0;    // detect new data from backend
 
     // Render sub-components
-    void renderToolbar(DebugBackend &backend);
-    void renderTraceTable(DebugBackend &backend);
+    void renderToolbar(IDebugBackend &backend);
+    void renderTraceTable(IDebugBackend &backend);
 };

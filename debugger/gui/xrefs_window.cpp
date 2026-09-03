@@ -1,5 +1,5 @@
 #include "xrefs_window.h"
-#include "backend.h"
+#include "idebug_backend.h"
 #include "symbol_database.h"
 #include "disassembler.h"
 
@@ -23,7 +23,7 @@ void XrefsWindow::setTargetAddress(uint16_t addr)
 // Render
 // ---------------------------------------------------------------------------
 
-void XrefsWindow::render(DebugBackend &backend)
+void XrefsWindow::render(IDebugBackend &backend)
 {
     if (!visible_) return;
 

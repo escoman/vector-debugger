@@ -4,7 +4,7 @@
 #include <functional>
 
 // Forward declarations
-class DebugBackend;
+class IDebugBackend;
 
 // ---------------------------------------------------------------------------
 // Functions Window — Stage 4.5
@@ -18,7 +18,7 @@ class FunctionsWindow
 public:
     FunctionsWindow() = default;
 
-    void render(DebugBackend &backend);
+    void render(IDebugBackend &backend);
 
     void setVisible(bool v) { visible_ = v; }
     bool isVisible() const { return visible_; }

@@ -1,5 +1,5 @@
 #include "search_window.h"
-#include "backend.h"
+#include "idebug_backend.h"
 #include "symbol_database.h"
 
 // Dear ImGui
@@ -13,7 +13,7 @@
 // Render
 // ---------------------------------------------------------------------------
 
-void SearchWindow::render(DebugBackend &backend)
+void SearchWindow::render(IDebugBackend &backend)
 {
     if (!visible_) return;
 

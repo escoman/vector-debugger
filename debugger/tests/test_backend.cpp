@@ -268,7 +268,7 @@ static void test_step()
 
     // Step 1: LXI H, C000
     {
-        StepResult r = dbg->stepInstruction();
+        StepResult r = dbg->stepInstructionDetailed();
         CHECK_EQ(0x0000, r.pcBefore, "step1 pcBefore");
         CHECK_EQ(0x21,   r.opcode,   "step1 opcode");
         CHECK_EQ(3,      r.length,   "step1 length");
@@ -277,7 +277,7 @@ static void test_step()
     }
     // Step 2: MVI A, 42
     {
-        StepResult r = dbg->stepInstruction();
+        StepResult r = dbg->stepInstructionDetailed();
         CHECK_EQ(0x0003, r.pcBefore, "step2 pcBefore");
         CHECK_EQ(0x3E,   r.opcode,   "step2 opcode");
         CHECK_EQ(2,      r.length,   "step2 length");
@@ -286,7 +286,7 @@ static void test_step()
     }
     // Step 3: MOV M, A
     {
-        StepResult r = dbg->stepInstruction();
+        StepResult r = dbg->stepInstructionDetailed();
         CHECK_EQ(0x0005, r.pcBefore, "step3 pcBefore");
         CHECK_EQ(0x77,   r.opcode,   "step3 opcode");
         CHECK_EQ(1,      r.length,   "step3 length");
@@ -296,7 +296,7 @@ static void test_step()
     }
     // Step 4: INR A
     {
-        StepResult r = dbg->stepInstruction();
+        StepResult r = dbg->stepInstructionDetailed();
         CHECK_EQ(0x0006, r.pcBefore, "step4 pcBefore");
         CHECK_EQ(0x3C,   r.opcode,   "step4 opcode");
         CHECK_EQ(0x0007, r.pcAfter,  "step4 pcAfter");
@@ -304,7 +304,7 @@ static void test_step()
     }
     // Step 5: MOV M, A
     {
-        StepResult r = dbg->stepInstruction();
+        StepResult r = dbg->stepInstructionDetailed();
         CHECK_EQ(0x0007, r.pcBefore, "step5 pcBefore");
         CHECK_EQ(0x0008, r.pcAfter,  "step5 pcAfter");
         uint8_t val = DebugMemoryAccess::peek(mem, 0xC000);
@@ -312,7 +312,7 @@ static void test_step()
     }
     // Step 6: JMP 0003
     {
-        StepResult r = dbg->stepInstruction();
+        StepResult r = dbg->stepInstructionDetailed();
         CHECK_EQ(0x0008, r.pcBefore, "step6 pcBefore");
         CHECK_EQ(0xC3,   r.opcode,   "step6 opcode");
         CHECK_EQ(0x0003, r.pcAfter,  "step6 pcAfter");
@@ -372,7 +372,7 @@ static void test_continue()
     CHECK_EQ(0x0005, dbg->getCpuState().pc, "PC == 0x0005");
 
     dbg->removeBreakpoint(bp_id);
-    StepResult r = dbg->stepInstruction();
+    StepResult r = dbg->stepInstructionDetailed();
     CHECK_EQ(0x0005, r.pcBefore, "stepped from 0x0005");
     CHECK_EQ(0x0006, r.pcAfter,  "now at 0x0006");
     CHECK_EQ(0x42, DebugMemoryAccess::peek(mem, 0xC000), "[C000] == 0x42");
@@ -2554,7 +2554,7 @@ static void test_bp_step_over()
     dbg->addBreakpoint(0x0005);
 
     // Step — should execute exactly one instruction (MOV M, A)
-    StepResult r = dbg->stepInstruction();
+    StepResult r = dbg->stepInstructionDetailed();
     CHECK_EQ(0x0005, r.pcBefore, "stepped from 0x0005");
     CHECK_EQ(0x0006, r.pcAfter, "now at 0x0006");
 
@@ -3631,7 +3631,7 @@ static void test_integration_reset_step()
     dbg->reset();
 
     // Step one instruction: LXI H, C000 (PC 0000 → 0003)
-    StepResult r = dbg->stepInstruction();
+    StepResult r = dbg->stepInstructionDetailed();
     CHECK_EQ(0x0000, r.pcBefore, "step before reset PC");
     CHECK_EQ(0x0003, r.pcAfter, "step after reset PC");
     CHECK_EQ(0x0003, dbg->getCpuState().pc, "CPU state PC after step");
@@ -3639,7 +3639,7 @@ static void test_integration_reset_step()
     // Reset and step again: should start from 0000
     dbg->reset();
     CHECK_EQ(0x0000, dbg->getCpuState().pc, "PC == 0 after reset");
-    StepResult r2 = dbg->stepInstruction();
+    StepResult r2 = dbg->stepInstructionDetailed();
     CHECK_EQ(0x0000, r2.pcBefore, "step after reset starts at 0");
     CHECK_EQ(0x0003, r2.pcAfter, "step after reset: PC → 0003");
 
@@ -3739,7 +3739,7 @@ static void test_integration_regwrite_navigation()
     CHECK_EQ(0xFFFE, dbg->getCpuState().sp, "SP == 0xFFFE after set");
 
     // Step from 0x0008 (JMP 0003)
-    StepResult r = dbg->stepInstruction();
+    StepResult r = dbg->stepInstructionDetailed();
     CHECK_EQ(0x0008, r.pcBefore, "stepped from 0x0008");
     CHECK_EQ(0x0003, r.pcAfter, "JMP to 0x0003");
 

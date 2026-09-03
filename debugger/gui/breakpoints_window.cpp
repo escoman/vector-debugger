@@ -8,7 +8,7 @@
 #include <cstdio>
 #include <cstring>
 
-void BreakpointsWindow::render(DebugBackend &backend)
+void BreakpointsWindow::render(IDebugBackend &backend)
 {
     if (!visible_) return;
     

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "debug_target.h"
 #include "memory.h"
 #include "vio.h"
 #include "tv.h"
@@ -11,43 +12,70 @@
 #include "wav.h"
 #include "fd1793.h"
 
+#include <string>
+
 // ---------------------------------------------------------------------------
 // DebugAdapter
 //
 // Adapter layer between Debugger Core and Vector Emulator.
-// Holds all dependencies required by Board and provides initialization.
-// This is the ONLY component that has direct access to emulator internals.
+// Implements IDebugTarget — the ONLY component with direct access to
+// emulator internals (Board, Memory, CPU, IO, TV, etc.).
+//
+// Also owns the HAL function definitions (i8080_hal_*) that connect
+// the CPU core to emulator components.
 // ---------------------------------------------------------------------------
 
-class DebugAdapter
+class DebugAdapter : public IDebugTarget
 {
 public:
     DebugAdapter();
-    ~DebugAdapter();
-    
-    // Initialize all components
+    ~DebugAdapter() override;
+
     void init();
-    
-    // Shutdown all components
     void shutdown();
-    
-    // Load ROM file and reset Board
-    bool loadRom(const std::string &path, uint32_t org = 0);
-    
-    // Bind HAL callbacks (i8080_hal_*) to this adapter's components.
-    // Must be called after init().
+
+    // -- IDebugTarget implementation ----------------------------------------
+
+    uint8_t readMemory(uint16_t addr) override;
+    uint8_t peekMemory(uint16_t addr) override;
+    void    writeMemory(uint16_t addr, uint8_t val) override;
+    Memory* rawMemory() override { return nullptr; }  // HAL handles instrumentation
+
+    CpuState getCpuState() override;
+    void     writeCpuRegister(int reg, uint16_t val) override;
+
+    void stepInstruction() override;
+    void executeFrame() override;
+    void reset(bool loadRom) override;
+
+    void debuggerBreak() override;
+    void debuggerContinue() override;
+    void debuggerAttached() override;
+    void debuggerDetached() override;
+    void setPollCallback(std::function<void()> cb) override;
+
+    void syncBreakpoints(const DebuggerBreakpoint *bps, size_t count) override;
+
+    ScreenData screenSnapshot() override;
+
+    bool loadRom(const std::string &path, uint32_t org) override;
+    void initCpu(uint16_t pc, uint16_t sp) override;
+
+    // -- HAL binding --------------------------------------------------------
+
+    // Bind HAL callbacks to this adapter's components.
     void bindHal();
-    
-    // Set static HAL pointers from external code (called by i8080_hal_bind
-    // from Board::init()). Allows HAL functions to work before bindHal().
+
+    // Set static HAL pointers from external code.
     static void setHalPointers(Memory *mem, IO *io, Board *board);
-    
-    // Static accessors for HAL functions defined in the application layer.
+
+    // Static accessors for HAL functions.
     static Memory* halMemory() { return s_memory; }
     static IO*     halIo()     { return s_io; }
     static Board*  halBoard()  { return s_board; }
-    
-    // Public components (accessible for DebugBackend)
+
+    // -- Public components --------------------------------------------------
+
     Memory memory;
     FD1793 fdc;
     Wav wav;
@@ -62,11 +90,10 @@ public:
     TV tv;
     PixelFiller filler;
     Board board;
-    
+
 private:
     bool initialized_ = false;
-    
-    // Static pointers set by bindHal(), used by HAL functions.
+
     static Memory       *s_memory;
     static IO           *s_io;
     static Board        *s_board;

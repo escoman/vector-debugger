@@ -2,10 +2,10 @@
 
 #include <cstdint>
 #include <functional>
-#include "backend.h"
+#include "idebug_backend.h"
 
 // Forward declarations
-class DebugBackend;
+class IDebugBackend;
 
 // ---------------------------------------------------------------------------
 // Stack View Window (Stage 3.4)
@@ -22,7 +22,7 @@ public:
     }
     
     // Render the window. Call every frame.
-    void render(DebugBackend &backend);
+    void render(IDebugBackend &backend);
     
     // Request snapshot refresh on next render
     void requestRefresh() { needsRefresh_ = true; }
@@ -67,11 +67,11 @@ private:
     uint16_t viewCenter_ = 0;           // center of view when followSP_ is off
     
     // Render sub-components
-    void renderToolbar(DebugBackend &backend);
-    void renderStackView(DebugBackend &backend);
+    void renderToolbar(IDebugBackend &backend);
+    void renderStackView(IDebugBackend &backend);
     
     // Snapshot management
-    void refreshSnapshot(DebugBackend &backend);
+    void refreshSnapshot(IDebugBackend &backend);
     
     // Helper: compute safe range around a center address
     static void computeRange(uint16_t center, int &start, int &end);

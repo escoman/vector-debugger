@@ -191,7 +191,7 @@ void DebuggerGui::gotoStack(uint16_t address)
 // Main render — assembles all panels
 // ---------------------------------------------------------------------------
 
-void DebuggerGui::render(DebugBackend &backend)
+void DebuggerGui::render(IDebugBackend &backend)
 {
     // Full-window layout with docking-like splits.
     const ImGuiViewport *viewport = ImGui::GetMainViewport();
@@ -363,7 +363,7 @@ void DebuggerGui::render(DebugBackend &backend)
 // CPU Panel
 // ---------------------------------------------------------------------------
 
-void DebuggerGui::renderCpuPanel(DebugBackend &backend)
+void DebuggerGui::renderCpuPanel(IDebugBackend &backend)
 {
     CpuState s = backend.getCpuState();
     
@@ -408,7 +408,7 @@ void DebuggerGui::renderCpuPanel(DebugBackend &backend)
     writeRegFailed_ = false;
     
     // Helper lambda: render editable register row (Stage 3.6)
-    auto renderRegRow = [&](const char *name, uint16_t value, DebugBackend::RegisterId regId) {
+    auto renderRegRow = [&](const char *name, uint16_t value, IDebugBackend::RegisterId regId) {
         ImGui::Text("%s   %04X", name, value);
         if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
             editingRegister_ = true;
@@ -423,7 +423,7 @@ void DebuggerGui::renderCpuPanel(DebugBackend &backend)
     uint16_t de = (static_cast<uint16_t>(s.d) << 8) | s.e;
     uint16_t hl = (static_cast<uint16_t>(s.h) << 8) | s.l;
     
-    renderRegRow("PC", s.pc, DebugBackend::RegisterId::PC);
+    renderRegRow("PC", s.pc, IDebugBackend::RegisterId::PC);
     
     // Stage 3.9: PC context menu for navigation
     if (ImGui::BeginPopupContextItem("pc_ctx")) {
@@ -436,11 +436,11 @@ void DebuggerGui::renderCpuPanel(DebugBackend &backend)
         ImGui::EndPopup();
     }
     
-    renderRegRow("AF", af,  DebugBackend::RegisterId::AF);
-    renderRegRow("BC", bc,  DebugBackend::RegisterId::BC);
-    renderRegRow("DE", de,  DebugBackend::RegisterId::DE);
-    renderRegRow("HL", hl,  DebugBackend::RegisterId::HL);
-    renderRegRow("SP", s.sp, DebugBackend::RegisterId::SP);
+    renderRegRow("AF", af,  IDebugBackend::RegisterId::AF);
+    renderRegRow("BC", bc,  IDebugBackend::RegisterId::BC);
+    renderRegRow("DE", de,  IDebugBackend::RegisterId::DE);
+    renderRegRow("HL", hl,  IDebugBackend::RegisterId::HL);
+    renderRegRow("SP", s.sp, IDebugBackend::RegisterId::SP);
     
     // Stage 3.9: SP context menu for navigation
     if (ImGui::BeginPopupContextItem("sp_ctx")) {
@@ -489,7 +489,7 @@ void DebuggerGui::renderCpuPanel(DebugBackend &backend)
 // Current Instruction
 // ---------------------------------------------------------------------------
 
-void DebuggerGui::renderCurrentInstruction(uint16_t pc, DebugBackend &backend)
+void DebuggerGui::renderCurrentInstruction(uint16_t pc, IDebugBackend &backend)
 {
     ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Current Instruction");
     ImGui::Spacing();
@@ -507,7 +507,7 @@ void DebuggerGui::renderCurrentInstruction(uint16_t pc, DebugBackend &backend)
 // Instruction History
 // ---------------------------------------------------------------------------
 
-void DebuggerGui::renderInstructionHistory(DebugBackend &backend)
+void DebuggerGui::renderInstructionHistory(IDebugBackend &backend)
 {
     ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Instruction History");
     ImGui::Spacing();
@@ -554,7 +554,7 @@ void DebuggerGui::renderInstructionHistory(DebugBackend &backend)
 // Controls — Run / Pause / Step
 // ---------------------------------------------------------------------------
 
-void DebuggerGui::renderControls(DebugBackend &backend)
+void DebuggerGui::renderControls(IDebugBackend &backend)
 {
     DebuggerState state = backend.getState();
 
@@ -774,7 +774,7 @@ void DebuggerGui::renderControls(DebugBackend &backend)
 // Status bar
 // ---------------------------------------------------------------------------
 
-void DebuggerGui::renderStatusBar(DebugBackend &backend)
+void DebuggerGui::renderStatusBar(IDebugBackend &backend)
 {
     DebuggerState state = backend.getState();
     CpuState cpu = backend.getCpuState();

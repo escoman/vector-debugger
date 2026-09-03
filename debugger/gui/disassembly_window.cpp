@@ -27,7 +27,7 @@ bool DisassemblyWindow::parseAddress(const char *input, uint16_t &address) const
 // Main render
 // ---------------------------------------------------------------------------
 
-void DisassemblyWindow::render(DebugBackend &backend)
+void DisassemblyWindow::render(IDebugBackend &backend)
 {
     if (!visible_) return;
     
@@ -64,7 +64,7 @@ void DisassemblyWindow::render(DebugBackend &backend)
 // Toolbar
 // ---------------------------------------------------------------------------
 
-void DisassemblyWindow::renderToolbar(DebugBackend &backend)
+void DisassemblyWindow::renderToolbar(IDebugBackend &backend)
 {
     // Address input
     ImGui::SetNextItemWidth(80);
@@ -111,7 +111,7 @@ void DisassemblyWindow::renderToolbar(DebugBackend &backend)
 // Disassembly list
 // ---------------------------------------------------------------------------
 
-void DisassemblyWindow::renderDisassemblyList(DebugBackend &backend)
+void DisassemblyWindow::renderDisassemblyList(IDebugBackend &backend)
 {
     CpuState cpu = backend.getCpuState();
     uint16_t pc = cpu.pc;
@@ -128,7 +128,7 @@ void DisassemblyWindow::renderDisassemblyList(DebugBackend &backend)
         startAddr = viewAddress_;
     }
     
-    // Read function: uses DebugBackend::readMemory() which goes through
+    // Read function: uses IDebugBackend::readMemory() which goes through
     // DebugMemoryAccess::peek() — respects banking, no raw buffer access.
     DisasmReadFn readFn = [&backend](uint16_t addr) -> uint8_t {
         return backend.readMemory(addr);

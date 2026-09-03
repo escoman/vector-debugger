@@ -3,17 +3,17 @@
 #include <cstdint>
 #include <cstdio>
 #include <functional>
-#include "backend.h"
+#include "idebug_backend.h"
 
 // Forward declarations
-class DebugBackend;
+class IDebugBackend;
 
 // ---------------------------------------------------------------------------
 // Disassembly View (Stage 3.8)
 //
 // Shows disassembled code around the current PC with breakpoint markers,
 // Follow PC, Go To Address, Step, and context menu for breakpoints.
-// Uses DebugBackend API only — no direct Memory/Board/CPU access.
+// Uses IDebugBackend API only — no direct Memory/Board/CPU access.
 // ---------------------------------------------------------------------------
 
 class DisassemblyWindow
@@ -22,7 +22,7 @@ public:
     DisassemblyWindow() {}
     
     // Render the window. Call every frame.
-    void render(DebugBackend &backend);
+    void render(IDebugBackend &backend);
     
     // Request refresh on next render
     void requestRefresh() { needsRefresh_ = true; }
@@ -68,8 +68,8 @@ private:
     char editBuffer_[64] = "";
     
     // Render sub-components
-    void renderToolbar(DebugBackend &backend);
-    void renderDisassemblyList(DebugBackend &backend);
+    void renderToolbar(IDebugBackend &backend);
+    void renderDisassemblyList(IDebugBackend &backend);
     
     // Address parsing
     bool parseAddress(const char *input, uint16_t &address) const;

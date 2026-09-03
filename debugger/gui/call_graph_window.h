@@ -6,7 +6,7 @@
 #include <set>
 
 // Forward declarations
-class DebugBackend;
+class IDebugBackend;
 
 // ---------------------------------------------------------------------------
 // Call Graph Window — Stage 4.7
@@ -20,7 +20,7 @@ class CallGraphWindow
 public:
     CallGraphWindow() = default;
 
-    void render(DebugBackend &backend);
+    void render(IDebugBackend &backend);
 
     void setVisible(bool v) { visible_ = v; }
     bool isVisible() const { return visible_; }
@@ -37,8 +37,8 @@ private:
     std::set<uint16_t> functionAddresses_;
 
     // Build the call graph from symbol database
-    void buildCallGraph(DebugBackend &backend);
+    void buildCallGraph(IDebugBackend &backend);
 
     // Render a node recursively
-    void renderNode(uint16_t addr, DebugBackend &backend, int depth, std::set<uint16_t> &visited);
+    void renderNode(uint16_t addr, IDebugBackend &backend, int depth, std::set<uint16_t> &visited);
 };

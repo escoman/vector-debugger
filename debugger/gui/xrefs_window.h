@@ -6,7 +6,7 @@
 #include <functional>
 
 // Forward declarations
-class DebugBackend;
+class IDebugBackend;
 
 // ---------------------------------------------------------------------------
 // Xrefs Window — Stage 4.7
@@ -20,7 +20,7 @@ class XrefsWindow
 public:
     XrefsWindow() = default;
 
-    void render(DebugBackend &backend);
+    void render(IDebugBackend &backend);
 
     void setVisible(bool v) { visible_ = v; }
     bool isVisible() const { return visible_; }

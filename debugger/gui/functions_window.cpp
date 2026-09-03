@@ -1,5 +1,5 @@
 #include "functions_window.h"
-#include "backend.h"
+#include "idebug_backend.h"
 #include "symbol_database.h"
 
 // Dear ImGui
@@ -51,7 +51,7 @@ static int countXrefsTo(uint16_t addr, const SymbolDatabase &db)
 // Render
 // ---------------------------------------------------------------------------
 
-void FunctionsWindow::render(DebugBackend &backend)
+void FunctionsWindow::render(IDebugBackend &backend)
 {
     if (!visible_) return;
 

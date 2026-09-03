@@ -13,20 +13,20 @@
 #include "xrefs_window.h"
 #include "call_graph_window.h"
 #include "search_window.h"
-#include "backend.h"
+#include "idebug_backend.h"
 #include "events.h"
 
 // Forward declarations — avoid pulling SDL/ImGui into this header.
 struct SDL_Window;
 typedef void *SDL_GLContext;
 
-class DebugBackend;
+class IDebugBackend;
 
 // ---------------------------------------------------------------------------
 // DebuggerGui — minimal Dear ImGui + SDL2 + OpenGL2 GUI layer.
 //
-// Sits on top of DebugBackend.  Does NOT access i8080, Memory, Board, etc.
-// All emulator data flows through DebugBackend snapshots/API.
+// Sits on top of IDebugBackend.  Does NOT access i8080, Memory, Board, etc.
+// All emulator data flows through IDebugBackend snapshots/API.
 // ---------------------------------------------------------------------------
 
 class DebuggerGui
@@ -46,7 +46,7 @@ public:
     void beginFrame();
 
     // Render all debugger panels.  Called between beginFrame/endFrame.
-    void render(DebugBackend &backend);
+    void render(IDebugBackend &backend);
 
     // Finalize the frame and swap buffers.
     void endFrame();
@@ -65,11 +65,11 @@ private:
     bool          quit_       = false;
 
     // Panel renderers
-    void renderCpuPanel(DebugBackend &backend);
-    void renderCurrentInstruction(uint16_t pc, DebugBackend &backend);
-    void renderInstructionHistory(DebugBackend &backend);
-    void renderStatusBar(DebugBackend &backend);
-    void renderControls(DebugBackend &backend);
+    void renderCpuPanel(IDebugBackend &backend);
+    void renderCurrentInstruction(uint16_t pc, IDebugBackend &backend);
+    void renderInstructionHistory(IDebugBackend &backend);
+    void renderStatusBar(IDebugBackend &backend);
+    void renderControls(IDebugBackend &backend);
     
     // Memory Inspector window (Stage 3.3)
     MemoryInspectorWindow memoryInspector_;
@@ -119,7 +119,7 @@ private:
 
     // CPU register editing state (Stage 3.6)
     bool editingRegister_ = false;
-    DebugBackend::RegisterId editingRegId_ = DebugBackend::RegisterId::AF;
+    IDebugBackend::RegisterId editingRegId_ = IDebugBackend::RegisterId::AF;
     char editRegBuffer_[8] = "";
     bool writeRegFailed_ = false;
 };
