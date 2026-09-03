@@ -13,8 +13,6 @@
 #include "backend.h"
 #include "events.h"
 #include "disassembler.h"
-#include "memory.h"
-#include "debug_memory.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -193,7 +191,7 @@ void DebuggerGui::gotoStack(uint16_t address)
 // Main render — assembles all panels
 // ---------------------------------------------------------------------------
 
-void DebuggerGui::render(DebugBackend &backend, Memory &memory)
+void DebuggerGui::render(DebugBackend &backend)
 {
     // Full-window layout with docking-like splits.
     const ImGuiViewport *viewport = ImGui::GetMainViewport();
@@ -234,7 +232,7 @@ void DebuggerGui::render(DebugBackend &backend, Memory &memory)
     {
         renderCpuPanel(backend);
         ImGui::Separator();
-        renderCurrentInstruction(cpu.pc, backend, memory);
+        renderCurrentInstruction(cpu.pc, backend);
     }
     ImGui::EndChild();
 
@@ -491,15 +489,14 @@ void DebuggerGui::renderCpuPanel(DebugBackend &backend)
 // Current Instruction
 // ---------------------------------------------------------------------------
 
-void DebuggerGui::renderCurrentInstruction(uint16_t pc, DebugBackend &backend,
-                                            Memory &memory)
+void DebuggerGui::renderCurrentInstruction(uint16_t pc, DebugBackend &backend)
 {
     ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Current Instruction");
     ImGui::Spacing();
 
-    // Use the disassembler with DebugMemoryAccess::peek() as the read function.
-    DisasmReadFn readFn = [&memory](uint16_t addr) -> uint8_t {
-        return DebugMemoryAccess::peek(memory, addr);
+    // Use the disassembler with backend.readMemory() as the read function.
+    DisasmReadFn readFn = [&backend](uint16_t addr) -> uint8_t {
+        return backend.readMemory(addr);
     };
 
     DisassembledInstruction instr = disassemble(pc, readFn);

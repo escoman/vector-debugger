@@ -21,7 +21,6 @@ struct SDL_Window;
 typedef void *SDL_GLContext;
 
 class DebugBackend;
-class Memory;
 
 // ---------------------------------------------------------------------------
 // DebuggerGui — minimal Dear ImGui + SDL2 + OpenGL2 GUI layer.
@@ -47,7 +46,7 @@ public:
     void beginFrame();
 
     // Render all debugger panels.  Called between beginFrame/endFrame.
-    void render(DebugBackend &backend, Memory &memory);
+    void render(DebugBackend &backend);
 
     // Finalize the frame and swap buffers.
     void endFrame();
@@ -67,7 +66,7 @@ private:
 
     // Panel renderers
     void renderCpuPanel(DebugBackend &backend);
-    void renderCurrentInstruction(uint16_t pc, DebugBackend &backend, Memory &memory);
+    void renderCurrentInstruction(uint16_t pc, DebugBackend &backend);
     void renderInstructionHistory(DebugBackend &backend);
     void renderStatusBar(DebugBackend &backend);
     void renderControls(DebugBackend &backend);

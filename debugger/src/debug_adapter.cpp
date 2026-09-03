@@ -1,12 +1,39 @@
-#include "board_wrapper.h"
+#include "debug_adapter.h"
 #include "options.h"
 #include "util.h"
+
+// ---------------------------------------------------------------------------
+// HAL binding — set static pointers used by HAL functions.
+//
+// The actual i8080_hal_* function definitions live in the application layer
+// (gui/main.cpp for the GUI target, or test files for test targets).
+// Each target provides its own HAL implementation that uses these pointers.
+// ---------------------------------------------------------------------------
+
+// Static member definitions
+Memory       *DebugAdapter::s_memory = nullptr;
+IO           *DebugAdapter::s_io     = nullptr;
+Board        *DebugAdapter::s_board  = nullptr;
+
+void DebugAdapter::bindHal()
+{
+    s_memory = &memory;
+    s_io     = &io;
+    s_board  = &board;
+}
+
+void DebugAdapter::setHalPointers(Memory *mem, IO *io, Board *board)
+{
+    s_memory = mem;
+    s_io     = io;
+    s_board  = board;
+}
 
 // ---------------------------------------------------------------------------
 // Construction / destruction
 // ---------------------------------------------------------------------------
 
-BoardWrapper::BoardWrapper()
+DebugAdapter::DebugAdapter()
     : tape_player(wav)
     , tw(timer)
     , aw(ay)
@@ -17,7 +44,7 @@ BoardWrapper::BoardWrapper()
 {
 }
 
-BoardWrapper::~BoardWrapper()
+DebugAdapter::~DebugAdapter()
 {
     shutdown();
 }
@@ -26,7 +53,7 @@ BoardWrapper::~BoardWrapper()
 // Initialization
 // ---------------------------------------------------------------------------
 
-void BoardWrapper::init()
+void DebugAdapter::init()
 {
     if (initialized_) {
         return;
@@ -55,7 +82,7 @@ void BoardWrapper::init()
 // Shutdown
 // ---------------------------------------------------------------------------
 
-void BoardWrapper::shutdown()
+void DebugAdapter::shutdown()
 {
     if (!initialized_) {
         return;
@@ -64,6 +91,10 @@ void BoardWrapper::shutdown()
     // Cleanup in reverse order (if needed)
     // Most components don't need explicit cleanup
     
+    s_memory = nullptr;
+    s_io     = nullptr;
+    s_board  = nullptr;
+    
     initialized_ = false;
 }
 
@@ -71,7 +102,7 @@ void BoardWrapper::shutdown()
 // ROM loading
 // ---------------------------------------------------------------------------
 
-bool BoardWrapper::loadRom(const std::string &path, uint32_t org)
+bool DebugAdapter::loadRom(const std::string &path, uint32_t org)
 {
     // Load ROM file
     std::vector<uint8_t> rom_data = util::load_binfile(path);

@@ -974,14 +974,11 @@ void DebugBackend::requestRun()
 void DebugBackend::requestPause()
 {
     running_.store(false, std::memory_order_release);
+    breakRequested_.store(true, std::memory_order_release);
     {
         std::lock_guard<std::mutex> lock(commandMutex_);
         pauseRequested_ = true;
     }
-#ifndef DEBUGGER_NO_BOARD
-    // Break out of current frame immediately
-    if (board_) board_->debugger_break();
-#endif
     commandCv_.notify_one();
 }
 
@@ -1203,6 +1200,13 @@ void DebugBackend::runUntilPause()
                 return;
             }
             
+            // Stage 3.13: break requested from GUI thread — break frame safely
+            if (breakRequested_.load(std::memory_order_acquire)) {
+                breakRequested_.store(false, std::memory_order_release);
+                board_->debugger_break();
+                return;
+            }
+
             if (pendingCommand_ == PendingCommand::Step) {
                 pendingCommand_ = PendingCommand::None;
                 stepInstruction();

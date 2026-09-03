@@ -393,6 +393,11 @@ private:
     // The emulation thread checks this flag in its main loop.
     std::atomic<bool>       running_{false};
 
+    // -- Stage 3.13: Break request flag ---------------------------------------
+    // Set by requestPause() from GUI thread. Checked by poll_debugger callback
+    // in emulation thread, which calls board_->debugger_break() safely.
+    std::atomic<bool>       breakRequested_{false};
+
     // -- Stage 3.5: memory write command state --------------------------------
 
     uint16_t                writeAddress_   = 0;

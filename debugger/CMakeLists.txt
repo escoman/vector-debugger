@@ -68,6 +68,11 @@ set(DBG_SOURCES
     ${DBG_SRC_DIR}/vram_mapping.cpp
 )
 
+# Debug Adapter — bridge between Debugger Core and Vector Emulator (Stage 3.13)
+set(ADAPTER_SOURCES
+    ${DBG_SRC_DIR}/debug_adapter.cpp
+)
+
 set(TEST_SOURCES
     ${DBG_TST_DIR}/test_backend.cpp
 )
@@ -130,8 +135,6 @@ add_executable(test_board_smoke
     ${CORE_SOURCES}
 )
 
-target_include_directories(test_board_smoke PRIVATE ${DBG_GUI_DIR})
-
 target_link_libraries(test_board_smoke
     ${SDL2_LIBRARY}
     ${Boost_LIBRARIES}
@@ -152,6 +155,31 @@ set(IMGUI_SOURCES
 )
 
 # ---------------------------------------------------------------------------
+# debugger_core — static library (Stage 3.13)
+#
+# Contains Debugger Core + Debug Adapter.
+# Does NOT depend on ImGui, SDL2, or OpenGL.
+# ---------------------------------------------------------------------------
+
+add_library(debugger_core STATIC
+    ${DBG_SOURCES}
+    ${ADAPTER_SOURCES}
+)
+
+target_include_directories(debugger_core PUBLIC
+    ${DBG_SRC_DIR}
+    ${SRC_DIR}
+    ${Boost_INCLUDE_DIRS}
+    ${ROOT_DIR}/fast-filters/sources
+    ${ROOT_DIR}/coreutil/sources
+)
+
+target_link_libraries(debugger_core
+    ${Boost_LIBRARIES}
+    pthread
+)
+
+# ---------------------------------------------------------------------------
 # GUI executable
 # ---------------------------------------------------------------------------
 
@@ -166,7 +194,6 @@ include_directories(${DBG_GUI_DIR})
 set(GUI_SOURCES
     ${DBG_GUI_DIR}/main.cpp
     ${DBG_GUI_DIR}/gui.cpp
-    ${DBG_GUI_DIR}/board_wrapper.cpp
     ${DBG_GUI_DIR}/memory_inspector_window.cpp
     ${DBG_GUI_DIR}/stack_view_window.cpp
     ${DBG_GUI_DIR}/breakpoints_window.cpp
@@ -225,7 +252,6 @@ add_custom_command(
 add_executable(v06c-debugger
     ${GUI_SOURCES}
     ${IMGUI_SOURCES}
-    ${DBG_SOURCES}
     ${BOARD_SOURCES}
     ${CORE_SOURCES}
     ${CMAKE_CURRENT_BINARY_DIR}/boots.bin.o
@@ -233,6 +259,7 @@ add_executable(v06c-debugger
 )
 
 target_link_libraries(v06c-debugger
+    debugger_core
     ${SDL2_LIBRARY}
     ${OPENGL_LIBRARIES}
     ${Boost_LIBRARIES}
