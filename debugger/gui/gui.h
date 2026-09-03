@@ -112,6 +112,13 @@ private:
     std::vector<InstructionEvent> cachedHistEntries_;
     bool histNeedsRefresh_ = true;
 
+    // Open ROM dialog state
+    bool showOpenRomDialog_ = false;
+    char romPathBuffer_[512] = "";
+    char romAddrBuffer_[16] = "0x0100";
+    bool romAutoDetect_ = true;
+    char romErrorBuffer_[256] = "";
+
     // CPU register editing state (Stage 3.6)
     bool editingRegister_ = false;
     DebugBackend::RegisterId editingRegId_ = DebugBackend::RegisterId::AF;

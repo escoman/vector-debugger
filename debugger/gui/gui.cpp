@@ -172,6 +172,18 @@ void DebuggerGui::render(DebugBackend &backend, Memory &memory)
         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
         ImGuiWindowFlags_NoBringToFrontOnFocus);
 
+    // -- Menu bar --
+    if (ImGui::BeginMenuBar()) {
+        if (ImGui::BeginMenu("File")) {
+            if (ImGui::MenuItem("Open ROM...")) {
+                showOpenRomDialog_ = true;
+                romErrorBuffer_[0] = '\0';
+            }
+            ImGui::EndMenu();
+        }
+        ImGui::EndMenuBar();
+    }
+
     // -- Top: toolbar with Run / Pause buttons --
     renderControls(backend);
     ImGui::Separator();
@@ -205,7 +217,64 @@ void DebuggerGui::render(DebugBackend &backend, Memory &memory)
     renderStatusBar(backend);
 
     ImGui::End();
-    
+
+    // --- Open ROM dialog ---
+    if (showOpenRomDialog_) {
+        ImGui::OpenPopup("Open ROM");
+        showOpenRomDialog_ = false;
+    }
+    if (ImGui::BeginPopupModal("Open ROM", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::SetNextItemWidth(400);
+        ImGui::InputText("ROM file", romPathBuffer_, sizeof(romPathBuffer_));
+
+        ImGui::Checkbox("Auto-detect address (.rom/.r0m)", &romAutoDetect_);
+        if (!romAutoDetect_) {
+            ImGui::SetNextItemWidth(120);
+            ImGui::InputText("Load address", romAddrBuffer_, sizeof(romAddrBuffer_),
+                ImGuiInputTextFlags_CharsHexadecimal);
+        }
+
+        if (romErrorBuffer_[0]) {
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", romErrorBuffer_);
+        }
+
+        if (ImGui::Button("Load") || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
+            std::string path(romPathBuffer_);
+            if (path.empty()) {
+                snprintf(romErrorBuffer_, sizeof(romErrorBuffer_), "File path is empty");
+            } else {
+                uint32_t org = 0;
+                if (romAutoDetect_) {
+                    size_t dot = path.rfind('.');
+                    if (dot != std::string::npos) {
+                        std::string ext = path.substr(dot);
+                        if (ext == ".rom") org = 0x0100;
+                        else if (ext == ".r0m") org = 0x0000;
+                    }
+                } else {
+                    org = std::strtoul(romAddrBuffer_, nullptr, 16);
+                }
+                backend.requestPause();
+                if (backend.loadRom(path, org)) {
+                    ImGui::CloseCurrentPopup();
+                    memoryInspector_.requestRefresh();
+                    disassemblyView_.requestRefresh();
+                    stackView_.requestRefresh();
+                    vectorScreen_.requestRefresh();
+                    histNeedsRefresh_ = true;
+                } else {
+                    snprintf(romErrorBuffer_, sizeof(romErrorBuffer_),
+                             "Failed to load: %s", path.c_str());
+                }
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
     // Setup cross-window navigation callbacks (Stage 3.9)
     stackView_.onGoToMemoryInspector = [this](uint16_t a) { gotoMemory(a); };
     stackView_.onGoToDisassembly = [this](uint16_t a) { gotoDisassembly(a); };
@@ -534,69 +603,91 @@ void DebuggerGui::renderControls(DebugBackend &backend)
     
     // Memory Inspector toggle
     ImGui::SameLine();
+    ImGui::BeginDisabled(!memoryInspector_.isVisible());
     if (ImGui::Button("Memory Inspector")) {
         memoryInspector_.setVisible(!memoryInspector_.isVisible());
     }
+    ImGui::EndDisabled();
     
     // Stack View toggle
     ImGui::SameLine();
+    ImGui::BeginDisabled(!stackView_.isVisible());
     if (ImGui::Button("Stack View")) {
         stackView_.setVisible(!stackView_.isVisible());
     }
+    ImGui::EndDisabled();
     
     // Breakpoints toggle (Stage 3.7)
     ImGui::SameLine();
+    ImGui::BeginDisabled(!breakpointsWindow_.isVisible());
     if (ImGui::Button("Breakpoints")) {
         breakpointsWindow_.setVisible(!breakpointsWindow_.isVisible());
     }
+    ImGui::EndDisabled();
     
     // Disassembly toggle (Stage 3.8)
     ImGui::SameLine();
+    ImGui::BeginDisabled(!disassemblyView_.isVisible());
     if (ImGui::Button("Disassembly")) {
         disassemblyView_.setVisible(!disassemblyView_.isVisible());
     }
+    ImGui::EndDisabled();
     
     // Execution Trace toggle (Stage 3.10)
     ImGui::SameLine();
+    ImGui::BeginDisabled(!executionTrace_.isVisible());
     if (ImGui::Button("Execution Trace")) {
         executionTrace_.setVisible(!executionTrace_.isVisible());
     }
+    ImGui::EndDisabled();
     
     // I/O Inspector toggle (Stage 3.11)
     ImGui::SameLine();
+    ImGui::BeginDisabled(!ioInspector_.isVisible());
     if (ImGui::Button("I/O Inspector")) {
         ioInspector_.setVisible(!ioInspector_.isVisible());
     }
+    ImGui::EndDisabled();
     
     // Vector Screen toggle (Stage 4.3)
     ImGui::SameLine();
+    ImGui::BeginDisabled(!vectorScreen_.isVisible());
     if (ImGui::Button("Vector Screen")) {
         vectorScreen_.setVisible(!vectorScreen_.isVisible());
     }
+    ImGui::EndDisabled();
     
     // Memory Map toggle (Stage 4.4)
     ImGui::SameLine();
+    ImGui::BeginDisabled(!memoryMap_.isVisible());
     if (ImGui::Button("Memory Map")) {
         memoryMap_.setVisible(!memoryMap_.isVisible());
     }
+    ImGui::EndDisabled();
     
     // Functions toggle (Stage 4.5)
     ImGui::SameLine();
+    ImGui::BeginDisabled(!functionsWindow_.isVisible());
     if (ImGui::Button("Functions")) {
         functionsWindow_.setVisible(!functionsWindow_.isVisible());
     }
+    ImGui::EndDisabled();
     
     // Call Graph toggle (Stage 4.7)
     ImGui::SameLine();
+    ImGui::BeginDisabled(!callGraphWindow_.isVisible());
     if (ImGui::Button("Call Graph")) {
         callGraphWindow_.setVisible(!callGraphWindow_.isVisible());
     }
+    ImGui::EndDisabled();
     
     // Search toggle (Stage 4.8)
     ImGui::SameLine();
+    ImGui::BeginDisabled(!searchWindow_.isVisible());
     if (ImGui::Button("Search")) {
         searchWindow_.setVisible(!searchWindow_.isVisible());
     }
+    ImGui::EndDisabled();
 }
 
 // ---------------------------------------------------------------------------
