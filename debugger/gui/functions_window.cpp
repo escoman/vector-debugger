@@ -119,7 +119,7 @@ void FunctionsWindow::render(DebugBackend &backend)
 
     if (ImGui::BeginTable("FunctionsTable", 5,
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Sortable |
-            ImGuiTableFlags_ScrollY)) {
+            ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp)) {
 
         // Headers
         ImGui::TableSetupScrollFreeze(0, 1);

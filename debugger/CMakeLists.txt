@@ -46,6 +46,7 @@ set(CORE_SOURCES
 )
 
 # Board sources for full emulator integration (Stage 3.2)
+# NOTE: hal.cpp is deliberately excluded — each target provides its own HAL.
 set(BOARD_SOURCES
     ${SRC_DIR}/board.cpp
     ${SRC_DIR}/cadence.cpp
@@ -55,7 +56,6 @@ set(BOARD_SOURCES
     ${SRC_DIR}/options.cpp
     ${SRC_DIR}/util.cpp
     ${SRC_DIR}/resampler.cpp
-    ${SRC_DIR}/hal.cpp
     ${SRC_DIR}/icon.cpp
 )
 
@@ -126,6 +126,7 @@ add_executable(test_board_smoke
     ${BOARD_TEST_SOURCES}
     ${DBG_SOURCES}
     ${BOARD_SOURCES}
+    ${SRC_DIR}/hal.cpp
     ${CORE_SOURCES}
 )
 
@@ -180,17 +181,67 @@ set(GUI_SOURCES
     ${DBG_GUI_DIR}/search_window.cpp
 )
 
-add_executable(debugger_gui
+# ---------------------------------------------------------------------------
+# Binary resources for v06c-debugger (boot ROM, window icon)
+# ---------------------------------------------------------------------------
+
+find_program(OBJCOPY objcopy)
+
+# Detect output format for objcopy based on platform
+if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+    set(DBG_OBJCOPY_FMT "-O" "elf64-x86-64")
+else()
+    set(DBG_OBJCOPY_FMT "-O" "elf32-i386")
+endif()
+
+# Copy boots.bin to build directory and convert to object file
+add_custom_command(
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/boots.bin
+    COMMAND ${CMAKE_COMMAND} -E copy ${ROOT_DIR}/boot/boots.bin ${CMAKE_CURRENT_BINARY_DIR}/boots.bin
+    DEPENDS ${ROOT_DIR}/boot/boots.bin
+)
+
+add_custom_command(
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/boots.bin.o
+    COMMAND ${OBJCOPY} -I binary ${DBG_OBJCOPY_FMT} boots.bin boots.bin.o
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/boots.bin
+)
+
+# Copy icon64.rgba to build directory and convert to object file
+add_custom_command(
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/icon64.rgba
+    COMMAND ${CMAKE_COMMAND} -E copy ${ROOT_DIR}/res/icon64.rgba ${CMAKE_CURRENT_BINARY_DIR}/icon64.rgba
+    DEPENDS ${ROOT_DIR}/res/icon64.rgba
+)
+
+add_custom_command(
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/icon64.rgba.o
+    COMMAND ${OBJCOPY} -I binary ${DBG_OBJCOPY_FMT} icon64.rgba icon64.rgba.o
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/icon64.rgba
+)
+
+add_executable(v06c-debugger
     ${GUI_SOURCES}
     ${IMGUI_SOURCES}
     ${DBG_SOURCES}
     ${BOARD_SOURCES}
     ${CORE_SOURCES}
+    ${CMAKE_CURRENT_BINARY_DIR}/boots.bin.o
+    ${CMAKE_CURRENT_BINARY_DIR}/icon64.rgba.o
 )
 
-target_link_libraries(debugger_gui
+target_link_libraries(v06c-debugger
     ${SDL2_LIBRARY}
     ${OPENGL_LIBRARIES}
     ${Boost_LIBRARIES}
     pthread
+)
+
+# Binary resources produce absolute symbols (_binary_*_size) which cannot
+# be used with position-independent code on x86_64. Disable PIE for this target.
+set_target_properties(v06c-debugger PROPERTIES
+    LINK_FLAGS "-no-pie"
+    POSITION_INDEPENDENT_CODE OFF
 )
