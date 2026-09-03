@@ -39,7 +39,8 @@ public:
     uint8_t readMemory(uint16_t addr) override;
     uint8_t peekMemory(uint16_t addr) override;
     void    writeMemory(uint16_t addr, uint8_t val) override;
-    Memory* rawMemory() override { return nullptr; }  // HAL handles instrumentation
+    void setMemoryCallbacks(MemoryReadCallback onRead,
+                            MemoryWriteCallback onWrite) override;
 
     CpuState getCpuState() override;
     void     writeCpuRegister(int reg, uint16_t val) override;
@@ -74,7 +75,8 @@ public:
     static IO*     halIo()     { return s_io; }
     static Board*  halBoard()  { return s_board; }
 
-    // -- Public components --------------------------------------------------
+private:
+    // -- Emulator components (hidden from outside) ----------------------------
 
     Memory memory;
     FD1793 fdc;
@@ -91,8 +93,12 @@ public:
     PixelFiller filler;
     Board board;
 
-private:
     bool initialized_ = false;
+
+    MemoryReadCallback  memReadCb_;
+    MemoryWriteCallback memWriteCb_;
+    std::function<void(uint32_t,uint32_t,bool,uint8_t)> prevMemOnRead_;
+    std::function<void(uint32_t,uint32_t,bool,uint8_t)> prevMemOnWrite_;
 
     static Memory       *s_memory;
     static IO           *s_io;

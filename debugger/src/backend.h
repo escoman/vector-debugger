@@ -40,12 +40,7 @@ struct StepResult
 class DebugBackend : public IDebugBackend
 {
 public:
-    // New: work through IDebugTarget interface
     explicit DebugBackend(IDebugTarget &target);
-
-    // Legacy: for tests that pass Memory directly.
-    // Creates an internal NoBoardTarget.
-    explicit DebugBackend(Memory &memory);
 
     ~DebugBackend();
 
@@ -167,7 +162,6 @@ public:
 
 private:
     IDebugTarget *target_;
-    Memory       *rawMemory_;   // for callback installation (may be nullptr)
 
     DebuggerState state_;
 
@@ -194,9 +188,6 @@ private:
 
     struct Impl;
     Impl *impl_;
-
-    std::function<void(uint32_t,uint32_t,bool,uint8_t)> prevOnRead_;
-    std::function<void(uint32_t,uint32_t,bool,uint8_t)> prevOnWrite_;
 
     void installMemoryCallbacks();
 
@@ -265,7 +256,4 @@ private:
 
     mutable std::mutex screenMutex_;
 
-    // -- Legacy test support ------------------------------------------------
-
-    std::unique_ptr<IDebugTarget> ownedTarget_;
 };

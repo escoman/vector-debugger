@@ -141,7 +141,26 @@ public:
         }
     }
 
-    Memory* rawMemory() override { return &memory_; }
+    void setMemoryCallbacks(MemoryReadCallback onRead,
+                            MemoryWriteCallback onWrite) override {
+        if (onRead) {
+            prevOnRead_  = memory_.onread;
+            prevOnWrite_ = memory_.onwrite;
+            memory_.onread = [this, onRead](uint32_t v, uint32_t p, bool s, uint8_t val) {
+                onRead(v, p, s, val);
+                if (prevOnRead_) prevOnRead_(v, p, s, val);
+            };
+            memory_.onwrite = [this, onWrite](uint32_t v, uint32_t p, bool s, uint8_t val) {
+                onWrite(v, p, s, val);
+                if (prevOnWrite_) prevOnWrite_(v, p, s, val);
+            };
+        } else {
+            memory_.onread  = prevOnRead_;
+            memory_.onwrite = prevOnWrite_;
+            prevOnRead_ = nullptr;
+            prevOnWrite_ = nullptr;
+        }
+    }
 
     void stepInstruction() override { board_.single_step(false); }
     void executeFrame() override { board_.execute_frame_with_cadence(false, false); }
@@ -166,6 +185,8 @@ public:
 private:
     Memory &memory_;
     Board  &board_;
+    MemoryReadCallback  prevOnRead_;
+    MemoryWriteCallback prevOnWrite_;
 };
 
 // ---------------------------------------------------------------------------

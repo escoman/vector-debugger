@@ -187,6 +187,41 @@ void DebugAdapter::writeMemory(uint16_t addr, uint8_t val)
 }
 
 // ---------------------------------------------------------------------------
+// IDebugTarget: Memory instrumentation callbacks
+// ---------------------------------------------------------------------------
+
+void DebugAdapter::setMemoryCallbacks(MemoryReadCallback onRead,
+                                      MemoryWriteCallback onWrite)
+{
+    memReadCb_  = onRead;
+    memWriteCb_ = onWrite;
+
+    if (onRead) {
+        // Save previous callbacks for chaining
+        prevMemOnRead_  = memory.onread;
+        prevMemOnWrite_ = memory.onwrite;
+
+        memory.onread = [this](uint32_t virt, uint32_t phys,
+                               bool stack, uint8_t value) {
+            if (memReadCb_) memReadCb_(virt, phys, stack, value);
+            if (prevMemOnRead_) prevMemOnRead_(virt, phys, stack, value);
+        };
+
+        memory.onwrite = [this](uint32_t virt, uint32_t phys,
+                                bool stack, uint8_t value) {
+            if (memWriteCb_) memWriteCb_(virt, phys, stack, value);
+            if (prevMemOnWrite_) prevMemOnWrite_(virt, phys, stack, value);
+        };
+    } else {
+        // Clear: restore previous callbacks
+        memory.onread  = prevMemOnRead_;
+        memory.onwrite = prevMemOnWrite_;
+        prevMemOnRead_  = nullptr;
+        prevMemOnWrite_ = nullptr;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // IDebugTarget: CPU state
 // ---------------------------------------------------------------------------
 

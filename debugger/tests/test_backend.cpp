@@ -32,6 +32,7 @@
 #include "i8080.h"
 #include "i8080_hal.h"
 #include "backend.h"
+#include "no_board_target.h"
 #include "events.h"
 #include "disassembler.h"
 #include "debug_memory.h"
@@ -51,9 +52,10 @@ using namespace i8080cpu;
 // onread/onwrite callbacks, which DebugBackend has installed.
 // ---------------------------------------------------------------------------
 
-static Memory      *test_memory = nullptr;
+static Memory       *test_memory = nullptr;
 static DebugBackend *test_dbg    = nullptr;
-static bool         test_iff     = false;
+static NoBoardTarget *test_target = nullptr;
+static bool          test_iff     = false;
 
 int i8080_hal_memory_read_byte(int addr)
 {
@@ -211,7 +213,8 @@ static void load_test_rom(Memory &mem)
 static void setup(Memory &mem, DebugBackend *&dbg)
 {
     test_memory = &mem;
-    dbg = new DebugBackend(mem);
+    test_target = new NoBoardTarget(mem);
+    dbg = new DebugBackend(*test_target);
     test_dbg = dbg;
     dbg->reset();
 }
@@ -220,6 +223,8 @@ static void teardown(DebugBackend *dbg)
 {
     test_dbg = nullptr;
     delete dbg;
+    delete test_target;
+    test_target = nullptr;
     test_memory = nullptr;
 }
 

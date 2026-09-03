@@ -41,9 +41,32 @@ void NoBoardTarget::writeMemory(uint16_t addr, uint8_t val)
     memory_.write(addr, val, false);
 }
 
-Memory* NoBoardTarget::rawMemory()
+void NoBoardTarget::setMemoryCallbacks(MemoryReadCallback onRead,
+                                       MemoryWriteCallback onWrite)
 {
-    return &memory_;
+    if (onRead) {
+        // Save previous callbacks for chaining
+        prevOnRead_  = memory_.onread;
+        prevOnWrite_ = memory_.onwrite;
+
+        memory_.onread = [this, onRead](uint32_t virt, uint32_t phys,
+                                        bool stack, uint8_t value) {
+            onRead(virt, phys, stack, value);
+            if (prevOnRead_) prevOnRead_(virt, phys, stack, value);
+        };
+
+        memory_.onwrite = [this, onWrite](uint32_t virt, uint32_t phys,
+                                          bool stack, uint8_t value) {
+            onWrite(virt, phys, stack, value);
+            if (prevOnWrite_) prevOnWrite_(virt, phys, stack, value);
+        };
+    } else {
+        // Clear: restore previous callbacks
+        memory_.onread  = prevOnRead_;
+        memory_.onwrite = prevOnWrite_;
+        prevOnRead_  = nullptr;
+        prevOnWrite_ = nullptr;
+    }
 }
 
 // ---------------------------------------------------------------------------

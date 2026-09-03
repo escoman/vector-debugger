@@ -1,11 +1,8 @@
 #include "backend.h"
-#include "no_board_target.h"
 #include "events.h"
 #include "opcode_info.h"
 #include "ring_buffer.h"
 #include "debug_memory.h"
-
-#include "memory.h"  // rawMemory_ callback installation (onread/onwrite)
 
 #include <cstdio>
 #include <cstring>
@@ -57,7 +54,6 @@ struct DebugBackend::Impl
 
 DebugBackend::DebugBackend(IDebugTarget &target)
     : target_(&target)
-    , rawMemory_(target.rawMemory())
     , state_(DebuggerState::Paused)
     , nextId_(1)
     , pauseRequested_(false)
@@ -66,34 +62,15 @@ DebugBackend::DebugBackend(IDebugTarget &target)
     , fetchRemaining_(0)
     , impl_(new Impl())
 {
-    clearActivityCounters();
-    installMemoryCallbacks();
-}
-
-DebugBackend::DebugBackend(Memory &memory)
-    : target_(nullptr)
-    , rawMemory_(&memory)
-    , state_(DebuggerState::Paused)
-    , nextId_(1)
-    , pauseRequested_(false)
-    , instructionSequence_(0)
-    , instrumentationEnabled_(true)
-    , fetchRemaining_(0)
-    , impl_(new Impl())
-{
-    // Legacy constructor for tests: create NoBoardTarget internally
-    ownedTarget_ = std::make_unique<NoBoardTarget>(memory);
-    target_ = ownedTarget_.get();
     clearActivityCounters();
     installMemoryCallbacks();
 }
 
 DebugBackend::~DebugBackend()
 {
-    // Restore previous callbacks before destroying
-    if (rawMemory_) {
-        rawMemory_->onread  = prevOnRead_;
-        rawMemory_->onwrite = prevOnWrite_;
+    // Clear memory callbacks before destroying
+    if (target_) {
+        target_->setMemoryCallbacks(nullptr, nullptr);
     }
     delete impl_;
 }
@@ -136,29 +113,21 @@ bool DebugBackend::loadRom(const std::string &path, uint32_t org)
 
 void DebugBackend::installMemoryCallbacks()
 {
-    if (!rawMemory_) return;
-
-    // Save existing callbacks for chaining
-    prevOnRead_  = rawMemory_->onread;
-    prevOnWrite_ = rawMemory_->onwrite;
+    if (!target_) return;
 
     DebugBackend *self = this;
 
-    rawMemory_->onread = [self](uint32_t virt, uint32_t phys,
-                            bool stack, uint8_t value) {
-        self->onMemoryRead(virt, phys, stack, value);
-        if (self->prevOnRead_) {
-            self->prevOnRead_(virt, phys, stack, value);
-        }
-    };
+    IDebugTarget::MemoryReadCallback readCb =
+        [self](uint32_t virt, uint32_t phys, bool stack, uint8_t value) {
+            self->onMemoryRead(virt, phys, stack, value);
+        };
 
-    rawMemory_->onwrite = [self](uint32_t virt, uint32_t phys,
-                             bool stack, uint8_t value) {
-        self->onMemoryWrite(virt, phys, stack, value);
-        if (self->prevOnWrite_) {
-            self->prevOnWrite_(virt, phys, stack, value);
-        }
-    };
+    IDebugTarget::MemoryWriteCallback writeCb =
+        [self](uint32_t virt, uint32_t phys, bool stack, uint8_t value) {
+            self->onMemoryWrite(virt, phys, stack, value);
+        };
+
+    target_->setMemoryCallbacks(readCb, writeCb);
 }
 
 // ---------------------------------------------------------------------------

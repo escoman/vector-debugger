@@ -20,7 +20,8 @@ public:
     uint8_t readMemory(uint16_t addr) override;
     uint8_t peekMemory(uint16_t addr) override;
     void    writeMemory(uint16_t addr, uint8_t val) override;
-    Memory* rawMemory() override;
+    void setMemoryCallbacks(MemoryReadCallback onRead,
+                            MemoryWriteCallback onWrite) override;
 
     CpuState getCpuState() override;
     void     writeCpuRegister(int reg, uint16_t val) override;
@@ -45,4 +46,7 @@ public:
 private:
     Memory &memory_;
     bool    cpuInitialized_ = false;
+
+    MemoryReadCallback  prevOnRead_;
+    MemoryWriteCallback prevOnWrite_;
 };

@@ -6,8 +6,6 @@
 #include <functional>
 #include <string>
 
-class Memory;
-
 // ---------------------------------------------------------------------------
 // IDebugTarget — interface between Debugger Core and the emulator Adapter.
 //
@@ -27,10 +25,15 @@ public:
     virtual uint8_t peekMemory(uint16_t addr) = 0;  // read without callbacks
     virtual void    writeMemory(uint16_t addr, uint8_t val) = 0;
 
-    // Raw Memory pointer for callback installation.
-    // Returns nullptr when direct memory callbacks are not needed
-    // (e.g. real emulator uses HAL instrumentation instead).
-    virtual Memory* rawMemory() { return nullptr; }
+    // Memory instrumentation callbacks.
+    // DebugBackend provides lambdas that record memory access events.
+    // The target installs them on the underlying Memory (if any).
+    // Pass nullptr to clear (called by DebugBackend destructor).
+    using MemoryReadCallback  = std::function<void(uint32_t virt, uint32_t phys, bool stack, uint8_t value)>;
+    using MemoryWriteCallback = std::function<void(uint32_t virt, uint32_t phys, bool stack, uint8_t value)>;
+
+    virtual void setMemoryCallbacks(MemoryReadCallback onRead,
+                                    MemoryWriteCallback onWrite) {}
 
     // -- CPU state ----------------------------------------------------------
 
