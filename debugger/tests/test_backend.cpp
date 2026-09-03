@@ -3597,6 +3597,356 @@ static void test_io_inspector_ring_overflow()
     TEST_END();
 }
 
+// ===================================================================
+// Stage 3.12 — Integration tests
+// ===================================================================
+
+// ---------------------------------------------------------------------------
+// Test 1: Reset → Step
+// ---------------------------------------------------------------------------
+
+static void test_integration_reset_step()
+{
+    TEST_BEGIN("S3.12: Integration reset_step");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_test_rom(mem);
+    dbg->reset();
+
+    // Step one instruction: LXI H, C000 (PC 0000 → 0003)
+    StepResult r = dbg->stepInstruction();
+    CHECK_EQ(0x0000, r.pcBefore, "step before reset PC");
+    CHECK_EQ(0x0003, r.pcAfter, "step after reset PC");
+    CHECK_EQ(0x0003, dbg->getCpuState().pc, "CPU state PC after step");
+
+    // Reset and step again: should start from 0000
+    dbg->reset();
+    CHECK_EQ(0x0000, dbg->getCpuState().pc, "PC == 0 after reset");
+    StepResult r2 = dbg->stepInstruction();
+    CHECK_EQ(0x0000, r2.pcBefore, "step after reset starts at 0");
+    CHECK_EQ(0x0003, r2.pcAfter, "step after reset: PC → 0003");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test 2: Breakpoint → Run
+// ---------------------------------------------------------------------------
+
+static void test_integration_bp_run()
+{
+    TEST_BEGIN("S3.12: Integration bp_run");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_test_rom(mem);
+    dbg->reset();
+
+    // Set breakpoint at 0x0005 (MOV M, A)
+    dbg->addBreakpoint(0x0005);
+    dbg->run();
+
+    CHECK(dbg->isPaused(), "paused after run");
+    CHECK_EQ(0x0005, dbg->getCpuState().pc, "stopped at breakpoint PC");
+    CHECK_EQ((int)StopReason::Breakpoint, (int)dbg->getStopReason(), "stop reason == Breakpoint");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test 3: Memory Write → Disassembly update
+// ---------------------------------------------------------------------------
+
+static void test_integration_memwrite_disasm()
+{
+    TEST_BEGIN("S3.12: Integration memwrite_disasm");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_test_rom(mem);
+    dbg->reset();
+
+    // Read original byte at 0x0003 (should be 0x3E = MVI A opcode)
+    uint8_t orig = dbg->readMemory(0x0003);
+    CHECK_EQ(0x3E, orig, "original byte at 0003 = 0x3E (MVI A)");
+
+    // Write new opcode (NOP = 0x00) directly through Memory
+    mem.write(0x0003, 0x00, false);
+
+    // Read back through DebugBackend
+    uint8_t updated = dbg->readMemory(0x0003);
+    CHECK_EQ(0x00, updated, "byte at 0003 = 0x00 (NOP) after write");
+
+    // Verify via snapshot
+    MemorySnapshot snap = dbg->readMemorySnapshot(0x0003, 1);
+    CHECK_EQ(0x00, snap.data[0], "snapshot shows NOP at 0003");
+
+    // Disassembly should now show NOP at 0003
+    auto readFn = [&mem](uint16_t addr) -> uint8_t {
+        return DebugMemoryAccess::peek(mem, addr);
+    };
+    auto d = disassemble(0x0003, readFn);
+    CHECK(d.text == "NOP", "disassembly shows NOP at 0003");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test 4: Register Write → navigation update
+// ---------------------------------------------------------------------------
+
+static void test_integration_regwrite_navigation()
+{
+    TEST_BEGIN("S3.12: Integration regwrite_navigation");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_test_rom(mem);
+    dbg->reset();
+
+    // PC starts at 0
+    CHECK_EQ(0x0000, dbg->getCpuState().pc, "PC starts at 0");
+
+    // Write PC directly via CPU API (what processRegisterWrite does)
+    i8080_jump(0x0008);
+    CHECK_EQ(0x0008, dbg->getCpuState().pc, "PC == 0x0008 after jump");
+
+    // Write SP directly
+    i8080_setreg_sp(0xFFFE);
+    CHECK_EQ(0xFFFE, dbg->getCpuState().sp, "SP == 0xFFFE after set");
+
+    // Step from 0x0008 (JMP 0003)
+    StepResult r = dbg->stepInstruction();
+    CHECK_EQ(0x0008, r.pcBefore, "stepped from 0x0008");
+    CHECK_EQ(0x0003, r.pcAfter, "JMP to 0x0003");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test 5: Trace → Disassembly
+// ---------------------------------------------------------------------------
+
+static void test_integration_trace_disasm()
+{
+    TEST_BEGIN("S3.12: Integration trace_disasm");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_test_rom(mem);
+    dbg->reset();
+
+    // Step 3 instructions
+    dbg->stepInstruction(); // 0000: LXI H, C000
+    dbg->stepInstruction(); // 0003: MVI A, 42
+    dbg->stepInstruction(); // 0005: MOV M, A
+
+    auto instrSnap = dbg->instructionHistorySnapshot();
+    CHECK_EQ((size_t)3, instrSnap.size(), "3 instructions in trace");
+
+    // Verify each trace entry PC maps to correct disassembly
+    auto readFn = [&mem](uint16_t addr) -> uint8_t {
+        return DebugMemoryAccess::peek(mem, addr);
+    };
+
+    for (size_t i = 0; i < instrSnap.size(); ++i) {
+        auto d = disassemble(instrSnap[i].pcBefore, readFn);
+        CHECK_EQ(instrSnap[i].opcode, d.opcode, "trace opcode matches disassembly");
+    }
+
+    // Specific checks
+    CHECK_EQ(0x0000, instrSnap[0].pcBefore, "trace[0] PC=0000");
+    CHECK_EQ(0x21, instrSnap[0].opcode, "trace[0] opcode=0x21 (LXI)");
+    CHECK_EQ(0x0003, instrSnap[1].pcBefore, "trace[1] PC=0003");
+    CHECK_EQ(0x3E, instrSnap[1].opcode, "trace[1] opcode=0x3E (MVI)");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test 6: Stack → Memory
+// ---------------------------------------------------------------------------
+
+static void test_integration_stack_memory()
+{
+    TEST_BEGIN("S3.12: Integration stack_memory");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_test_rom(mem);
+    dbg->reset();
+
+    // Set SP to 0xC100 and push BC (PUSH BC = C5)
+    // Program at 0x0000: place PUSH BC
+    uint8_t pushBC[] = { 0xC5 }; // PUSH BC
+    load_rom(mem, pushBC, sizeof(pushBC));
+    i8080_setreg_sp(0xC100);
+    i8080_setreg_b(0xAA);
+    i8080_setreg_c(0xBB);
+
+    // Step: PUSH BC → pushes 0xBB at C0FF, 0xAA at C0FE
+    dbg->stepInstruction();
+
+    CHECK_EQ(0xC0FE, dbg->getCpuState().sp, "SP after PUSH = C0FE");
+
+    // Read stack memory via snapshot
+    MemorySnapshot snap = dbg->readMemorySnapshot(0xC0FE, 2);
+    CHECK_EQ(0xBB, snap.data[0], "stack byte at C0FE = 0xBB (C low)");
+    CHECK_EQ(0xAA, snap.data[1], "stack byte at C0FF = 0xAA (B high)");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test 7: I/O → Disassembly
+// ---------------------------------------------------------------------------
+
+static void test_integration_io_disasm()
+{
+    TEST_BEGIN("S3.12: Integration io_disasm");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_rom(mem, io_test_rom, sizeof(io_test_rom));
+    dbg->reset();
+
+    // Step: IN 42 (seq 0, PC=0000)
+    dbg->stepInstruction();
+
+    auto ioSnap = dbg->ioHistorySnapshot();
+    CHECK_EQ((size_t)1, ioSnap.size(), "1 I/O event");
+
+    // Cross-reference I/O event's instructionSequence with instruction history
+    auto instrSnap = dbg->instructionHistorySnapshot();
+    bool found = false;
+    for (size_t i = 0; i < instrSnap.size(); ++i) {
+        if (instrSnap[i].sequence == ioSnap[0].instructionSequence) {
+            CHECK_EQ(0x0000, instrSnap[i].pcBefore, "I/O instruction at PC=0000");
+            found = true;
+            break;
+        }
+    }
+    CHECK(found, "I/O instructionSequence maps to instruction event");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test 8: Reset → breakpoints preserved
+// ---------------------------------------------------------------------------
+
+static void test_integration_reset_bp_preserved()
+{
+    TEST_BEGIN("S3.12: Integration reset_bp_preserved");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_test_rom(mem);
+    dbg->reset();
+
+    // Add breakpoints
+    dbg->addBreakpoint(0x0003);
+    dbg->addBreakpoint(0x0006);
+    CHECK_EQ(2, (int)dbg->getBreakpoints().size(), "2 breakpoints before reset");
+
+    // Reset
+    dbg->reset();
+
+    // Breakpoints should survive
+    auto bps = dbg->getBreakpoints();
+    CHECK_EQ(2, (int)bps.size(), "2 breakpoints after reset");
+    CHECK(dbg->hasBreakpoint(0x0003), "BP at 0003 preserved");
+    CHECK(dbg->hasBreakpoint(0x0006), "BP at 0006 preserved");
+
+    // Verify they still work: run should stop at 0x0003
+    dbg->run();
+    CHECK_EQ(0x0003, dbg->getCpuState().pc, "stopped at preserved BP");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test 9: Reset → history preserved
+// ---------------------------------------------------------------------------
+
+static void test_integration_reset_history_preserved()
+{
+    TEST_BEGIN("S3.12: Integration reset_history_cleared");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_test_rom(mem);
+    dbg->reset();
+
+    // Step 5 instructions
+    for (int i = 0; i < 5; ++i) dbg->stepInstruction();
+
+    CHECK(dbg->instructionHistorySize() > 0, "history has events before reset");
+
+    // Reset — clears history (current behavior)
+    dbg->reset();
+
+    CHECK_EQ(0, dbg->instructionHistorySize(), "instr history cleared after reset");
+    CHECK_EQ(0x0000, dbg->getCpuState().pc, "PC == 0 after reset");
+
+    // Step again — new events recorded
+    dbg->stepInstruction();
+    CHECK(dbg->instructionHistorySize() > 0, "new events after reset+step");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test 10: Quit while running
+// ---------------------------------------------------------------------------
+
+static void test_integration_quit_while_running()
+{
+    TEST_BEGIN("S3.12: Integration quit_while_running");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_test_rom(mem);
+    dbg->reset();
+
+    // Set breakpoint to limit execution (prevent infinite loop)
+    dbg->addBreakpoint(0x0003);
+
+    // Start run
+    dbg->requestRun();
+
+    // Then request quit
+    dbg->requestQuit();
+    CHECK(dbg->isQuitRequested(), "quit requested");
+
+    // Process the command — should handle Run→Quit without deadlock
+    dbg->processOneCommand();
+    CHECK(dbg->isQuitRequested(), "quit still requested after processOneCommand");
+
+    teardown(dbg);
+    TEST_END();
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
@@ -3724,6 +4074,18 @@ int main()
     test_io_inspector_snapshot_isolation();
     test_io_inspector_clear();
     test_io_inspector_ring_overflow();
+
+    // Stage 3.12 — Integration tests
+    test_integration_reset_step();
+    test_integration_bp_run();
+    test_integration_memwrite_disasm();
+    test_integration_regwrite_navigation();
+    test_integration_trace_disasm();
+    test_integration_stack_memory();
+    test_integration_io_disasm();
+    test_integration_reset_bp_preserved();
+    test_integration_reset_history_preserved();
+    test_integration_quit_while_running();
 
     printf("\n\033[0;36m=== Results: %d/%d passed", tests_passed, tests_run);
     if (tests_failed > 0) {

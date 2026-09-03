@@ -8,6 +8,7 @@
 #include "execution_trace_window.h"
 #include "io_inspector_window.h"
 #include "backend.h"
+#include "events.h"
 
 // Forward declarations — avoid pulling SDL/ImGui into this header.
 struct SDL_Window;
@@ -83,6 +84,10 @@ private:
     // I/O Inspector window (Stage 3.11)
     IoInspectorWindow ioInspector_;
     
+    // Instruction History cache (Stage 3.12 — avoid per-frame snapshot)
+    std::vector<InstructionEvent> cachedHistEntries_;
+    bool histNeedsRefresh_ = true;
+
     // CPU register editing state (Stage 3.6)
     bool editingRegister_ = false;
     DebugBackend::RegisterId editingRegId_ = DebugBackend::RegisterId::AF;

@@ -396,8 +396,13 @@ void DebuggerGui::renderInstructionHistory(DebugBackend &backend)
     ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "Instruction History");
     ImGui::Spacing();
 
-    auto history = backend.instructionHistorySnapshot();
-    if (history.empty()) {
+    // Stage 3.12: refresh cache only when needed (avoid per-frame snapshot)
+    if (histNeedsRefresh_) {
+        cachedHistEntries_ = backend.instructionHistorySnapshot();
+        histNeedsRefresh_ = false;
+    }
+
+    if (cachedHistEntries_.empty()) {
         ImGui::TextDisabled("(no instructions executed)");
         return;
     }
@@ -406,12 +411,9 @@ void DebuggerGui::renderInstructionHistory(DebugBackend &backend)
     ImGui::BeginChild("HistoryScroll", ImVec2(0, 0), ImGuiChildFlags_None,
                        ImGuiWindowFlags_None);
 
-    // We need a read function for disassembly.  Use the backend's memory
-    // snapshot — but for simplicity, we only show pcBefore + opcode info
-    // that's already in the InstructionEvent.
-    for (size_t i = 0; i < history.size(); ++i) {
-        const auto &ev = history[i];
-        bool isLast = (i == history.size() - 1);
+    for (size_t i = 0; i < cachedHistEntries_.size(); ++i) {
+        const auto &ev = cachedHistEntries_[i];
+        bool isLast = (i == cachedHistEntries_.size() - 1);
 
         if (isLast) {
             // Highlight the most recent instruction.
@@ -451,6 +453,7 @@ void DebuggerGui::renderControls(DebugBackend &backend)
             disassemblyView_.requestRefresh();
             executionTrace_.requestRefresh();
             ioInspector_.requestRefresh();
+            histNeedsRefresh_ = true;
         }
         ImGui::SameLine();
     }
@@ -465,6 +468,7 @@ void DebuggerGui::renderControls(DebugBackend &backend)
             disassemblyView_.requestRefresh();
             executionTrace_.requestRefresh();
             ioInspector_.requestRefresh();
+            histNeedsRefresh_ = true;
         }
     } else {
         if (ImGui::Button("Run")) {
@@ -481,6 +485,7 @@ void DebuggerGui::renderControls(DebugBackend &backend)
         disassemblyView_.requestRefresh();
         executionTrace_.requestRefresh();
         ioInspector_.requestRefresh();
+        histNeedsRefresh_ = true;
     }
     
     // Memory Inspector toggle

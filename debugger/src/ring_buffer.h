@@ -17,6 +17,8 @@ class RingBuffer
 public:
     explicit RingBuffer(size_t capacity)
         : buf_(capacity)
+        , head_(0)
+        , count_(0)
     {
     }
 
