@@ -2,6 +2,7 @@
 
 // Dear ImGui core + backends
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "imgui_impl_sdl2.h"
 #include "imgui_impl_opengl2.h"
 
@@ -100,6 +101,7 @@ bool DebuggerGui::initialize(int width, int height)
     ImGui::CreateContext();
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
     // Style
     ImGui::StyleColorsDark();
@@ -108,12 +110,19 @@ bool DebuggerGui::initialize(int width, int height)
     ImGui_ImplSDL2_InitForOpenGL(window_, glContext_);
     ImGui_ImplOpenGL2_Init();
 
+    // Workspace Manager (Stage 5.1) — directory setup only;
+    // visibility refs and actual loading happen after windows are created
+    workspaceManager_.initialize("workspaces");
+
     return true;
 }
 
 void DebuggerGui::shutdown()
 {
     if (!window_) return;
+
+    // Save workspace before tearing down ImGui context
+    workspaceManager_.shutdown();
 
     ImGui_ImplOpenGL2_Shutdown();
     ImGui_ImplSDL2_Shutdown();
@@ -193,63 +202,35 @@ void DebuggerGui::gotoStack(uint16_t address)
 
 void DebuggerGui::render(IDebugBackend &backend)
 {
-    // Full-window layout with docking-like splits.
-    const ImGuiViewport *viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(viewport->WorkPos);
-    ImGui::SetNextWindowSize(viewport->WorkSize);
-    ImGui::Begin("Debugger", nullptr,
-        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
-        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar);
+    // --- DockSpace (Stage 5.0/5.1) ---
+    ImGuiViewport *viewport = ImGui::GetMainViewport();
+    ImGuiID dockspaceId = ImGui::DockSpaceOverViewport(0, viewport, ImGuiDockNodeFlags_PassthruCentralNode);
 
-    // -- Top: toolbar with Run / Pause buttons --
-    // File menu button (opens popup below toolbar)
-    if (ImGui::Button("File")) {
-        ImGui::OpenPopup("FileMenu");
-    }
-    if (ImGui::BeginPopup("FileMenu")) {
-        if (ImGui::MenuItem("Open ROM...")) {
-            showOpenRomDialog_ = true;
-            romErrorBuffer_[0] = '\0';
-        }
-        ImGui::EndPopup();
-    }
-
-    ImGui::SameLine();
-    renderControls(backend);
-    ImGui::Separator();
+    // --- Toolbar with menu bar ---
+    renderToolbar(backend);
 
     // Get CPU state for this frame
     CpuState cpu = backend.getCpuState();
 
-    // -- Middle: two-column layout (reserve space for status bar at bottom) --
-    float leftWidth = 280.0f;
-    float statusbarHeight = ImGui::GetFrameHeightWithSpacing();
-    float childHeight = ImGui::GetContentRegionAvail().y - statusbarHeight;
-
-    ImGui::BeginChild("LeftPanel", ImVec2(leftWidth, childHeight), ImGuiChildFlags_None,
-                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-    {
-        renderCpuPanel(backend);
-        ImGui::Separator();
-        renderCurrentInstruction(cpu.pc, backend);
+    // --- CPU Registers window (dockable) ---
+    if (showCpuRegisters_) {
+        ImGui::SetNextWindowSize(ImVec2(280, 0), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("CPU Registers", &showCpuRegisters_)) {
+            renderCpuPanel(backend);
+            ImGui::Separator();
+            renderCurrentInstruction(cpu.pc, backend);
+        }
+        ImGui::End();
     }
-    ImGui::EndChild();
 
-    ImGui::SameLine();
-
-    ImGui::BeginChild("RightPanel", ImVec2(0, childHeight), ImGuiChildFlags_None,
-                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-    {
-        renderInstructionHistory(backend);
+    // --- Instruction History window (dockable) ---
+    if (showInstructionHistory_) {
+        ImGui::SetNextWindowSize(ImVec2(400, 300), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Instruction History", &showInstructionHistory_)) {
+            renderInstructionHistory(backend);
+        }
+        ImGui::End();
     }
-    ImGui::EndChild();
-
-    // -- Bottom: status bar --
-    ImGui::Separator();
-    renderStatusBar(backend);
-
-    ImGui::End();
 
     // --- Open ROM dialog ---
     if (showOpenRomDialog_) {
@@ -322,41 +303,106 @@ void DebuggerGui::render(IDebugBackend &backend)
     vectorScreen_.onGoToMemoryInspector = [this](uint16_t a) { gotoMemory(a); };
     vectorScreen_.onGoToDisassembly = [this](uint16_t a) { gotoDisassembly(a); };
     
-    // Render Memory Inspector window (separate, movable window)
+    // Render all debugger windows (dockable)
     memoryInspector_.render(backend);
-    
-    // Render Stack View window (separate, movable window)
     stackView_.render(backend);
-    
-    // RenderBreakpoints window (Stage 3.7)
     breakpointsWindow_.render(backend);
-    
-    // Render Disassembly View window (Stage 3.8)
     disassemblyView_.render(backend);
-    
-    // Render Execution Trace window (Stage 3.10)
     executionTrace_.render(backend);
-    
-    // Render I/O Inspector window (Stage 3.11)
     ioInspector_.render(backend);
-    
-    // Render Vector Screen window (Stage 4.3)
     vectorScreen_.render(backend);
-    
-    // Render Memory Map window (Stage 4.4)
     memoryMap_.render(backend);
-    
-    // Render Functions window (Stage 4.5)
     functionsWindow_.render(backend);
-    
-    // Render Xrefs window (Stage 4.7)
     xrefsWindow_.render(backend);
-    
-    // Render Call Graph window (Stage 4.7)
     callGraphWindow_.render(backend);
-    
-    // Render Search window (Stage 4.8)
     searchWindow_.render(backend);
+
+    // Register visibility refs on first frame (triggers workspace loading)
+    static bool visRegsRegistered = false;
+    if (!visRegsRegistered) {
+        workspaceManager_.setWindowVisibilityRefs({
+            {"CPU Registers", &showCpuRegisters_},
+            {"Instruction History", &showInstructionHistory_},
+            {"Vector Screen", &vectorScreen_.getVisibleRef()},
+            {"Memory Inspector", &memoryInspector_.getVisibleRef()},
+            {"Memory Map", &memoryMap_.getVisibleRef()},
+            {"Disassembly", &disassemblyView_.getVisibleRef()},
+            {"Stack View", &stackView_.getVisibleRef()},
+            {"Breakpoints", &breakpointsWindow_.getVisibleRef()},
+            {"Execution Trace", &executionTrace_.getVisibleRef()},
+            {"I/O & Hardware Inspector", &ioInspector_.getVisibleRef()},
+            {"Functions", &functionsWindow_.getVisibleRef()},
+            {"Cross References", &xrefsWindow_.getVisibleRef()},
+            {"Call Graph", &callGraphWindow_.getVisibleRef()},
+            {"Search", &searchWindow_.getVisibleRef()},
+        });
+        visRegsRegistered = true;
+    }
+
+    // Autosave workspace if layout changed
+    workspaceManager_.autosave();
+
+    // --- Save As dialog ---
+    if (showSaveAsDialog_) {
+        ImGui::OpenPopup("Save Workspace As");
+        showSaveAsDialog_ = false;
+    }
+    if (ImGui::BeginPopupModal("Save Workspace As", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Workspace name:");
+        ImGui::InputText("##name", saveAsNameBuffer_, sizeof(saveAsNameBuffer_));
+        if (ImGui::Button("Save") || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
+            if (saveAsNameBuffer_[0] != '\0') {
+                workspaceManager_.saveWorkspaceAs(saveAsNameBuffer_);
+                saveAsNameBuffer_[0] = '\0';
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) {
+            saveAsNameBuffer_[0] = '\0';
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    // --- Delete confirmation ---
+    if (showDeleteConfirm_) {
+        ImGui::OpenPopup("Delete Workspace?");
+        showDeleteConfirm_ = false;
+    }
+    if (ImGui::BeginPopupModal("Delete Workspace?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Delete workspace '%s'?", workspaceManager_.currentWorkspaceName().c_str());
+        if (workspaceManager_.isBuiltIn(workspaceManager_.currentWorkspaceName())) {
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+                               "Cannot delete built-in workspace.");
+            if (ImGui::Button("OK")) { ImGui::CloseCurrentPopup(); }
+        } else {
+            if (ImGui::Button("Delete")) {
+                workspaceManager_.deleteWorkspace(workspaceManager_.currentWorkspaceName());
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel")) { ImGui::CloseCurrentPopup(); }
+        }
+        ImGui::EndPopup();
+    }
+
+    // --- Status bar (fixed overlay at bottom) ---
+    {
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x,
+                                        viewport->WorkPos.y + viewport->WorkSize.y - ImGui::GetFrameHeightWithSpacing()));
+        ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, ImGui::GetFrameHeightWithSpacing()));
+        ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNavFocus |
+            ImGuiWindowFlags_NoDocking;
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        ImGui::Begin("##StatusBar", nullptr, flags);
+        ImGui::PopStyleVar(2);
+        renderStatusBar(backend);
+        ImGui::End();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -551,6 +597,78 @@ void DebuggerGui::renderInstructionHistory(IDebugBackend &backend)
 }
 
 // ---------------------------------------------------------------------------
+// Toolbar — menu bar with File, View menus and debug controls (Stage 5.0)
+// ---------------------------------------------------------------------------
+
+void DebuggerGui::renderToolbar(IDebugBackend &backend)
+{
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking;
+    if (ImGui::Begin("##Toolbar", nullptr, flags)) {
+        // File menu
+        if (ImGui::BeginMenu("File")) {
+            if (ImGui::MenuItem("Open ROM...")) {
+                showOpenRomDialog_ = true;
+                romErrorBuffer_[0] = '\0';
+            }
+            ImGui::EndMenu();
+        }
+
+        // View menu — window visibility toggles
+        if (ImGui::BeginMenu("View")) {
+            ImGui::MenuItem("CPU Registers", nullptr, &showCpuRegisters_);
+            ImGui::MenuItem("Instruction History", nullptr, &showInstructionHistory_);
+            ImGui::Separator();
+            ImGui::MenuItem("Vector Screen", nullptr, &vectorScreen_.getVisibleRef());
+            ImGui::MenuItem("Memory Inspector", nullptr, &memoryInspector_.getVisibleRef());
+            ImGui::MenuItem("Memory Map", nullptr, &memoryMap_.getVisibleRef());
+            ImGui::MenuItem("Disassembly", nullptr, &disassemblyView_.getVisibleRef());
+            ImGui::MenuItem("Stack", nullptr, &stackView_.getVisibleRef());
+            ImGui::MenuItem("Breakpoints", nullptr, &breakpointsWindow_.getVisibleRef());
+            ImGui::MenuItem("Execution Trace", nullptr, &executionTrace_.getVisibleRef());
+            ImGui::MenuItem("I/O & Hardware Inspector", nullptr, &ioInspector_.getVisibleRef());
+            ImGui::MenuItem("Functions", nullptr, &functionsWindow_.getVisibleRef());
+            ImGui::MenuItem("Cross References", nullptr, &xrefsWindow_.getVisibleRef());
+            ImGui::MenuItem("Call Graph", nullptr, &callGraphWindow_.getVisibleRef());
+            ImGui::MenuItem("Search", nullptr, &searchWindow_.getVisibleRef());
+            ImGui::EndMenu();
+        }
+
+        // Workspace menu (Stage 5.1)
+        if (ImGui::BeginMenu("Workspace")) {
+            auto workspaces = workspaceManager_.listWorkspaces();
+            for (const auto &ws : workspaces) {
+                bool isCurrent = (ws == workspaceManager_.currentWorkspaceName());
+                if (ImGui::MenuItem(ws.c_str(), nullptr, isCurrent)) {
+                    workspaceManager_.switchWorkspace(ws);
+                }
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Save")) {
+                workspaceManager_.saveCurrentWorkspace();
+            }
+            if (ImGui::MenuItem("Save As...")) {
+                snprintf(saveAsNameBuffer_, sizeof(saveAsNameBuffer_), "%s",
+                         workspaceManager_.currentWorkspaceName().c_str());
+                showSaveAsDialog_ = true;
+            }
+            if (ImGui::MenuItem("Delete")) {
+                showDeleteConfirm_ = true;
+            }
+            if (ImGui::MenuItem("Reset")) {
+                workspaceManager_.resetWorkspace();
+            }
+            ImGui::EndMenu();
+        }
+
+        ImGui::SameLine();
+        renderControls(backend);
+    }
+    ImGui::End();
+}
+
+// ---------------------------------------------------------------------------
 // Controls — Run / Pause / Step
 // ---------------------------------------------------------------------------
 
@@ -563,7 +681,7 @@ void DebuggerGui::renderControls(IDebugBackend &backend)
     if (paused) {
         if (ImGui::Button("Step")) {
             backend.requestStep();
-            // Refresh memory inspector and stack view after step
+            // Refresh all windows after step
             memoryInspector_.requestRefresh();
             stackView_.requestRefresh();
             disassemblyView_.requestRefresh();
@@ -583,7 +701,7 @@ void DebuggerGui::renderControls(IDebugBackend &backend)
     if (state == DebuggerState::Running) {
         if (ImGui::Button("Pause")) {
             backend.requestPause();
-            // Refresh memory inspector and stack view after pause
+            // Refresh all windows after pause
             memoryInspector_.requestRefresh();
             stackView_.requestRefresh();
             disassemblyView_.requestRefresh();
@@ -605,7 +723,7 @@ void DebuggerGui::renderControls(IDebugBackend &backend)
     ImGui::SameLine();
     if (ImGui::Button("Reset")) {
         backend.requestReset();
-        // Refresh memory inspector and stack view after reset
+        // Refresh all windows after reset
         memoryInspector_.requestRefresh();
         stackView_.requestRefresh();
         disassemblyView_.requestRefresh();
@@ -613,160 +731,6 @@ void DebuggerGui::renderControls(IDebugBackend &backend)
         ioInspector_.requestRefresh();
         vectorScreen_.requestRefresh();
         histNeedsRefresh_ = true;
-    }
-    
-    // Memory Inspector toggle
-    ImGui::SameLine();
-    {
-        bool hidden = !memoryInspector_.isVisible();
-        if (hidden) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
-        }
-        if (ImGui::Button("Memory Inspector"))
-            memoryInspector_.setVisible(!memoryInspector_.isVisible());
-        if (hidden) ImGui::PopStyleColor(3);
-    }
-    
-    // Stack View toggle
-    ImGui::SameLine();
-    {
-        bool hidden = !stackView_.isVisible();
-        if (hidden) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
-        }
-        if (ImGui::Button("Stack View"))
-            stackView_.setVisible(!stackView_.isVisible());
-        if (hidden) ImGui::PopStyleColor(3);
-    }
-    
-    // Breakpoints toggle (Stage 3.7)
-    ImGui::SameLine();
-    {
-        bool hidden = !breakpointsWindow_.isVisible();
-        if (hidden) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
-        }
-        if (ImGui::Button("Breakpoints"))
-            breakpointsWindow_.setVisible(!breakpointsWindow_.isVisible());
-        if (hidden) ImGui::PopStyleColor(3);
-    }
-    
-    // Disassembly toggle (Stage 3.8)
-    ImGui::SameLine();
-    {
-        bool hidden = !disassemblyView_.isVisible();
-        if (hidden) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
-        }
-        if (ImGui::Button("Disassembly"))
-            disassemblyView_.setVisible(!disassemblyView_.isVisible());
-        if (hidden) ImGui::PopStyleColor(3);
-    }
-    
-    // Execution Trace toggle (Stage 3.10)
-    ImGui::SameLine();
-    {
-        bool hidden = !executionTrace_.isVisible();
-        if (hidden) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
-        }
-        if (ImGui::Button("Execution Trace"))
-            executionTrace_.setVisible(!executionTrace_.isVisible());
-        if (hidden) ImGui::PopStyleColor(3);
-    }
-    
-    // I/O Inspector toggle (Stage 3.11)
-    ImGui::SameLine();
-    {
-        bool hidden = !ioInspector_.isVisible();
-        if (hidden) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
-        }
-        if (ImGui::Button("I/O Inspector"))
-            ioInspector_.setVisible(!ioInspector_.isVisible());
-        if (hidden) ImGui::PopStyleColor(3);
-    }
-    
-    // Vector Screen toggle (Stage 4.3)
-    ImGui::SameLine();
-    {
-        bool hidden = !vectorScreen_.isVisible();
-        if (hidden) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
-        }
-        if (ImGui::Button("Vector Screen"))
-            vectorScreen_.setVisible(!vectorScreen_.isVisible());
-        if (hidden) ImGui::PopStyleColor(3);
-    }
-    
-    // Memory Map toggle (Stage 4.4)
-    ImGui::SameLine();
-    {
-        bool hidden = !memoryMap_.isVisible();
-        if (hidden) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
-        }
-        if (ImGui::Button("Memory Map"))
-            memoryMap_.setVisible(!memoryMap_.isVisible());
-        if (hidden) ImGui::PopStyleColor(3);
-    }
-    
-    // Functions toggle (Stage 4.5)
-    ImGui::SameLine();
-    {
-        bool hidden = !functionsWindow_.isVisible();
-        if (hidden) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
-        }
-        if (ImGui::Button("Functions"))
-            functionsWindow_.setVisible(!functionsWindow_.isVisible());
-        if (hidden) ImGui::PopStyleColor(3);
-    }
-    
-    // Call Graph toggle (Stage 4.7)
-    ImGui::SameLine();
-    {
-        bool hidden = !callGraphWindow_.isVisible();
-        if (hidden) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
-        }
-        if (ImGui::Button("Call Graph"))
-            callGraphWindow_.setVisible(!callGraphWindow_.isVisible());
-        if (hidden) ImGui::PopStyleColor(3);
-    }
-    
-    // Search toggle (Stage 4.8)
-    ImGui::SameLine();
-    {
-        bool hidden = !searchWindow_.isVisible();
-        if (hidden) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
-        }
-        if (ImGui::Button("Search"))
-            searchWindow_.setVisible(!searchWindow_.isVisible());
-        if (hidden) ImGui::PopStyleColor(3);
     }
 }
 

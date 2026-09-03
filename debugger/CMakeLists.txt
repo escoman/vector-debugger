@@ -141,6 +141,30 @@ target_link_libraries(test_board_smoke
 )
 
 # ---------------------------------------------------------------------------
+# Workspace Manager test executable (Stage 5.1)
+# ---------------------------------------------------------------------------
+
+add_executable(test_workspace
+    ${DBG_TST_DIR}/test_workspace.cpp
+    ${DBG_GUI_DIR}/workspace_manager.cpp
+    ${IMGUI_DIR}/imgui.cpp
+    ${IMGUI_DIR}/imgui_draw.cpp
+    ${IMGUI_DIR}/imgui_tables.cpp
+    ${IMGUI_DIR}/imgui_widgets.cpp
+    ${IMGUI_DIR}/imgui_demo.cpp
+)
+
+target_include_directories(test_workspace PRIVATE
+    ${IMGUI_DIR}
+    ${IMGUI_DIR}/backends
+    ${DBG_GUI_DIR}
+)
+
+target_link_libraries(test_workspace
+    ${Boost_LIBRARIES}
+)
+
+# ---------------------------------------------------------------------------
 # Dear ImGui sources
 # ---------------------------------------------------------------------------
 
@@ -219,6 +243,7 @@ include_directories(${DBG_GUI_DIR})
 set(GUI_SOURCES
     ${DBG_GUI_DIR}/main.cpp
     ${DBG_GUI_DIR}/gui.cpp
+    ${DBG_GUI_DIR}/workspace_manager.cpp
     ${DBG_GUI_DIR}/memory_inspector_window.cpp
     ${DBG_GUI_DIR}/stack_view_window.cpp
     ${DBG_GUI_DIR}/breakpoints_window.cpp

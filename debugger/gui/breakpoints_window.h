@@ -25,6 +25,7 @@ public:
     // Check if window is visible
     bool isVisible() const { return visible_; }
     void setVisible(bool v) { visible_ = v; }
+    bool &getVisibleRef() { return visible_; }
     
     // Callbacks for cross-navigation (Stage 3.9)
     std::function<void(uint16_t address)> onGoToDisassembly;

@@ -32,6 +32,7 @@ public:
     // Check if window is visible
     bool isVisible() const { return visible_; }
     void setVisible(bool v) { visible_ = v; }
+    bool &getVisibleRef() { return visible_; }
 
     // Navigation callbacks (Stage 3.9 pattern)
     std::function<void(uint16_t address)> onGoToDisassembly;

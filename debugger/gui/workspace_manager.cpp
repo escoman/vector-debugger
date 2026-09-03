@@ -1,0 +1,659 @@
+#include "workspace_manager.h"
+
+#include "imgui.h"
+#include "imgui_internal.h"
+
+#include <fstream>
+#include <sstream>
+#include <algorithm>
+#include <cstdio>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <dirent.h>
+#include <unistd.h>
+
+// ---------------------------------------------------------------------------
+// Static data
+// ---------------------------------------------------------------------------
+
+const std::vector<std::string> WorkspaceManager::builtInNames_ = {
+    "Default",
+    "Screen Analysis",
+    "CPU Analysis",
+    "I/O Analysis",
+    "Memory Analysis"
+};
+
+const std::map<std::string, WorkspaceManager::LayoutBuilder> WorkspaceManager::presets_ = {
+    {"Default",          buildDefaultLayout},
+    {"Screen Analysis",  buildScreenAnalysisLayout},
+    {"CPU Analysis",     buildCpuAnalysisLayout},
+    {"I/O Analysis",     buildIoAnalysisLayout},
+    {"Memory Analysis",  buildMemoryAnalysisLayout},
+};
+
+// ---------------------------------------------------------------------------
+// Lifecycle
+// ---------------------------------------------------------------------------
+
+void WorkspaceManager::initialize(const std::string &workspacesDir)
+{
+    workspacesDir_ = workspacesDir;
+    ensureDirectory();
+
+    // Read last used workspace name (don't generate files yet — visibility
+    // refs haven't been registered; that happens in setWindowVisibilityRefs)
+    std::string currentFile = workspacesDir_ + "/current.txt";
+    std::ifstream cf(currentFile);
+    if (cf.good()) {
+        std::string lastName;
+        std::getline(cf, lastName);
+        if (!lastName.empty()) {
+            std::string path = workspaceFilePath(lastName);
+            struct stat st;
+            if (stat(path.c_str(), &st) == 0) {
+                currentName_ = lastName;
+            }
+        }
+    }
+}
+
+void WorkspaceManager::shutdown()
+{
+    if (dirty_) {
+        saveCurrentWorkspace();
+    }
+
+    // Remember last used workspace
+    std::string currentFile = workspacesDir_ + "/current.txt";
+    std::ofstream cf(currentFile);
+    if (cf.good()) {
+        cf << currentName_;
+    }
+}
+
+void WorkspaceManager::setWindowVisibilityRefs(std::vector<WindowVisibility> refs)
+{
+    visibilityRefs_.clear();
+    for (auto &r : refs) {
+        if (r.visiblePtr) {
+            visibilityRefs_[r.name] = r.visiblePtr;
+        }
+    }
+
+    // Now that visibility refs are set, generate built-in preset files
+    for (const auto &name : builtInNames_) {
+        writeBuiltinIfMissing(name);
+    }
+
+    // Load the current workspace (last used, or Default)
+    if (!loadFromFile(currentName_)) {
+        if (currentName_ != "Default") {
+            currentName_ = "Default";
+            loadFromFile("Default");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Workspace operations
+// ---------------------------------------------------------------------------
+
+void WorkspaceManager::switchWorkspace(const std::string &name)
+{
+    if (name == currentName_) return;
+
+    // Save current if dirty
+    if (dirty_) {
+        saveCurrentWorkspace();
+    }
+
+    // Load target
+    if (loadFromFile(name)) {
+        currentName_ = name;
+        dirty_ = false;
+    } else {
+        // Fallback to Default
+        if (name != "Default") {
+            switchWorkspace("Default");
+        }
+    }
+}
+
+void WorkspaceManager::saveCurrentWorkspace()
+{
+    saveToFile(currentName_);
+    dirty_ = false;
+}
+
+void WorkspaceManager::saveWorkspaceAs(const std::string &name)
+{
+    std::string safe = sanitizeFilename(name);
+    if (safe.empty()) return;
+
+    saveToFile(safe);
+    currentName_ = safe;
+    dirty_ = false;
+}
+
+void WorkspaceManager::deleteWorkspace(const std::string &name)
+{
+    if (isBuiltIn(name)) return;
+
+    std::string path = workspaceFilePath(name);
+    unlink(path.c_str());
+
+    // If deleted workspace was active, switch to Default
+    if (currentName_ == name) {
+        currentName_ = "Default";
+        loadFromFile("Default");
+        dirty_ = false;
+    }
+}
+
+void WorkspaceManager::resetWorkspace()
+{
+    auto it = presets_.find(currentName_);
+    if (it != presets_.end()) {
+        // Regenerate from preset
+        writeBuiltinIfMissing(currentName_);
+        loadFromFile(currentName_);
+    } else {
+        // User workspace — reset to Default layout
+        writeBuiltinIfMissing("Default");
+        loadFromFile("Default");
+    }
+    dirty_ = false;
+}
+
+// ---------------------------------------------------------------------------
+// Autosave (debounced)
+// ---------------------------------------------------------------------------
+
+void WorkspaceManager::autosave()
+{
+    if (!dirty_) return;
+
+    double now = ImGui::GetTime();
+    if (lastDirtyTime_ == 0.0) {
+        lastDirtyTime_ = now;
+        return;
+    }
+
+    if (now - lastDirtyTime_ >= kAutosaveDelay) {
+        saveCurrentWorkspace();
+        lastDirtyTime_ = 0.0;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Queries
+// ---------------------------------------------------------------------------
+
+const std::string &WorkspaceManager::currentWorkspaceName() const
+{
+    return currentName_;
+}
+
+std::vector<std::string> WorkspaceManager::listWorkspaces() const
+{
+    std::vector<std::string> result;
+    DIR *dir = opendir(workspacesDir_.c_str());
+    if (!dir) return result;
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != nullptr) {
+        std::string name = entry->d_name;
+        if (name.size() > 4 && name.substr(name.size() - 4) == ".ini") {
+            result.push_back(name.substr(0, name.size() - 4));
+        }
+    }
+    closedir(dir);
+
+    std::sort(result.begin(), result.end());
+    return result;
+}
+
+bool WorkspaceManager::isBuiltIn(const std::string &name) const
+{
+    for (const auto &bn : builtInNames_) {
+        if (bn == name) return true;
+    }
+    return false;
+}
+
+bool WorkspaceManager::isDirty() const
+{
+    return dirty_;
+}
+
+void WorkspaceManager::markDirty()
+{
+    if (!dirty_) {
+        dirty_ = true;
+        lastDirtyTime_ = 0.0;  // reset debounce timer
+    }
+}
+
+// ---------------------------------------------------------------------------
+// File I/O
+// ---------------------------------------------------------------------------
+
+std::string WorkspaceManager::workspaceFilePath(const std::string &name) const
+{
+    return workspacesDir_ + "/" + sanitizeFilename(name) + ".ini";
+}
+
+bool WorkspaceManager::saveToFile(const std::string &name)
+{
+    ensureDirectory();
+
+    std::string path = workspaceFilePath(name);
+    std::ofstream file(path);
+    if (!file.good()) return false;
+
+    // Save ImGui layout
+    const char *ini = ImGui::SaveIniSettingsToMemory();
+    std::string iniStr = ini ? ini : "";
+
+    // Write ImGui section
+    file << "[ImGui]\n";
+    file << iniStr;
+    if (!iniStr.empty() && iniStr.back() != '\n') {
+        file << "\n";
+    }
+
+    // Write visibility section
+    file << "\n[Visibility]\n";
+    file << serializeVisibility();
+
+    return true;
+}
+
+bool WorkspaceManager::loadFromFile(const std::string &name)
+{
+    std::string path = workspaceFilePath(name);
+    std::ifstream file(path);
+    if (!file.good()) return false;
+
+    // Read entire file
+    std::string content((std::istreambuf_iterator<char>(file)),
+                         std::istreambuf_iterator<char>());
+
+    // Parse sections
+    std::string iniContent;
+    std::string visContent;
+
+    size_t imguiStart = content.find("[ImGui]");
+    size_t visStart = content.find("[Visibility]");
+
+    if (imguiStart != std::string::npos) {
+        size_t dataStart = content.find('\n', imguiStart);
+        if (dataStart == std::string::npos) dataStart = content.size();
+        else dataStart++;
+
+        size_t dataEnd = (visStart != std::string::npos) ? visStart : content.size();
+        iniContent = content.substr(dataStart, dataEnd - dataStart);
+
+        // Trim trailing whitespace
+        while (!iniContent.empty() &&
+               (iniContent.back() == '\n' || iniContent.back() == '\r' ||
+                iniContent.back() == ' ')) {
+            iniContent.pop_back();
+        }
+    }
+
+    if (visStart != std::string::npos) {
+        size_t dataStart = content.find('\n', visStart);
+        if (dataStart == std::string::npos) dataStart = content.size();
+        else dataStart++;
+        visContent = content.substr(dataStart);
+    }
+
+    // Apply ImGui layout
+    if (!iniContent.empty()) {
+        ImGui::LoadIniSettingsFromMemory(iniContent.c_str(), iniContent.size());
+        lastLoadedIni_ = iniContent;
+    }
+
+    // Apply visibility
+    if (!visContent.empty()) {
+        deserializeVisibility(visContent);
+    }
+
+    return true;
+}
+
+void WorkspaceManager::writeBuiltinIfMissing(const std::string &name)
+{
+    std::string path = workspaceFilePath(name);
+    struct stat st;
+    if (stat(path.c_str(), &st) == 0) return;  // already exists
+
+    auto it = presets_.find(name);
+    if (it == presets_.end()) return;
+
+    // Generate preset layout using a temporary ImGui context
+    ImGuiContext *tempCtx = ImGui::CreateContext();
+    ImGuiIO &io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    io.DisplaySize = ImVec2(1920, 1080);
+
+    // Build font atlas (required before NewFrame in v1.93+)
+    io.Fonts->GetTexDataAsRGBA32(nullptr, nullptr, nullptr, nullptr);
+
+    // Use explicit IDs (auto-ID requires a window context)
+    ImGuiID nodeId = 0x10000001;
+
+    // DockBuilderAddNode without DockSpace flag — the flag is set internally
+    // when needed. Using DockSpace flag here would call DockSpace() which
+    // requires a current window context.
+    ImGuiID dockspaceId = ImGui::DockBuilderAddNode(nodeId,
+        ImGuiDockNodeFlags_PassthruCentralNode);
+    ImGui::DockBuilderSetNodePos(dockspaceId, ImVec2(0, 0));
+    ImGui::DockBuilderSetNodeSize(dockspaceId, ImVec2(1920, 1080));
+
+    it->second(dockspaceId);
+    ImGui::DockBuilderFinish(dockspaceId);
+
+    // Process one frame to finalize dock tree and generate ini settings.
+    // LoadIniSettingsFromMemory("") marks settings as loaded, preventing
+    // the assertion in UpdateSettings() that expects SettingsWindows empty.
+    ImGui::LoadIniSettingsFromMemory("");
+    ImGui::NewFrame();
+    ImGui::EndFrame();
+    ImGui::Render();
+
+    const char *ini = ImGui::SaveIniSettingsToMemory();
+
+    ensureDirectory();
+    std::ofstream file(path);
+    if (file.good()) {
+        std::string iniStr = ini ? ini : "";
+        file << "[ImGui]\n";
+        file << iniStr;
+        if (!iniStr.empty() && iniStr.back() != '\n') file << "\n";
+        file << "\n[Visibility]\n";
+        // Don't write visibility for auto-generated presets — the caller's
+        // visibility refs should take precedence over default values.
+    }
+
+    ImGui::DestroyContext(tempCtx);
+}
+
+// ---------------------------------------------------------------------------
+// Visibility serialization
+// ---------------------------------------------------------------------------
+
+std::string WorkspaceManager::serializeVisibility() const
+{
+    std::string result;
+    for (const auto &pair : visibilityRefs_) {
+        result += pair.first + "=" + (pair.second ? std::to_string(*pair.second) : "0") + "\n";
+    }
+    return result;
+}
+
+void WorkspaceManager::deserializeVisibility(const std::string &section)
+{
+    std::istringstream ss(section);
+    std::string line;
+    while (std::getline(ss, line)) {
+        // Trim
+        while (!line.empty() && (line.back() == '\n' || line.back() == '\r' ||
+                                  line.back() == ' ')) {
+            line.pop_back();
+        }
+        if (line.empty()) continue;
+
+        size_t eq = line.find('=');
+        if (eq == std::string::npos) continue;
+
+        std::string name = line.substr(0, eq);
+        std::string val = line.substr(eq + 1);
+
+        auto it = visibilityRefs_.find(name);
+        if (it != visibilityRefs_.end() && it->second) {
+            *it->second = (val == "1");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+std::string WorkspaceManager::sanitizeFilename(const std::string &name)
+{
+    std::string result = name;
+
+    // Remove path components
+    size_t lastSlash = result.find_last_of("/\\");
+    if (lastSlash != std::string::npos) {
+        result = result.substr(lastSlash + 1);
+    }
+
+    // Replace invalid characters with underscore
+    for (char &c : result) {
+        if (c == '/' || c == '\\' || c == ':' || c == '*' ||
+            c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
+            c = '_';
+        }
+    }
+
+    // Trim whitespace
+    while (!result.empty() && result.front() == ' ') result.erase(result.begin());
+    while (!result.empty() && result.back() == ' ') result.pop_back();
+
+    return result;
+}
+
+void WorkspaceManager::ensureDirectory() const
+{
+    mkdir(workspacesDir_.c_str(), 0755);
+}
+
+void WorkspaceManager::saveCurrentVisibility()
+{
+    savedVisibility_.clear();
+    for (const auto &pair : visibilityRefs_) {
+        savedVisibility_[pair.first] = pair.second ? *pair.second : false;
+    }
+}
+
+void WorkspaceManager::restoreVisibility()
+{
+    for (const auto &pair : savedVisibility_) {
+        auto it = visibilityRefs_.find(pair.first);
+        if (it != visibilityRefs_.end() && it->second) {
+            *it->second = pair.second;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Preset layout builders
+// ---------------------------------------------------------------------------
+
+void WorkspaceManager::buildDefaultLayout(unsigned int dockspaceId)
+{
+    // 3-column: Left (CPU/Stack) | Center (Disasm/Trace) | Right (Memory/History)
+    ImGuiID left, centerRight;
+    ImGui::DockBuilderSplitNode(dockspaceId, ImGuiDir_Left, 0.18f, &left, &centerRight);
+
+    ImGuiID center, right;
+    ImGui::DockBuilderSplitNode(centerRight, ImGuiDir_Right, 0.30f, &right, &center);
+
+    ImGuiID leftTop, leftBottom;
+    ImGui::DockBuilderSplitNode(left, ImGuiDir_Up, 0.55f, &leftTop, &leftBottom);
+
+    ImGuiID centerTop, centerBottom;
+    ImGui::DockBuilderSplitNode(center, ImGuiDir_Up, 0.65f, &centerTop, &centerBottom);
+
+    ImGuiID rightTop, rightBottom;
+    ImGui::DockBuilderSplitNode(right, ImGuiDir_Up, 0.55f, &rightTop, &rightBottom);
+
+    ImGui::DockBuilderDockWindow("CPU Registers", leftTop);
+    ImGui::DockBuilderDockWindow("Stack View", leftBottom);
+    ImGui::DockBuilderDockWindow("Disassembly", centerTop);
+    ImGui::DockBuilderDockWindow("Execution Trace", centerBottom);
+    ImGui::DockBuilderDockWindow("Memory Inspector", rightTop);
+    ImGui::DockBuilderDockWindow("Instruction History", rightBottom);
+    ImGui::DockBuilderDockWindow("Vector Screen", rightBottom);
+    ImGui::DockBuilderDockWindow("Breakpoints", centerBottom);
+    ImGui::DockBuilderDockWindow("Memory Map", rightTop);
+    ImGui::DockBuilderDockWindow("I/O & Hardware Inspector", leftBottom);
+    ImGui::DockBuilderDockWindow("Functions", centerTop);
+    ImGui::DockBuilderDockWindow("Cross References", centerTop);
+    ImGui::DockBuilderDockWindow("Call Graph", centerTop);
+    ImGui::DockBuilderDockWindow("Search", rightTop);
+}
+
+void WorkspaceManager::buildScreenAnalysisLayout(unsigned int dockspaceId)
+{
+    // Large Vector Screen center, Memory right, Disasm+Trace left
+    ImGuiID left, centerRight;
+    ImGui::DockBuilderSplitNode(dockspaceId, ImGuiDir_Left, 0.25f, &left, &centerRight);
+
+    ImGuiID center, right;
+    ImGui::DockBuilderSplitNode(centerRight, ImGuiDir_Right, 0.30f, &right, &center);
+
+    ImGuiID leftTop, leftBottom;
+    ImGui::DockBuilderSplitNode(left, ImGuiDir_Up, 0.50f, &leftTop, &leftBottom);
+
+    ImGuiID rightTop, rightBottom;
+    ImGui::DockBuilderSplitNode(right, ImGuiDir_Up, 0.50f, &rightTop, &rightBottom);
+
+    // Left: Disassembly + Execution Trace
+    ImGui::DockBuilderDockWindow("Disassembly", leftTop);
+    ImGui::DockBuilderDockWindow("Execution Trace", leftBottom);
+    ImGui::DockBuilderDockWindow("Functions", leftTop);
+
+    // Center: Vector Screen (large)
+    ImGui::DockBuilderDockWindow("Vector Screen", center);
+
+    // Right: Memory Inspector + Memory Map
+    ImGui::DockBuilderDockWindow("Memory Inspector", rightTop);
+    ImGui::DockBuilderDockWindow("Memory Map", rightTop);
+    ImGui::DockBuilderDockWindow("Search", rightTop);
+
+    // Bottom extras
+    ImGui::DockBuilderDockWindow("CPU Registers", leftTop);
+    ImGui::DockBuilderDockWindow("Stack View", leftBottom);
+    ImGui::DockBuilderDockWindow("Breakpoints", leftBottom);
+    ImGui::DockBuilderDockWindow("I/O & Hardware Inspector", leftBottom);
+    ImGui::DockBuilderDockWindow("Instruction History", leftBottom);
+    ImGui::DockBuilderDockWindow("Cross References", leftTop);
+    ImGui::DockBuilderDockWindow("Call Graph", leftTop);
+}
+
+void WorkspaceManager::buildCpuAnalysisLayout(unsigned int dockspaceId)
+{
+    // Large Disassembly center, CPU+Stack left, Trace+Breakpoints right
+    ImGuiID left, centerRight;
+    ImGui::DockBuilderSplitNode(dockspaceId, ImGuiDir_Left, 0.20f, &left, &centerRight);
+
+    ImGuiID center, right;
+    ImGui::DockBuilderSplitNode(centerRight, ImGuiDir_Right, 0.30f, &right, &center);
+
+    ImGuiID leftTop, leftBottom;
+    ImGui::DockBuilderSplitNode(left, ImGuiDir_Up, 0.45f, &leftTop, &leftBottom);
+
+    ImGuiID rightTop, rightBottom;
+    ImGui::DockBuilderSplitNode(right, ImGuiDir_Up, 0.50f, &rightTop, &rightBottom);
+
+    // Left: CPU Registers + Stack
+    ImGui::DockBuilderDockWindow("CPU Registers", leftTop);
+    ImGui::DockBuilderDockWindow("Stack View", leftBottom);
+    ImGui::DockBuilderDockWindow("Functions", leftTop);
+
+    // Center: Disassembly (large)
+    ImGui::DockBuilderDockWindow("Disassembly", center);
+    ImGui::DockBuilderDockWindow("Cross References", center);
+    ImGui::DockBuilderDockWindow("Call Graph", center);
+
+    // Right: Execution Trace + Breakpoints
+    ImGui::DockBuilderDockWindow("Execution Trace", rightTop);
+    ImGui::DockBuilderDockWindow("Breakpoints", rightBottom);
+    ImGui::DockBuilderDockWindow("Instruction History", rightTop);
+
+    // Remaining
+    ImGui::DockBuilderDockWindow("Memory Inspector", rightBottom);
+    ImGui::DockBuilderDockWindow("Memory Map", rightBottom);
+    ImGui::DockBuilderDockWindow("Vector Screen", rightBottom);
+    ImGui::DockBuilderDockWindow("I/O & Hardware Inspector", leftBottom);
+    ImGui::DockBuilderDockWindow("Search", rightBottom);
+}
+
+void WorkspaceManager::buildIoAnalysisLayout(unsigned int dockspaceId)
+{
+    // Large I/O Inspector center-left, CPU+Disasm right, Trace+Screen bottom
+    ImGuiID top, bottom;
+    ImGui::DockBuilderSplitNode(dockspaceId, ImGuiDir_Down, 0.30f, &bottom, &top);
+
+    ImGuiID topLeft, topRight;
+    ImGui::DockBuilderSplitNode(top, ImGuiDir_Right, 0.40f, &topRight, &topLeft);
+
+    ImGuiID bottomLeft, bottomRight;
+    ImGui::DockBuilderSplitNode(bottom, ImGuiDir_Right, 0.50f, &bottomRight, &bottomLeft);
+
+    // Top-left: I/O & Hardware Inspector (large)
+    ImGui::DockBuilderDockWindow("I/O & Hardware Inspector", topLeft);
+
+    // Top-right: CPU Registers + Disassembly
+    ImGui::DockBuilderDockWindow("CPU Registers", topRight);
+    ImGui::DockBuilderDockWindow("Disassembly", topRight);
+    ImGui::DockBuilderDockWindow("Functions", topRight);
+
+    // Bottom-left: Execution Trace + Vector Screen
+    ImGui::DockBuilderDockWindow("Execution Trace", bottomLeft);
+    ImGui::DockBuilderDockWindow("Vector Screen", bottomLeft);
+
+    // Bottom-right: Stack + Memory + Breakpoints
+    ImGui::DockBuilderDockWindow("Stack View", bottomRight);
+    ImGui::DockBuilderDockWindow("Memory Inspector", bottomRight);
+    ImGui::DockBuilderDockWindow("Memory Map", bottomRight);
+    ImGui::DockBuilderDockWindow("Breakpoints", bottomRight);
+    ImGui::DockBuilderDockWindow("Instruction History", bottomLeft);
+    ImGui::DockBuilderDockWindow("Cross References", topRight);
+    ImGui::DockBuilderDockWindow("Call Graph", topRight);
+    ImGui::DockBuilderDockWindow("Search", bottomRight);
+}
+
+void WorkspaceManager::buildMemoryAnalysisLayout(unsigned int dockspaceId)
+{
+    // Large Memory Map center, Memory+Stack left, Disasm+CPU right
+    ImGuiID left, centerRight;
+    ImGui::DockBuilderSplitNode(dockspaceId, ImGuiDir_Left, 0.25f, &left, &centerRight);
+
+    ImGuiID center, right;
+    ImGui::DockBuilderSplitNode(centerRight, ImGuiDir_Right, 0.35f, &right, &center);
+
+    ImGuiID leftTop, leftBottom;
+    ImGui::DockBuilderSplitNode(left, ImGuiDir_Up, 0.55f, &leftTop, &leftBottom);
+
+    ImGuiID rightTop, rightBottom;
+    ImGui::DockBuilderSplitNode(right, ImGuiDir_Up, 0.50f, &rightTop, &rightBottom);
+
+    // Left: Memory Inspector + Stack
+    ImGui::DockBuilderDockWindow("Memory Inspector", leftTop);
+    ImGui::DockBuilderDockWindow("Stack View", leftBottom);
+    ImGui::DockBuilderDockWindow("Search", leftTop);
+
+    // Center: Memory Map (large)
+    ImGui::DockBuilderDockWindow("Memory Map", center);
+    ImGui::DockBuilderDockWindow("Vector Screen", center);
+
+    // Right: Disassembly + CPU Registers
+    ImGui::DockBuilderDockWindow("Disassembly", rightTop);
+    ImGui::DockBuilderDockWindow("CPU Registers", rightBottom);
+    ImGui::DockBuilderDockWindow("Functions", rightTop);
+
+    // Extras
+    ImGui::DockBuilderDockWindow("Execution Trace", rightBottom);
+    ImGui::DockBuilderDockWindow("Breakpoints", rightBottom);
+    ImGui::DockBuilderDockWindow("I/O & Hardware Inspector", leftBottom);
+    ImGui::DockBuilderDockWindow("Instruction History", leftBottom);
+    ImGui::DockBuilderDockWindow("Cross References", rightTop);
+    ImGui::DockBuilderDockWindow("Call Graph", rightTop);
+}

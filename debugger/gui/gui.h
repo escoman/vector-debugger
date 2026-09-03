@@ -13,6 +13,7 @@
 #include "xrefs_window.h"
 #include "call_graph_window.h"
 #include "search_window.h"
+#include "workspace_manager.h"
 #include "idebug_backend.h"
 #include "events.h"
 
@@ -65,6 +66,7 @@ private:
     bool          quit_       = false;
 
     // Panel renderers
+    void renderToolbar(IDebugBackend &backend);
     void renderCpuPanel(IDebugBackend &backend);
     void renderCurrentInstruction(uint16_t pc, IDebugBackend &backend);
     void renderInstructionHistory(IDebugBackend &backend);
@@ -122,4 +124,14 @@ private:
     IDebugBackend::RegisterId editingRegId_ = IDebugBackend::RegisterId::AF;
     char editRegBuffer_[8] = "";
     bool writeRegFailed_ = false;
+
+    // Dockable panel visibility (Stage 5.0)
+    bool showCpuRegisters_      = true;
+    bool showInstructionHistory_ = true;
+
+    // Workspace Manager (Stage 5.1)
+    WorkspaceManager workspaceManager_;
+    bool showSaveAsDialog_ = false;
+    char saveAsNameBuffer_[256] = "";
+    bool showDeleteConfirm_ = false;
 };

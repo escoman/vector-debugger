@@ -31,6 +31,7 @@ public:
     // Check if window is visible
     bool isVisible() const { return visible_; }
     void setVisible(bool v) { visible_ = v; }
+    bool &getVisibleRef() { return visible_; }
     
     // Navigate to specific address (Stage 3.9 — real scrolling)
     void gotoAddress(uint16_t address) {

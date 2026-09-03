@@ -43,6 +43,7 @@ public:
     // Check if window is visible
     bool isVisible() const { return visible_; }
     void setVisible(bool v) { visible_ = v; }
+    bool &getVisibleRef() { return visible_; }
     
     // Callback: called when user wants to navigate to Memory Inspector
     // Parameter: address to navigate to

@@ -24,6 +24,7 @@ public:
 
     void setVisible(bool v) { visible_ = v; }
     bool isVisible() const { return visible_; }
+    bool &getVisibleRef() { return visible_; }
     void requestRefresh() { needsRefresh_ = true; }
 
     // Set the target address to show xrefs for

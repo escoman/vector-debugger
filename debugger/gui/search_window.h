@@ -23,6 +23,7 @@ public:
 
     void setVisible(bool v) { visible_ = v; }
     bool isVisible() const { return visible_; }
+    bool &getVisibleRef() { return visible_; }
 
     // Navigation callbacks
     std::function<void(uint16_t address)> onGoToDisassembly;
