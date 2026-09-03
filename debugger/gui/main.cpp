@@ -103,6 +103,10 @@ int main(int argc, char *argv[])
 {
     printf("Vector-06C Debugger — starting up\n");
     
+    // Configure for debugger mode: OpenGL mode allocates direct pixel buffer
+    // that we can read via screenSnapshot() for the Vector Screen window.
+    Options.opengl = true;
+    
     // --- Create full emulator (Board + all dependencies) ---
     BoardWrapper wrapper;
     wrapper.init();   // calls i8080_hal_bind() → sets g_memory, g_io, g_board

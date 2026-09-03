@@ -498,6 +498,9 @@ void VectorScreenWindow::renderScreen(DebugBackend &backend)
     float totalH = static_cast<float>(visH * zoom);
 
     ImVec2 avail = ImGui::GetContentRegionAvail();
+    // Reserve space for status bar at the bottom
+    float statusBarHeight = ImGui::GetTextLineHeightWithSpacing() + 6;
+    avail.y -= statusBarHeight;
 
     ImVec2 imageSize;
     if (fitToWindow_) {
@@ -688,11 +691,14 @@ void VectorScreenWindow::render(DebugBackend &backend)
     // Render screen area
     renderScreen(backend);
 
-    // Coordinate info
-    renderCoordinateInfo(backend);
-
     // Context menu
     renderContextMenu(backend);
+
+    // Status bar at the bottom — reserve space and draw separator
+    float statusBarHeight = ImGui::GetTextLineHeightWithSpacing() + 4;
+    ImGui::SetCursorPosY(ImGui::GetWindowHeight() - statusBarHeight);
+    ImGui::Separator();
+    renderCoordinateInfo(backend);
 
     ImGui::End();
 }
