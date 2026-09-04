@@ -75,6 +75,26 @@ struct PaletteSnapshot
 };
 
 // ---------------------------------------------------------------------------
+// Sound snapshot (AY-3-8912 state)
+// ---------------------------------------------------------------------------
+
+struct SoundSnapshot
+{
+    // AY registers (0-15)
+    uint8_t registers[16] = {};
+
+    // Mixer state (register 7)
+    bool toneAEnabled = false;
+    bool toneBEnabled = false;
+    bool toneCEnabled = false;
+    bool noiseAEnabled = false;
+    bool noiseBEnabled = false;
+    bool noiseCEnabled = false;
+
+    bool available = false;
+};
+
+// ---------------------------------------------------------------------------
 // Debugger state machine
 // ---------------------------------------------------------------------------
 

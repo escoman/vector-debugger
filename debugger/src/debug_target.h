@@ -67,6 +67,11 @@ public:
 
     virtual PaletteSnapshot paletteSnapshot() const { return {}; }
 
+    // -- Sound --------------------------------------------------------------
+
+    virtual SoundSnapshot soundSnapshot() const { return {}; }
+    virtual void setMuted(bool muted) { (void)muted; }
+
     // -- Keyboard injection -------------------------------------------------
 
     virtual void pressKey(int scancode) {}

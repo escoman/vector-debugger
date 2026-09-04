@@ -126,6 +126,11 @@ public:
 
     PaletteSnapshot paletteSnapshot() const override;
 
+    // -- IDebugBackend: sound -----------------------------------------------
+
+    SoundSnapshot soundSnapshot() const override;
+    void setMuted(bool muted) override;
+
     // -- IDebugBackend: activity --------------------------------------------
 
     ActivitySnapshot activitySnapshot() const override;

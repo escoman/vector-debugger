@@ -60,6 +60,8 @@ public:
 
     ScreenData screenSnapshot() override;
     PaletteSnapshot paletteSnapshot() const override;
+    SoundSnapshot soundSnapshot() const override;
+    void setMuted(bool muted) override;
 
     void pressKey(int scancode) override;
     void releaseKey(int scancode) override;

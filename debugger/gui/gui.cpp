@@ -364,6 +364,7 @@ void DebuggerGui::render(IDebugBackend &backend)
     callGraphWindow_.render(backend);
     searchWindow_.render(backend);
     keyboardWindow_.render(backend);
+    soundWindow_.render(backend);
 
     // Register visibility refs on first frame (triggers workspace loading)
     static bool visRegsRegistered = false;
@@ -384,6 +385,7 @@ void DebuggerGui::render(IDebugBackend &backend)
             {"Call Graph", &callGraphWindow_.getVisibleRef()},
             {"Search", &searchWindow_.getVisibleRef()},
             {"Keyboard", &keyboardWindow_.getVisibleRef()},
+            {"Sound", &soundWindow_.getVisibleRef()},
         });
         visRegsRegistered = true;
     }
@@ -684,6 +686,7 @@ void DebuggerGui::renderToolbar(IDebugBackend &backend)
             ImGui::MenuItem("Call Graph", nullptr, &callGraphWindow_.getVisibleRef());
             ImGui::MenuItem("Search", nullptr, &searchWindow_.getVisibleRef());
             ImGui::MenuItem("Keyboard", nullptr, &keyboardWindow_.getVisibleRef());
+            ImGui::MenuItem("Sound", nullptr, &soundWindow_.getVisibleRef());
             ImGui::Separator();
             if (ImGui::MenuItem("Cascade")) {
                 layoutCascade();
@@ -817,6 +820,7 @@ void DebuggerGui::layoutCascade()
         {"Call Graph", &callGraphWindow_.getVisibleRef()},
         {"Search", &searchWindow_.getVisibleRef()},
         {"Keyboard", &keyboardWindow_.getVisibleRef()},
+        {"Sound", &soundWindow_.getVisibleRef()},
     };
 
     ImGuiViewport *vp = ImGui::GetMainViewport();
@@ -853,6 +857,7 @@ void DebuggerGui::applyCascade()
         {"Call Graph", &callGraphWindow_.getVisibleRef()},
         {"Search", &searchWindow_.getVisibleRef()},
         {"Keyboard", &keyboardWindow_.getVisibleRef()},
+        {"Sound", &soundWindow_.getVisibleRef()},
     };
 
     for (auto &w : wins) {

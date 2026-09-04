@@ -15,6 +15,7 @@
 #include "search_window.h"
 #include "keyboard_window.h"
 #include "rom_file_dialog.h"
+#include "sound_window.h"
 #include "workspace_manager.h"
 #include "idebug_backend.h"
 #include "events.h"
@@ -123,6 +124,9 @@ private:
     
     // ROM File Dialog (custom, non-blocking)
     RomFileDialog romFileDialog_;
+    
+    // Sound window
+    SoundWindow soundWindow_;
     
     // Instruction History cache (Stage 3.12 — avoid per-frame snapshot)
     std::vector<InstructionEvent> cachedHistEntries_;

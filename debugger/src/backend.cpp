@@ -741,6 +741,20 @@ PaletteSnapshot DebugBackend::paletteSnapshot() const
 }
 
 // ---------------------------------------------------------------------------
+// Sound snapshot
+// ---------------------------------------------------------------------------
+
+SoundSnapshot DebugBackend::soundSnapshot() const
+{
+    return target_->soundSnapshot();
+}
+
+void DebugBackend::setMuted(bool muted)
+{
+    target_->setMuted(muted);
+}
+
+// ---------------------------------------------------------------------------
 // Stage 4.2: Activity snapshot
 // ---------------------------------------------------------------------------
 

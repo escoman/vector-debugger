@@ -142,6 +142,15 @@ void DebugAdapter::init()
     board.init();
     fdc.init();
 
+    // In the main emulator, onframetimer triggers frame execution via the
+    // event queue. In the debugger, the emulation thread runs independently,
+    // so we set it to a no-op to avoid std::bad_function_call from the
+    // SDL audio callback.
+    board.onframetimer = []() { /* no-op in debugger */ };
+
+    // Unpause SDL audio device to start receiving callbacks
+    soundnik.pause(0);
+
     keyboard.onreset = [this](bool blkvvod) {
         board.reset(blkvvod ?
                 Board::ResetMode::BLKVVOD : Board::ResetMode::BLKSBR);
@@ -349,6 +358,41 @@ PaletteSnapshot DebugAdapter::paletteSnapshot() const
         snap.entries[i].rawByte = raw;
     }
     return snap;
+}
+
+SoundSnapshot DebugAdapter::soundSnapshot() const
+{
+    SoundSnapshot snap;
+    snap.available = true;
+
+    // AY registers are accessed via IO ports 0x14 (data) and 0x15 (address)
+    IO &ioRef = const_cast<IO&>(io);
+
+    // Read all 16 AY registers
+    for (int i = 0; i < 16; ++i) {
+        ioRef.realoutput(0x15, i);   // Select register
+        snap.registers[i] = static_cast<uint8_t>(ioRef.input(0x14));
+    }
+
+    // Parse mixer register (7):
+    //   bits 0-2: tone enable (inverted: 0=enabled, 1=disabled)
+    //   bits 3-5: noise enable (inverted)
+    uint8_t mixer = snap.registers[7];
+    snap.toneAEnabled = !(mixer & 0x01);
+    snap.toneBEnabled = !(mixer & 0x02);
+    snap.toneCEnabled = !(mixer & 0x04);
+    snap.noiseAEnabled = !(mixer & 0x08);
+    snap.noiseBEnabled = !(mixer & 0x10);
+    snap.noiseCEnabled = !(mixer & 0x20);
+
+    return snap;
+}
+
+void DebugAdapter::setMuted(bool muted)
+{
+    // Use soundnik.pause() to mute/unmute audio output
+    // pause(1) = paused (muted), pause(0) = playing
+    soundnik.pause(muted ? 1 : 0);
 }
 
 // ---------------------------------------------------------------------------

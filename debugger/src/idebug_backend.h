@@ -131,6 +131,11 @@ public:
 
     virtual PaletteSnapshot paletteSnapshot() const = 0;
 
+    // -- Sound --------------------------------------------------------------
+
+    virtual SoundSnapshot soundSnapshot() const = 0;
+    virtual void setMuted(bool muted) = 0;
+
     // -- Activity -----------------------------------------------------------
 
     virtual ActivitySnapshot activitySnapshot() const = 0;

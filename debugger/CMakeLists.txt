@@ -299,6 +299,7 @@ set(GUI_SOURCES
     ${DBG_GUI_DIR}/search_window.cpp
     ${DBG_GUI_DIR}/keyboard_window.cpp
     ${DBG_GUI_DIR}/rom_file_dialog.cpp
+    ${DBG_GUI_DIR}/sound_window.cpp
 )
 
 # ---------------------------------------------------------------------------
