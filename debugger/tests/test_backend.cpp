@@ -1800,9 +1800,9 @@ static void test_stack_view_boundaries()
 // These tests verify the core memory write logic (virtual address translation,
 // banking, boundaries). The command protocol (writeMemoryByte -> emulation
 // thread -> processWriteCommand) is tested structurally:
-//   - writeMemoryByte() posts PendingCommand::MemoryWrite and waits
-//   - processOneCommand() / processWriteCommand() execute in emulation thread
-//   - processWriteCommand() checks state_ == Paused before writing
+//   - writeMemoryByte() posts Command::MemoryWrite and waits
+//   - processCommand() / executeCommand() execute in emulation thread
+//   - executeCommand() checks state_ == Paused before writing
 //   - executeWriteMemory() calls Memory::write() with virtual addresses
 // ---------------------------------------------------------------------------
 
@@ -3961,9 +3961,11 @@ static void test_integration_quit_while_running()
     dbg->requestQuit();
     CHECK(dbg->isQuitRequested(), "quit requested");
 
-    // Process the command — should handle Run→Quit without deadlock
-    dbg->processOneCommand();
-    CHECK(dbg->isQuitRequested(), "quit still requested after processOneCommand");
+    // Process a Quit command through the unified path — should handle Run→Quit without deadlock
+    auto quitCmd = std::make_unique<DebugBackend::Command>();
+    quitCmd->type = DebugBackend::CommandType::Quit;
+    dbg->processCommand(quitCmd);
+    CHECK(dbg->isQuitRequested(), "quit still requested after processCommand(Quit)");
 
     teardown(dbg);
     TEST_END();
@@ -4098,7 +4100,7 @@ static void test_s42_screen_snapshot_no_board()
 // Stage 5 — Run/Pause synchronization tests (atomic running_ flag)
 //
 // Tests use runUntilPause() in a separate thread to exercise the real
-// emulation-thread flow: processOneCommand → executeFramesNoBoard → pause.
+// emulation-thread flow: processCommand → executeFramesTarget_ → pause.
 // ---------------------------------------------------------------------------
 
 static void test_run_pause_atomic_flag()

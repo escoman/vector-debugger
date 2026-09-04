@@ -233,6 +233,10 @@ public:
         std::atomic<bool> cancelled{false};
         // Result delivery
         std::promise<CommandResult> promise;
+        // Stage 5.3.3.3: Per-Run pause promise — fulfilled when emulation
+        // transitions to Paused after this specific Run command.
+        // Uses CommandResult so the future can be returned directly from requestRunFuture().
+        std::shared_ptr<std::promise<CommandResult>> pausePromise;
     };
 
     class CommandQueue {
@@ -250,7 +254,10 @@ public:
     // -- emulation thread API (not part of IDebugBackend) --------------------
 
     void runUntilPause();
-    void processOneCommand();
+    // Stage 5.3.3.3: Unified command processing — replaces processOneCommand().
+    // Returns true if the frame loop should continue, false if it should break.
+    bool processCommand(std::unique_ptr<Command> &cmd);
+    void fulfillPausePromises_();
     void waitForCompletion();
     bool isQuitRequested() const;
 
@@ -324,11 +331,11 @@ private:
     std::atomic<bool>       running_{false};
     std::atomic<bool>       breakRequested_{false};
 
-    // Stage 5.3.3.2: Pause promise — fulfilled by Emulation Thread when
-    // state transitions to Paused after Run.  Allows traceFunction() to
-    // wait via future instead of polling isPaused().
-    std::mutex nextPauseMutex_;
-    std::unique_ptr<std::promise<void>> nextPausePromise_;
+    // Stage 5.3.3.3: Pending pause promises from Run commands.
+    // Each Run command contributes one promise; all are fulfilled when
+    // the Emulation Thread transitions to Paused.
+    std::mutex pendingPauseMutex_;
+    std::vector<std::shared_ptr<std::promise<CommandResult>>> pendingPausePromises_;
 
     uint16_t    lastPc_        = 0;
 

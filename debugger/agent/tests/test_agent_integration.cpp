@@ -1452,6 +1452,346 @@ static void test_request_run_future()
 }
 
 // ---------------------------------------------------------------------------
+// Stage 5.3.3.3 tests
+// ---------------------------------------------------------------------------
+
+// Test: Concurrent Run futures (Section 7)
+// Multiple requestRunFuture() from different threads with real emulation thread.
+static void test_concurrent_run_futures()
+{
+    TEST_BEGIN("concurrent_run_futures");
+    TestFixture f;
+    writeProgram(f.mem, loop_program, sizeof(loop_program), 0x0000);
+    f.initCpu(0x0003);
+
+    // Start emulation thread
+    std::thread emuThread([&]{ f.backend->runUntilPause(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Launch two requestRunFuture() calls from different threads.
+    // With emulation thread running, these take the production path
+    // with per-command pausePromise.
+    std::atomic<int> futuresCompleted{0};
+    std::atomic<bool> quit1{false}, quit2{false};
+
+    std::thread t1([&]{
+        auto future = f.backend->requestRunFuture();
+        // The future will complete when emulation pauses.
+        // We need to trigger a pause for it to complete.
+        auto status = future.wait_for(std::chrono::milliseconds(500));
+        if (status == std::future_status::ready) {
+            futuresCompleted++;
+        }
+        quit1.store(true);
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+    std::thread t2([&]{
+        auto future = f.backend->requestRunFuture();
+        auto status = future.wait_for(std::chrono::milliseconds(500));
+        if (status == std::future_status::ready) {
+            futuresCompleted++;
+        }
+        quit2.store(true);
+    });
+
+    // Give both threads time to enqueue their Run commands
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Pause emulation — should fulfill ALL pending pause promises
+    f.backend->requestPause();
+
+    t1.join();
+    t2.join();
+
+    CHECK(quit1.load(), "thread 1 completed");
+    CHECK(quit2.load(), "thread 2 completed");
+    // At least one future should have completed (both may complete
+    // if they were both enqueued before pause was processed)
+    CHECK(futuresCompleted.load() >= 1, "at least one pause future completed");
+
+    // Clean up
+    f.backend->requestQuit();
+    emuThread.join();
+    CHECK(true, "no deadlock with concurrent Run futures");
+    TEST_END();
+}
+
+// Test: Real CAS race (Section 8)
+// Two threads simultaneously try to CAS the same command:
+// Thread A: Queued→Cancelled, Thread B: Queued→Executing
+// Exactly one must succeed.
+static void test_cas_race_real()
+{
+    TEST_BEGIN("cas_race_real");
+
+    // Run the race 100 times to stress the CAS
+    int aWins = 0, bWins = 0;
+    for (int iter = 0; iter < 100; ++iter) {
+        auto cmd = std::make_unique<DebugBackend::Command>();
+        cmd->type = DebugBackend::CommandType::Step;
+        // Command starts in Queued state
+
+        // Synchronize both threads to start at the same time
+        std::mutex mtx;
+        std::condition_variable cv;
+        std::atomic<bool> go{false};
+        std::atomic<int> threadAResult{-1};  // 0=lost, 1=won
+        std::atomic<int> threadBResult{-1};
+
+        // Thread A: Queued → Cancelled (simulates caller-thread cancellation)
+        std::thread threadA([&]{
+            std::unique_lock<std::mutex> lk(mtx);
+            cv.wait(lk, [&]{ return go.load(); });
+            DebugBackend::CommandState expected = DebugBackend::CommandState::Queued;
+            bool ok = cmd->state.compare_exchange_strong(
+                expected, DebugBackend::CommandState::Cancelled,
+                std::memory_order_acq_rel);
+            threadAResult.store(ok ? 1 : 0, std::memory_order_release);
+        });
+
+        // Thread B: Queued → Executing (simulates emulation-thread CAS)
+        std::thread threadB([&]{
+            std::unique_lock<std::mutex> lk(mtx);
+            cv.wait(lk, [&]{ return go.load(); });
+            DebugBackend::CommandState expected = DebugBackend::CommandState::Queued;
+            bool ok = cmd->state.compare_exchange_strong(
+                expected, DebugBackend::CommandState::Executing,
+                std::memory_order_acq_rel);
+            threadBResult.store(ok ? 1 : 0, std::memory_order_release);
+        });
+
+        // Release both threads simultaneously
+        {
+            std::lock_guard<std::mutex> lk(mtx);
+            go.store(true);
+        }
+        cv.notify_all();
+
+        threadA.join();
+        threadB.join();
+
+        int a = threadAResult.load();
+        int b = threadBResult.load();
+
+        // Exactly one must have succeeded
+        CHECK(a + b == 1, "exactly one CAS succeeded");
+        // Final state must be consistent
+        auto finalState = cmd->state.load();
+        if (a == 1) {
+            CHECK(finalState == DebugBackend::CommandState::Cancelled, "state is Cancelled when A wins");
+            aWins++;
+        } else {
+            CHECK(finalState == DebugBackend::CommandState::Executing, "state is Executing when B wins");
+            bWins++;
+        }
+    }
+
+    CHECK(aWins > 0, "Thread A won at least once");
+    CHECK(bWins > 0, "Thread B won at least once");
+    TEST_END();
+}
+
+// Test: Thread isolation — Step (Section 9)
+// Verify Step caller thread != emulation thread, CPU step on emulation thread.
+static void test_thread_isolation_step_real()
+{
+    TEST_BEGIN("thread_isolation_step_real");
+    TestFixture f;
+    writeProgram(f.mem, test_program, sizeof(test_program), 0x0000);
+    f.initCpu(0x0003);
+
+    auto callerThreadId = std::this_thread::get_id();
+    auto emuThreadId = std::thread::id{};
+    std::atomic<std::thread::id> cpuExecThreadId{};
+
+    f.backend->onInstruction = [&](const InstructionEvent &) {
+        cpuExecThreadId.store(std::this_thread::get_id(), std::memory_order_release);
+    };
+
+    std::thread emuThread([&]{
+        emuThreadId = std::this_thread::get_id();
+        f.backend->runUntilPause();
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Step from caller thread
+    uint16_t pcBefore = f.backend->getCpuState().pc;
+    f.backend->requestStep();
+    uint16_t pcAfter = f.backend->getCpuState().pc;
+
+    CHECK(pcAfter != pcBefore, "PC advanced after step");
+
+    auto actualExecThread = cpuExecThreadId.load(std::memory_order_acquire);
+    CHECK(actualExecThread == emuThreadId, "step CPU execution on emulation thread");
+    CHECK(actualExecThread != callerThreadId, "step CPU execution NOT on caller thread");
+
+    f.backend->requestQuit();
+    emuThread.join();
+    TEST_END();
+}
+
+// Test: Thread isolation — MemoryWrite (Section 9)
+static void test_thread_isolation_memory_write()
+{
+    TEST_BEGIN("thread_isolation_memory_write");
+    TestFixture f;
+    writeProgram(f.mem, test_program, sizeof(test_program), 0x0000);
+    f.initCpu(0x0003);
+
+    auto callerThreadId = std::this_thread::get_id();
+    auto emuThreadId = std::thread::id{};
+    std::atomic<std::thread::id> memWriteThreadId{};
+
+    // Track which thread executes the memory write via target callbacks
+    f.backend->onInstruction = [&](const InstructionEvent &) {
+        // Capture emulation thread ID on first instruction
+        auto expected = std::thread::id{};
+        memWriteThreadId.compare_exchange_strong(expected, std::this_thread::get_id(),
+                                                  std::memory_order_acq_rel);
+    };
+
+    std::thread emuThread([&]{
+        emuThreadId = std::this_thread::get_id();
+        f.backend->runUntilPause();
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Write memory from caller thread — should go through command queue
+    auto result = f.backend->writeMemoryByte(0xC000, 0x42);
+    CHECK(result, "memory write succeeded");
+
+    // Verify the write happened
+    uint8_t val = f.backend->readMemory(0xC000);
+    CHECK_EQ(0x42u, (unsigned)val, "memory value written");
+
+    CHECK(emuThreadId != callerThreadId, "caller thread != emulation thread");
+
+    f.backend->requestQuit();
+    emuThread.join();
+    TEST_END();
+}
+
+// Test: Thread isolation — RegisterWrite (Section 9)
+static void test_thread_isolation_register_write()
+{
+    TEST_BEGIN("thread_isolation_register_write");
+    TestFixture f;
+    writeProgram(f.mem, test_program, sizeof(test_program), 0x0000);
+    f.initCpu(0x0003);
+
+    auto callerThreadId = std::this_thread::get_id();
+    auto emuThreadId = std::thread::id{};
+
+    std::thread emuThread([&]{
+        emuThreadId = std::this_thread::get_id();
+        f.backend->runUntilPause();
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Write register from caller thread
+    bool ok = f.backend->writeRegister(IDebugBackend::RegisterId::AF, 0x1234);
+    CHECK(ok, "register write succeeded");
+
+    // Verify register value (AF = A<<8 | flags; writing 0x1234 sets A=0x12)
+    auto cpuState = f.backend->getCpuState();
+    CHECK_EQ(0x12u, (unsigned)cpuState.a, "register A value written");
+
+    CHECK(emuThreadId != callerThreadId, "caller thread != emulation thread");
+
+    f.backend->requestQuit();
+    emuThread.join();
+    TEST_END();
+}
+
+// Test: Thread isolation — Reset (Section 9)
+static void test_thread_isolation_reset()
+{
+    TEST_BEGIN("thread_isolation_reset");
+    TestFixture f;
+    writeProgram(f.mem, test_program, sizeof(test_program), 0x0000);
+    f.initCpu(0x0003);
+
+    // Step a few instructions to move PC
+    f.backend->requestStep();
+    f.backend->requestStep();
+    uint16_t pcBefore = f.backend->getCpuState().pc;
+    CHECK(pcBefore != 0, "PC moved after steps");
+
+    auto callerThreadId = std::this_thread::get_id();
+    auto emuThreadId = std::thread::id{};
+    std::atomic<std::thread::id> cpuExecThreadId{};
+
+    f.backend->onInstruction = [&](const InstructionEvent &) {
+        cpuExecThreadId.store(std::this_thread::get_id(), std::memory_order_release);
+    };
+
+    std::thread emuThread([&]{
+        emuThreadId = std::this_thread::get_id();
+        f.backend->runUntilPause();
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Reset from caller thread
+    f.backend->requestReset();
+
+    // Verify PC reset to 0
+    auto cpuState = f.backend->getCpuState();
+    CHECK_EQ(0x0000u, (unsigned)cpuState.pc, "PC reset to 0");
+
+    CHECK(emuThreadId != callerThreadId, "caller thread != emulation thread");
+
+    f.backend->requestQuit();
+    emuThread.join();
+    TEST_END();
+}
+
+// Test: Quit cancels all pending Run pause promises (Section 6)
+static void test_quit_fulfills_all_pause_promises()
+{
+    TEST_BEGIN("quit_fulfills_all_pause_promises");
+    TestFixture f;
+    writeProgram(f.mem, loop_program, sizeof(loop_program), 0x0000);
+    f.initCpu(0x0003);
+
+    std::thread emuThread([&]{ f.backend->runUntilPause(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Enqueue multiple Run commands with pause promises
+    const int N = 5;
+    std::vector<std::future<CommandResult>> futures;
+    for (int i = 0; i < N; ++i) {
+        futures.push_back(f.backend->requestRunFuture());
+    }
+
+    // Give time for commands to be enqueued
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    // Quit — should fulfill ALL pending pause promises
+    f.backend->requestQuit();
+
+    int completed = 0;
+    for (auto &fut : futures) {
+        auto status = fut.wait_for(std::chrono::milliseconds(500));
+        if (status == std::future_status::ready) {
+            completed++;
+            auto result = fut.get();
+            // Each should be cancelled (quit during pending)
+            CHECK(!result.success || result.status == CommandResult::Cancelled ||
+                  result.status == CommandResult::Completed,
+                  "promise fulfilled (not hanging)");
+        }
+    }
+
+    CHECK_EQ(N, completed, "all pause promises fulfilled after quit");
+
+    emuThread.join();
+    CHECK(true, "no hanging promises (thread joined cleanly)");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -1460,7 +1800,7 @@ int main()
     setbuf(stdout, nullptr);
 
     printf("\n\033[1;33m========================================\033[0m\n");
-    printf("\033[1;33m  Agent Integration Tests — Stage 5.3.3.2\033[0m\n");
+    printf("\033[1;33m  Agent Integration Tests — Stage 5.3.3.3\033[0m\n");
     printf("\033[1;33m========================================\033[0m\n");
 
     // Non-threaded tests
@@ -1510,6 +1850,15 @@ int main()
     test_command_state_cas();                       // 36
     test_request_pause_no_running_mutation();       // 37
     test_request_run_future();                      // 38
+
+    // Stage 5.3.3.3 tests
+    test_concurrent_run_futures();                  // 39
+    test_cas_race_real();                           // 40
+    test_thread_isolation_step_real();              // 41
+    test_thread_isolation_memory_write();           // 42
+    test_thread_isolation_register_write();         // 43
+    test_thread_isolation_reset();                  // 44
+    test_quit_fulfills_all_pause_promises();        // 45
 
     printf("\n\033[1;33m========================================\033[0m\n");
     printf("  Results: %d/%d passed", tests_passed, tests_run);

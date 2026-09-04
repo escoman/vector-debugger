@@ -379,6 +379,9 @@ void DebugBackend::run()
 
         stepInstruction();
     }
+
+    // Stage 5.3.3.3: Fulfill any pending Run pause promises after pausing
+    fulfillPausePromises_();
 }
 
 void DebugBackend::pause()
@@ -789,7 +792,7 @@ CommandResult DebugBackend::submitAndWait(std::unique_ptr<Command> cmd)
     // Stage 5.3.3.1: Test-only synchronous fallback.
     // Production code must NEVER use this path — all production goes through the queue.
     if (testSynchronous_ && !emulationLoopRunning_) {
-        // Check cancellation before execution (matches production path in processOneCommand)
+        // Check cancellation before execution (matches production path in processCommand)
         if (cmd->cancelled.load(std::memory_order_acquire)) {
             CommandResult r;
             r.success = false;
@@ -979,6 +982,13 @@ void DebugBackend::executeCommand(Command &cmd)
         break;
     }
     case CommandType::Run:
+        // Stage 5.3.3.3: Save pausePromise to pending list.
+        // It will be fulfilled when the emulation actually transitions to Paused
+        // (by run(), executeFramesTarget_(), or processCommand() post-check).
+        if (cmd.pausePromise) {
+            std::lock_guard<std::mutex> lk(pendingPauseMutex_);
+            pendingPausePromises_.push_back(cmd.pausePromise);
+        }
         // Stage 5.3.3.2: Use stateMutex_ for state_ protection.
         running_.store(true, std::memory_order_release);
         {
@@ -1294,52 +1304,36 @@ void DebugBackend::requestRun()
     submitAndWait(std::move(cmd));
 }
 
-// Stage 5.3.3.2: requestRun() variant that returns a future fulfilled
+// Stage 5.3.3.3: requestRun() variant that returns a future fulfilled
 // when the Emulation Thread next transitions to Paused (breakpoint/pause hit).
+// The pause promise belongs to this specific Run command — no global promise.
 std::future<CommandResult> DebugBackend::requestRunFuture()
 {
-    // Create pause promise BEFORE enqueuing — avoids race where emulation
-    // thread pauses before we get the future.
-    std::future<void> pauseFuture;
-    {
-        std::lock_guard<std::mutex> lock(nextPauseMutex_);
-        nextPausePromise_ = std::make_unique<std::promise<void>>();
-        pauseFuture = nextPausePromise_->get_future();
-    }
-
     auto cmd = std::make_unique<Command>();
     cmd->type = CommandType::Run;
 
     // Stage 5.3.3.2: Test-only synchronous fallback
     if (testSynchronous_ && !emulationLoopRunning_) {
-        auto future = cmd->promise.get_future();
+        // No emulation thread — return a ready future immediately.
+        // No pausePromise needed (no emulation to wait for).
+        auto cmdFuture = cmd->promise.get_future();
         cmd->state.store(CommandState::Executing, std::memory_order_release);
         executeCommand(*cmd);
-        // In test mode, no emulation loop — fulfill pause promise immediately
-        {
-            std::lock_guard<std::mutex> lock(nextPauseMutex_);
-            if (nextPausePromise_) {
-                nextPausePromise_->set_value();
-                nextPausePromise_.reset();
-            }
-        }
-        return future;
+        return cmdFuture;
     }
 
+    // Stage 5.3.3.3: Per-command pause promise (production only)
+    auto pausePromise = std::make_shared<std::promise<CommandResult>>();
+    auto pauseFuture = pausePromise->get_future();
+    cmd->pausePromise = pausePromise;
+
+    // Production: enqueue and wait for command processing
     auto cmdFuture = cmd->promise.get_future();
     commandQueue_.enqueue(std::move(cmd));
-
-    // Wait for Run command to be processed
     cmdFuture.wait();
 
-    // Now wait for emulation thread to pause (breakpoint hit or manual pause)
-    return std::async(std::launch::deferred, [pf = std::move(pauseFuture)]() mutable -> CommandResult {
-        pf.wait();
-        CommandResult r;
-        r.success = true;
-        r.status = CommandResult::Completed;
-        return r;
-    });
+    // Return future that completes when emulation pauses
+    return pauseFuture;
 }
 
 void DebugBackend::requestPause()
@@ -1379,24 +1373,35 @@ bool DebugBackend::isQuitRequested() const
     return quitRequested_.load(std::memory_order_acquire);
 }
 
-void DebugBackend::processOneCommand()
+// Stage 5.3.3.3: fulfillPausePromises_ — fulfill all pending Run pause promises.
+// Called when the Emulation Thread transitions to Paused.
+void DebugBackend::fulfillPausePromises_()
 {
-    if (!emulationLoopRunning_) {
-        // Test scenario — no emulation thread.
-        // Commands are executed directly by submitAndWait.
-        return;
+    std::vector<std::shared_ptr<std::promise<CommandResult>>> toFulfill;
+    {
+        std::lock_guard<std::mutex> lk(pendingPauseMutex_);
+        toFulfill.swap(pendingPausePromises_);
     }
+    CommandResult r;
+    r.success = true;
+    r.status = CommandResult::Completed;
+    for (auto &p : toFulfill) {
+        p->set_value(r);
+    }
+}
 
-    // Wait for a command from the queue (blocks until available)
-    auto cmd = commandQueue_.waitAndDequeue();
-
+// Stage 5.3.3.3: Unified command processing — single CAS-based path.
+// Called from both runUntilPause() (main loop) and executeFramesTarget_() (frame loop).
+// Returns true if the frame loop should continue, false if it should break.
+bool DebugBackend::processCommand(std::unique_ptr<Command> &cmd)
+{
     // Stage 5.3.3.2: CAS Queued→Executing — mutually exclusive with Queued→Cancelled
     CommandState expected = CommandState::Queued;
     if (!cmd->state.compare_exchange_strong(expected, CommandState::Executing,
                                             std::memory_order_acq_rel)) {
         // CAS failed — command was cancelled (Queued→Cancelled)
         cmd->promise.set_value(CommandResult{false, "cancelled", CommandResult::Cancelled});
-        return;
+        return true;
     }
 
     // Every command must receive a result, even on quit.
@@ -1404,14 +1409,14 @@ void DebugBackend::processOneCommand()
         cmd->type != CommandType::Quit) {
         cmd->state.store(CommandState::Completed, std::memory_order_release);
         cmd->promise.set_value(CommandResult{false, "quit requested", CommandResult::Cancelled});
-        return;
+        return false;
     }
 
     // Check cancellation flag (redundant with CAS above, but kept for safety)
     if (cmd->cancelled.load(std::memory_order_acquire)) {
         cmd->state.store(CommandState::Completed, std::memory_order_release);
         cmd->promise.set_value(CommandResult{false, "cancelled", CommandResult::Cancelled});
-        return;
+        return true;
     }
 
     // Pause before trace execution — trace needs CPU in Paused state
@@ -1424,11 +1429,54 @@ void DebugBackend::processOneCommand()
         }
     }
 
+    // Handle Quit specially: set flags and transition to Paused
+    if (cmd->type == CommandType::Quit) {
+        quitRequested_.store(true, std::memory_order_release);
+        running_.store(false, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lk(stateMutex_);
+            state_ = DebuggerState::Paused;
+        }
+        cmd->state.store(CommandState::Completed, std::memory_order_release);
+        cmd->promise.set_value(CommandResult{true, "", CommandResult::Completed});
+        fulfillPausePromises_();
+        return false;
+    }
+
+    // Handle Pause specially: transition to Paused
+    if (cmd->type == CommandType::Pause) {
+        running_.store(false, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lk(stateMutex_);
+            state_ = DebuggerState::Paused;
+            stopReason_ = StopReason::UserPause;
+            pauseRequestedAtomic_.store(false, std::memory_order_release);
+        }
+        cmd->state.store(CommandState::Completed, std::memory_order_release);
+        cmd->promise.set_value(CommandResult{true, "", CommandResult::Completed});
+        fulfillPausePromises_();
+        return false;
+    }
+
     executeCommand(*cmd);
+    // Note: executeCommand() sets cmd->promise internally
 
     // Mark command as completed after execution
     cmd->state.store(CommandState::Completed, std::memory_order_release);
+
+    // After any command, check if state is now Paused — fulfill pending promises
+    {
+        std::lock_guard<std::mutex> lk(stateMutex_);
+        if (state_ == DebuggerState::Paused) {
+            fulfillPausePromises_();
+        }
+    }
+
+    return true;
 }
+
+// Note: processOneCommand() was replaced by processCommand() in Stage 5.3.3.3.
+// The emulation main loop now uses processCommand() directly.
 
 // ---------------------------------------------------------------------------
 // executeFramesTarget_ — run frames until pause/breakpoint via IDebugTarget
@@ -1471,27 +1519,9 @@ void DebugBackend::executeFramesTarget_()
             lastFrameTime_ = Clock::now();
         }
 
-        // Process any commands queued during frame execution
+        // Stage 5.3.3.3: Process commands through unified path
         while (auto cmd = commandQueue_.tryDequeue()) {
-            if (cmd->type == CommandType::Quit) {
-                quitRequested_.store(true, std::memory_order_release);
-                running_.store(false, std::memory_order_release);
-                break;
-            }
-            if (cmd->type == CommandType::Run) {
-                // Stage 5.3.3: compute skipBreakpoint_ on emulation thread
-                skipBreakpoint_ = checkBreakpoint();
-                // Already running — just fulfill the promise
-                cmd->promise.set_value(CommandResult{true, "", CommandResult::Completed});
-                continue;
-            }
-            if (cmd->type == CommandType::Pause) {
-                running_.store(false, std::memory_order_release);
-                cmd->promise.set_value(CommandResult{true, "", CommandResult::Completed});
-                break;
-            }
-            // Other commands (breakpoints, symbols) — safe during Running
-            executeCommand(*cmd);
+            if (!processCommand(cmd)) break;
         }
 
         // If PC didn't change, target stopped (breakpoint or debugger_interrupt)
@@ -1499,14 +1529,6 @@ void DebugBackend::executeFramesTarget_()
             if (checkBreakpoint()) {
                 stopReason_ = StopReason::Breakpoint;
                 running_.store(false, std::memory_order_release);
-                // Stage 5.3.3.2: Fulfill pause promise
-                {
-                    std::lock_guard<std::mutex> lk(nextPauseMutex_);
-                    if (nextPausePromise_) {
-                        nextPausePromise_->set_value();
-                        nextPausePromise_.reset();
-                    }
-                }
                 break;
             }
         }
@@ -1519,31 +1541,24 @@ void DebugBackend::executeFramesTarget_()
                 state_ = DebuggerState::Paused;
                 pauseRequestedAtomic_.store(false, std::memory_order_release);
             }
-            // Stage 5.3.3.2: Fulfill pause promise
-            {
-                std::lock_guard<std::mutex> lk(nextPauseMutex_);
-                if (nextPausePromise_) {
-                    nextPausePromise_->set_value();
-                    nextPausePromise_.reset();
-                }
-            }
             break;
         }
 
         if (checkBreakpoint()) {
             stopReason_ = StopReason::Breakpoint;
             running_.store(false, std::memory_order_release);
-            // Stage 5.3.3.2: Fulfill pause promise
-            {
-                std::lock_guard<std::mutex> lk(nextPauseMutex_);
-                if (nextPausePromise_) {
-                    nextPausePromise_->set_value();
-                    nextPausePromise_.reset();
-                }
-            }
             break;
         }
     }
+
+    // Stage 5.3.3.3: Frame loop ended — fulfill any pending Run pause promises
+    {
+        std::lock_guard<std::mutex> lk(stateMutex_);
+        if (state_ != DebuggerState::Paused) {
+            state_ = DebuggerState::Paused;
+        }
+    }
+    fulfillPausePromises_();
 }
 
 // ---------------------------------------------------------------------------
@@ -1613,7 +1628,14 @@ void DebugBackend::runUntilPause()
 
     // Main emulation loop
     while (true) {
-        processOneCommand();
+        // Stage 5.3.3.3: Check running_ BEFORE blocking on waitAndDequeue().
+        // This handles test-mode where requestRun() executed synchronously
+        // and already set running_=true before runUntilPause() was called.
+        if (running_.load(std::memory_order_acquire)) {
+            executeFramesTarget_();
+            // executeFramesTarget_() already set Paused and
+            // fulfilled pending pause promises before returning.
+        }
 
         if (quitRequested_.load(std::memory_order_acquire)) {
             // Stage 5.3.3: Drain remaining commands — fulfill all promises
@@ -1622,44 +1644,34 @@ void DebugBackend::runUntilPause()
                 CommandState expected = CommandState::Queued;
                 if (pending->state.compare_exchange_strong(expected, CommandState::Cancelled,
                                                           std::memory_order_acq_rel)) {
+                    // Stage 5.3.3.3: Also fulfill per-command pause promise if present
+                    if (pending->pausePromise) {
+                        CommandResult pr;
+                        pr.success = false;
+                        pr.error = "quit";
+                        pr.status = CommandResult::Cancelled;
+                        pending->pausePromise->set_value(pr);
+                    }
                     pending->promise.set_value(
                         CommandResult{false, "quit", CommandResult::Cancelled});
                 }
             }
+            // Stage 5.3.3.3: processCommand(Quit) already set Paused and
+            // fulfilled pending promises.  Ensure state is consistent.
             {
                 std::lock_guard<std::mutex> lk(stateMutex_);
                 state_ = DebuggerState::Paused;
             }
-            // Stage 5.3.3.2: Fulfill pause promise on quit
-            {
-                std::lock_guard<std::mutex> lk(nextPauseMutex_);
-                if (nextPausePromise_) {
-                    nextPausePromise_->set_value();
-                    nextPausePromise_.reset();
-                }
-            }
+            fulfillPausePromises_();
             target_->debuggerDetached();
             emulationLoopRunning_ = false;
             return;
         }
 
-        if (running_.load(std::memory_order_acquire)) {
-            executeFramesTarget_();
-
-            {
-                std::lock_guard<std::mutex> lk(stateMutex_);
-                if (state_ != DebuggerState::Paused) {
-                    state_ = DebuggerState::Paused;
-                }
-            }
-            // Stage 5.3.3.2: Fulfill pause promise after frame loop
-            {
-                std::lock_guard<std::mutex> lk(nextPauseMutex_);
-                if (nextPausePromise_) {
-                    nextPausePromise_->set_value();
-                    nextPausePromise_.reset();
-                }
-            }
-        }
+        // Wait for a command from the queue (blocks until available)
+        auto cmd = commandQueue_.waitAndDequeue();
+        processCommand(cmd);
+        // Loop back — if processCommand set running_ (Run command),
+        // executeFramesTarget_() will be called at the top of the loop.
     }
 }
