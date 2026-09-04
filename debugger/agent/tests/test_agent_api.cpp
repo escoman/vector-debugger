@@ -82,12 +82,20 @@ static void test_run_pause()
 {
     TEST_BEGIN("run and pause");
     MockAgentBackend mock;
+
+    // Fill memory with NOPs so requestRun() doesn't hit HLT
+    std::vector<uint8_t> nops(256, 0x00);
+    mock.setMemory(0x0100, nops);
+
     AgentApi api(mock);
 
     CHECK(mock.isPaused(), "initially paused");
 
     api.run();
-    CHECK(!mock.isPaused(), "running after run()");
+    // Mock requestRun() is synchronous — it runs until HLT/breakpoint/limit.
+    // With NOPs it hits the 100000-step safety limit, then is paused again.
+    // So we verify that stepping occurred (PC advanced far from 0x0100).
+    CHECK(api.getCpuState().pc != 0x0100, "PC advanced during run");
 
     api.pause();
     CHECK(mock.isPaused(), "paused after pause()");
@@ -189,22 +197,22 @@ static void test_set_clear_breakpoint()
     MockAgentBackend mock;
     AgentApi api(mock);
 
-    int id = api.setBreakpoint(0x0200);
-    CHECK(id >= 0, "breakpoint set");
+    auto r1 = api.setBreakpoint(0x0200);
+    CHECK(r1.success, "breakpoint set");
     CHECK(mock.hasBreakpoint(0x0200), "backend confirms breakpoint");
 
-    int dup = api.setBreakpoint(0x0200);
-    CHECK(dup < 0, "duplicate rejected");
+    auto r2 = api.setBreakpoint(0x0200);
+    CHECK(!r2.success, "duplicate rejected");
 
     auto bps = api.listBreakpoints();
     CHECK_EQ(1u, (unsigned)bps.size(), "1 breakpoint");
 
-    bool removed = api.clearBreakpoint(0x0200);
-    CHECK(removed, "breakpoint cleared");
+    auto r3 = api.clearBreakpoint(0x0200);
+    CHECK(r3.success, "breakpoint cleared");
     CHECK(!mock.hasBreakpoint(0x0200), "backend confirms removed");
 
-    bool again = api.clearBreakpoint(0x0200);
-    CHECK(!again, "clear nonexistent fails");
+    auto r4 = api.clearBreakpoint(0x0200);
+    CHECK(!r4.success, "clear nonexistent fails");
     TEST_END();
 }
 
@@ -234,15 +242,16 @@ static void test_get_execution_trace()
     TEST_END();
 }
 
-static void test_get_vram_activity()
+static void test_list_breakpoints()
 {
-    TEST_BEGIN("getVramActivity returns snapshot");
+    TEST_BEGIN("listBreakpoints returns all breakpoints");
     MockAgentBackend mock;
     AgentApi api(mock);
 
-    auto activity = api.getVramActivity();
-    CHECK(activity.writeCount.size() > 0xC000, "writeCount populated");
-    CHECK(activity.writeCount[0xC000] > 0, "VRAM write at C000");
+    api.setBreakpoint(0x0200);
+    api.setBreakpoint(0x0300);
+    auto bps = api.listBreakpoints();
+    CHECK_EQ(2u, (unsigned)bps.size(), "2 breakpoints");
     TEST_END();
 }
 
@@ -256,16 +265,16 @@ static void test_create_function()
     MockAgentBackend mock;
     AgentApi api(mock);
 
-    bool ok = api.createFunction(0x0200);
-    CHECK(ok, "function created");
+    auto r = api.createFunction(0x0200);
+    CHECK(r.success, "function created");
 
     const DebugSymbol *sym = mock.symbolDatabase().findSymbol(0x0200);
     CHECK(sym != nullptr, "symbol exists");
     CHECK_STR("sub_0200", sym->name, "auto-name");
     CHECK_EQ((unsigned)SymbolType::Function, (unsigned)sym->type, "function type");
 
-    bool dup = api.createFunction(0x0200);
-    CHECK(!dup, "duplicate rejected");
+    auto r2 = api.createFunction(0x0200);
+    CHECK(!r2.success, "duplicate rejected");
     TEST_END();
 }
 
@@ -276,14 +285,14 @@ static void test_rename_function()
     AgentApi api(mock);
 
     api.createFunction(0x0200);
-    bool ok = api.renameFunction(0x0200, "DrawSprite");
-    CHECK(ok, "rename succeeds");
+    auto r = api.renameFunction(0x0200, "DrawSprite");
+    CHECK(r.success, "rename succeeds");
 
     const DebugSymbol *sym = mock.symbolDatabase().findSymbol(0x0200);
     CHECK_STR("DrawSprite", sym->name, "new name");
 
-    bool fail = api.renameFunction(0x9999, "Nope");
-    CHECK(!fail, "rename nonexistent fails");
+    auto r2 = api.renameFunction(0x9999, "Nope");
+    CHECK(!r2.success, "rename nonexistent fails");
     TEST_END();
 }
 
@@ -294,8 +303,8 @@ static void test_set_function_comment()
     AgentApi api(mock);
 
     api.createFunction(0x0200);
-    bool ok = api.setFunctionComment(0x0200, "Draws a sprite");
-    CHECK(ok, "comment set");
+    auto r = api.setFunctionComment(0x0200, "Draws a sprite");
+    CHECK(r.success, "comment set");
 
     const DebugSymbol *sym = mock.symbolDatabase().findSymbol(0x0200);
     CHECK_STR("Draws a sprite", sym->comment, "comment text");
@@ -309,12 +318,12 @@ static void test_delete_function()
     AgentApi api(mock);
 
     api.createFunction(0x0200);
-    bool ok = api.deleteFunction(0x0200);
-    CHECK(ok, "deleted");
+    auto r = api.deleteFunction(0x0200);
+    CHECK(r.success, "deleted");
     CHECK(mock.symbolDatabase().findSymbol(0x0200) == nullptr, "gone");
 
-    bool fail = api.deleteFunction(0x0200);
-    CHECK(!fail, "delete again fails");
+    auto r2 = api.deleteFunction(0x0200);
+    CHECK(!r2.success, "delete again fails");
     TEST_END();
 }
 
@@ -324,8 +333,8 @@ static void test_add_label()
     MockAgentBackend mock;
     AgentApi api(mock);
 
-    bool ok = api.addLabel(0x4000, "SCORE");
-    CHECK(ok, "label created");
+    auto r = api.addLabel(0x4000, "SCORE");
+    CHECK(r.success, "label created");
 
     const DebugSymbol *sym = mock.symbolDatabase().findSymbol(0x4000);
     CHECK(sym != nullptr, "exists");
@@ -347,8 +356,8 @@ static void test_apply_annotation()
     ann.comment = "Initialize AY-3-8912";
     ann.confidence = 0.91;
 
-    bool ok = api.applyAnnotation(ann);
-    CHECK(ok, "annotation applied");
+    auto r = api.applyAnnotation(ann);
+    CHECK(r.success, "annotation applied");
 
     const DebugSymbol *sym = mock.symbolDatabase().findSymbol(0x0200);
     CHECK(sym != nullptr, "symbol exists");
@@ -444,9 +453,8 @@ static void test_get_function_context_vram()
 
     FunctionContext ctx = api.getFunctionContext(0x0200);
 
-    // Mock has writeCount[0xC000] = 1
-    CHECK(ctx.vramWrites.size() > 0, "VRAM writes found");
-    CHECK_EQ(0xC000u, (unsigned)ctx.vramWrites[0].vramAddr, "VRAM addr C000");
+    // Without trace, VRAM writes are unknown (no global counters)
+    CHECK(ctx.vramSource == DataSource::Unknown, "VRAM source unknown without trace");
     TEST_END();
 }
 
@@ -456,27 +464,38 @@ static void test_get_function_context_vram()
 
 static void test_trace_function()
 {
-    TEST_BEGIN("traceFunction analyzes existing trace");
+    TEST_BEGIN("traceFunction executes and analyzes");
     MockAgentBackend mock;
 
-    // Add instruction events within the function at 0x0200
-    InstructionEvent ev1{};
-    ev1.pcBefore = 0x0200; ev1.pcAfter = 0x0202;
-    ev1.opcode = 0xE5; ev1.before.sp = 0xF800; ev1.after.sp = 0xF7FE;
-    mock.addInstructionEvent(ev1);
+    // Set up a simple function at 0x0200: MOV H,A; RET
+    // (MOV H,A = 0x26 is not specially handled, just advances PC)
+    std::vector<uint8_t> func = {0x67, 0xC9};  // MOV H,A; RET
+    mock.setMemory(0x0200, func);
 
-    InstructionEvent ev2{};
-    ev2.pcBefore = 0x0208; ev2.pcAfter = 0x0108;
-    ev2.opcode = 0xC9; ev2.before.sp = 0xF7FE; ev2.after.sp = 0xF800;
-    mock.addInstructionEvent(ev2);
+    // Place NOP at 0x01FF so requestRun() advances to 0x0200
+    std::vector<uint8_t> nop = {0x00};
+    mock.setMemory(0x01FF, nop);
+
+    // Set CPU state: PC just before function, SP as if CALL pushed return addr
+    CpuState cpu{};
+    cpu.pc = 0x01FF;
+    cpu.sp = 0xF7FE;
+    cpu.a = 0x42;
+    mock.setCpuState(cpu);
+
+    // Place return address on stack at SP (simulating CALL having pushed it)
+    std::vector<uint8_t> retAddr = {0x08, 0x01};  // 0x0108 little-endian
+    mock.setMemory(0xF7FE, retAddr);
 
     AgentApi api(mock);
     TraceResult tr = api.traceFunction(0x0200);
 
     CHECK_EQ(0x0200u, (unsigned)tr.entryPc, "entry PC");
-    CHECK(tr.executionCount > 0, "execution count > 0");
-    CHECK_EQ(0xF800u, (unsigned)tr.spEntry, "SP entry");
-    CHECK_EQ(0xF800u, (unsigned)tr.spExit, "SP exit");
+    CHECK(tr.instructionCount > 0, "instructions executed");
+    CHECK_EQ(0x0201u, (unsigned)tr.exitPc, "exit at RET (0201)");
+    CHECK_EQ(0xF7FEu, (unsigned)tr.entrySp, "SP entry");
+    CHECK_EQ(0xF800u, (unsigned)tr.exitSp, "SP exit (restored by RET)");
+    CHECK(tr.exitReason == ExitReason::Ret, "exit reason Ret");
     TEST_END();
 }
 
@@ -526,8 +545,8 @@ static void test_rename_nonexistent()
     MockAgentBackend mock;
     AgentApi api(mock);
 
-    bool ok = api.renameFunction(0x9999, "Nope");
-    CHECK(!ok, "rename fails for nonexistent");
+    auto r = api.renameFunction(0x9999, "Nope");
+    CHECK(!r.success, "rename fails for nonexistent");
     TEST_END();
 }
 
@@ -537,8 +556,8 @@ static void test_comment_nonexistent()
     MockAgentBackend mock;
     AgentApi api(mock);
 
-    bool ok = api.setComment(0x9999, "Nope");
-    CHECK(!ok, "comment fails for nonexistent");
+    auto r = api.setComment(0x9999, "Nope");
+    CHECK(!r.success, "comment fails for nonexistent");
     TEST_END();
 }
 
@@ -569,7 +588,7 @@ int main()
 
     // Trace / IO / VRAM
     test_get_execution_trace();
-    test_get_vram_activity();
+    test_list_breakpoints();
 
     // Annotations
     test_create_function();

@@ -25,6 +25,14 @@ public:
                 const std::string &result,
                 double timeMs);
 
+    // Record with success/error info (Stage 5.3.1).
+    void record(const std::string &tool,
+                const std::string &args,
+                const std::string &result,
+                double timeMs,
+                bool success,
+                const std::string &error = "");
+
     // All entries (thread-safe snapshot).
     std::vector<AgentLogEntry> entries() const;
 

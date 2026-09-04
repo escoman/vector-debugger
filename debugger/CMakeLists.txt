@@ -365,6 +365,24 @@ if(ENABLE_AI_AGENT)
         pthread
     )
 
+    # Agent command protocol tests (Stage 5.3.1 — 15 mandatory tests)
+    add_executable(test_agent_commands
+        ${AGENT_DIR}/tests/test_agent_commands.cpp
+    )
+
+    target_include_directories(test_agent_commands PRIVATE
+        ${AGENT_DIR}
+        ${DBG_SRC_DIR}
+        ${SRC_DIR}
+    )
+
+    target_link_libraries(test_agent_commands
+        debugger_agent
+        debugger_core
+        ${Boost_LIBRARIES}
+        pthread
+    )
+
     # Mock Agent scenario test (uses real DebugBackend + DebugAdapter)
     add_executable(test_agent_mock
         ${AGENT_DIR}/tests/test_agent_mock.cpp

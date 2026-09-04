@@ -714,6 +714,262 @@ const SymbolDatabase &DebugBackend::symbolDatabase() const
 }
 
 // ---------------------------------------------------------------------------
+// Stage 5.3.1: Symbol commands (through command protocol)
+// ---------------------------------------------------------------------------
+
+CommandResult DebugBackend::requestCreateFunction(uint16_t addr, const std::string &name)
+{
+    GenericCommand cmd;
+    cmd.type = GenericCommandType::CreateFunction;
+    cmd.address = addr;
+    cmd.name = name;
+    return submitCommand(cmd);
+}
+
+CommandResult DebugBackend::requestRenameSymbol(uint16_t addr, const std::string &name)
+{
+    GenericCommand cmd;
+    cmd.type = GenericCommandType::RenameSymbol;
+    cmd.address = addr;
+    cmd.name = name;
+    return submitCommand(cmd);
+}
+
+CommandResult DebugBackend::requestSetComment(uint16_t addr, const std::string &comment)
+{
+    GenericCommand cmd;
+    cmd.type = GenericCommandType::SetComment;
+    cmd.address = addr;
+    cmd.comment = comment;
+    return submitCommand(cmd);
+}
+
+CommandResult DebugBackend::requestRemoveSymbol(uint16_t addr)
+{
+    GenericCommand cmd;
+    cmd.type = GenericCommandType::RemoveSymbol;
+    cmd.address = addr;
+    return submitCommand(cmd);
+}
+
+CommandResult DebugBackend::requestAddLabel(uint16_t addr, const std::string &name)
+{
+    GenericCommand cmd;
+    cmd.type = GenericCommandType::AddLabel;
+    cmd.address = addr;
+    cmd.name = name;
+    return submitCommand(cmd);
+}
+
+// ---------------------------------------------------------------------------
+// Stage 5.3.1: Breakpoint commands (through command protocol)
+// ---------------------------------------------------------------------------
+
+CommandResult DebugBackend::requestAddBreakpoint(uint16_t addr)
+{
+    GenericCommand cmd;
+    cmd.type = GenericCommandType::AddBreakpoint;
+    cmd.address = addr;
+    return submitCommand(cmd);
+}
+
+CommandResult DebugBackend::requestRemoveBreakpoint(uint16_t addr)
+{
+    GenericCommand cmd;
+    cmd.type = GenericCommandType::RemoveBreakpoint;
+    cmd.address = addr;
+    return submitCommand(cmd);
+}
+
+CommandResult DebugBackend::requestSetBreakpointEnabled(uint16_t addr, bool enabled)
+{
+    GenericCommand cmd;
+    cmd.type = GenericCommandType::SetBreakpointEnabled;
+    cmd.address = addr;
+    cmd.enabled = enabled;
+    return submitCommand(cmd);
+}
+
+// ---------------------------------------------------------------------------
+// Stage 5.3.1: Generic command mechanism
+// ---------------------------------------------------------------------------
+
+CommandResult DebugBackend::submitCommand(GenericCommand &cmd)
+{
+    if (!emulationLoopRunning_) {
+        // Direct execution — safe when no emulation thread is running
+        // (test scenario, or debugger paused without runUntilPause loop).
+        executeGenericCommand(cmd);
+        return cmd.result;
+    }
+
+    // Post to emulation thread and wait for completion
+    {
+        std::lock_guard<std::mutex> lock(commandMutex_);
+        pendingGenericCommand_ = &cmd;
+        stepCompleted_ = false;
+    }
+    commandCv_.notify_one();
+
+    std::unique_lock<std::mutex> lock(commandMutex_);
+    resultCv_.wait(lock, [this]{ return stepCompleted_; });
+
+    return cmd.result;
+}
+
+void DebugBackend::executeGenericCommand(GenericCommand &cmd)
+{
+    switch (cmd.type) {
+    case GenericCommandType::AddBreakpoint: {
+        int id = addBreakpoint(cmd.address);
+        if (id >= 0) {
+            cmd.result.success = true;
+        } else {
+            cmd.result.success = false;
+            cmd.result.error = "breakpoint already exists at this address";
+            cmd.result.status = CommandResult::Failed;
+        }
+        break;
+    }
+    case GenericCommandType::RemoveBreakpoint: {
+        bool ok = removeBreakpoint(cmd.address);
+        cmd.result.success = ok;
+        if (!ok) {
+            cmd.result.error = "no breakpoint at this address";
+            cmd.result.status = CommandResult::Failed;
+        }
+        break;
+    }
+    case GenericCommandType::SetBreakpointEnabled: {
+        bool ok = setBreakpointEnabled(cmd.address, cmd.enabled);
+        cmd.result.success = ok;
+        if (!ok) {
+            cmd.result.error = "no breakpoint at this address";
+            cmd.result.status = CommandResult::Failed;
+        }
+        break;
+    }
+    case GenericCommandType::CreateFunction: {
+        bool ok = symbols_.addSymbol(cmd.address, cmd.name, SymbolType::Function);
+        cmd.result.success = ok;
+        if (!ok) {
+            cmd.result.error = "symbol already exists at this address";
+            cmd.result.status = CommandResult::Failed;
+        }
+        break;
+    }
+    case GenericCommandType::RenameSymbol: {
+        bool ok = symbols_.renameSymbol(cmd.address, cmd.name);
+        cmd.result.success = ok;
+        if (!ok) {
+            cmd.result.error = "symbol not found";
+            cmd.result.status = CommandResult::Failed;
+        }
+        break;
+    }
+    case GenericCommandType::SetComment: {
+        bool ok = symbols_.setComment(cmd.address, cmd.comment);
+        cmd.result.success = ok;
+        if (!ok) {
+            cmd.result.error = "symbol not found";
+            cmd.result.status = CommandResult::Failed;
+        }
+        break;
+    }
+    case GenericCommandType::RemoveSymbol: {
+        bool ok = symbols_.removeSymbol(cmd.address);
+        cmd.result.success = ok;
+        if (!ok) {
+            cmd.result.error = "symbol not found";
+            cmd.result.status = CommandResult::Failed;
+        }
+        break;
+    }
+    case GenericCommandType::AddLabel: {
+        bool ok = symbols_.addSymbol(cmd.address, cmd.name, SymbolType::Label);
+        cmd.result.success = ok;
+        if (!ok) {
+            cmd.result.error = "symbol already exists at this address";
+            cmd.result.status = CommandResult::Failed;
+        }
+        break;
+    }
+    default:
+        cmd.result.success = false;
+        cmd.result.error = "unknown command type";
+        cmd.result.status = CommandResult::Failed;
+        break;
+    }
+
+    // Sync breakpoints to target after any breakpoint mutation
+    if (cmd.type == GenericCommandType::AddBreakpoint ||
+        cmd.type == GenericCommandType::RemoveBreakpoint ||
+        cmd.type == GenericCommandType::SetBreakpointEnabled) {
+        syncBreakpointsToTarget();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Stage 5.3.1: Trace execution (real execution experiment)
+// ---------------------------------------------------------------------------
+
+DebugBackend::TraceExecutionResult
+DebugBackend::executeTrace(const TraceExecutionParams &params)
+{
+    TraceExecutionResult result;
+    result.startSequence = instructionSequence_;
+    result.entrySp = target_->getCpuState().sp;
+    result.minSp = result.entrySp;
+    result.maxSp = result.entrySp;
+    result.exitReason = ExitReason::Unknown;
+
+    for (uint32_t i = 0; i < params.maxInstructions; ++i) {
+        uint16_t pc = target_->getCpuState().pc;
+        uint8_t opcode = target_->peekMemory(pc);
+
+        // Execute one instruction
+        stepInstruction();
+
+        // Track SP bounds
+        uint16_t newSp = target_->getCpuState().sp;
+        if (newSp < result.minSp) result.minSp = newSp;
+        if (newSp > result.maxSp) result.maxSp = newSp;
+
+        // Check exit conditions
+        if (params.stopOnRet && opcode == 0xC9) {
+            result.exitReason = ExitReason::Ret;
+            result.exitPc = pc;
+            break;
+        }
+
+        if (opcode == 0x76) {
+            result.exitReason = ExitReason::Halt;
+            result.exitPc = pc;
+            break;
+        }
+
+        if (params.stopOnCallerReturn && params.callerReturnAddress != 0
+            && target_->getCpuState().pc == params.callerReturnAddress) {
+            result.exitReason = ExitReason::CallerReturn;
+            result.exitPc = pc;
+            break;
+        }
+    }
+
+    // If loop finished without exit
+    if (result.exitReason == ExitReason::Unknown) {
+        result.exitReason = ExitReason::Timeout;
+        result.exitPc = target_->getCpuState().pc;
+    }
+
+    result.endSequence = instructionSequence_;
+    result.instructionsExecuted = static_cast<uint32_t>(result.endSequence - result.startSequence);
+    result.exitSp = target_->getCpuState().sp;
+
+    return result;
+}
+
+// ---------------------------------------------------------------------------
 // Stage 4.2: Screen snapshot
 // ---------------------------------------------------------------------------
 
@@ -1011,6 +1267,20 @@ void DebugBackend::processOneCommand()
         resultCv_.notify_one();
         return;
     }
+
+    // Stage 5.3.1: generic command from Agent/GUI thread
+    if (pendingGenericCommand_) {
+        auto *gcmd = pendingGenericCommand_;
+        pendingGenericCommand_ = nullptr;
+        lock.unlock();
+        executeGenericCommand(*gcmd);
+        {
+            std::lock_guard<std::mutex> lk(commandMutex_);
+            stepCompleted_ = true;
+        }
+        resultCv_.notify_one();
+        return;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1133,6 +1403,8 @@ void DebugBackend::runUntilPause()
 {
     if (!target_) return;
 
+    emulationLoopRunning_ = true;
+
     // Set up poll_debugger callback for command checking
     target_->setPollCallback([this]() {
         std::lock_guard<std::mutex> lock(commandMutex_);
@@ -1190,6 +1462,7 @@ void DebugBackend::runUntilPause()
 
         if (quitRequested_) {
             target_->debuggerDetached();
+            emulationLoopRunning_ = false;
             return;
         }
 

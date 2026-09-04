@@ -1,7 +1,7 @@
 #pragma once
 
 // ---------------------------------------------------------------------------
-// MockAgentBackend — Stage 5.3
+// MockAgentBackend — Stage 5.3.1
 //
 // Minimal IDebugBackend implementation for Agent API unit tests.
 // No Board, SDL, or emulator dependency.
@@ -82,19 +82,51 @@ public:
 
     // -- Execution control --------------------------------------------------
 
-    void requestRun() override { state_ = DebuggerState::Running; }
+    void requestRun() override {
+        // Simulate running until breakpoint or HLT (synchronous for tests)
+        state_ = DebuggerState::Running;
+        while (state_ == DebuggerState::Running) {
+            uint16_t pc = cpu_.pc;
+
+            // Check breakpoint
+            if (hasBreakpoint(pc)) {
+                state_ = DebuggerState::Paused;
+                stopReason_ = StopReason::Breakpoint;
+                return;
+            }
+
+            // Execute one instruction (simplified 8080)
+            simulateStep();
+
+            // Check HLT
+            if (halted_) {
+                state_ = DebuggerState::Paused;
+                stopReason_ = StopReason::Step;
+                return;
+            }
+
+            // Safety limit
+            if (++runStepCount_ > 100000) {
+                state_ = DebuggerState::Paused;
+                stopReason_ = StopReason::UserPause;
+                return;
+            }
+        }
+    }
+
     void requestPause() override { state_ = DebuggerState::Paused; }
-    void requestStep() override {}
+    void requestStep() override { simulateStep(); }
     void requestReset() override {
         cpu_.pc = 0x0100;
+        cpu_.sp = 0xF800;
         state_ = DebuggerState::Paused;
+        halted_ = false;
+        runStepCount_ = 0;
     }
     void requestQuit() override { state_ = DebuggerState::Stopped; }
+
     void stepInstruction() override {
-        // Simulate: advance PC by instruction length
-        uint8_t opcode = memory_[cpu_.pc];
-        uint8_t len = opcode_info::get_length(opcode);
-        cpu_.pc += len;
+        simulateStep();
     }
 
     // -- Memory access ------------------------------------------------------
@@ -139,7 +171,7 @@ public:
         return true;
     }
 
-    // -- Breakpoints --------------------------------------------------------
+    // -- Breakpoints (direct — for backward compat) -------------------------
 
     int addBreakpoint(uint16_t address) override {
         for (auto &kv : breakpoints_) {
@@ -185,6 +217,32 @@ public:
 
     void clearBreakpoints() override { breakpoints_.clear(); }
 
+    // -- Breakpoint commands (Stage 5.3.1 — direct in mock) -----------------
+
+    CommandResult requestAddBreakpoint(uint16_t addr) override {
+        int id = addBreakpoint(addr);
+        CommandResult r;
+        r.success = (id >= 0);
+        if (!r.success) { r.error = "duplicate"; r.status = CommandResult::Failed; }
+        return r;
+    }
+
+    CommandResult requestRemoveBreakpoint(uint16_t addr) override {
+        bool ok = removeBreakpoint(addr);
+        CommandResult r;
+        r.success = ok;
+        if (!ok) { r.error = "not found"; r.status = CommandResult::Failed; }
+        return r;
+    }
+
+    CommandResult requestSetBreakpointEnabled(uint16_t addr, bool enabled) override {
+        bool ok = setBreakpointEnabled(addr, enabled);
+        CommandResult r;
+        r.success = ok;
+        if (!ok) { r.error = "not found"; r.status = CommandResult::Failed; }
+        return r;
+    }
+
     // -- History ------------------------------------------------------------
 
     uint64_t instructionSequence() const override { return seq_; }
@@ -193,12 +251,20 @@ public:
         return instrHistory_;
     }
 
+    size_t memoryHistorySize() const override { return memHistory_.size(); }
+    std::vector<MemoryAccessEvent> memoryHistorySnapshot() const override {
+        return memHistory_;
+    }
+
     size_t ioHistorySize() const override { return ioHistory_.size(); }
     std::vector<IoAccessEvent> ioHistorySnapshot() const override {
         return ioHistory_;
     }
 
-    void clearHistory() override { instrHistory_.clear(); }
+    void clearHistory() override {
+        instrHistory_.clear();
+        memHistory_.clear();
+    }
     void clearIoHistory() override { ioHistory_.clear(); }
 
     // -- Screen -------------------------------------------------------------
@@ -208,9 +274,11 @@ public:
     VramWriteSnapshot vramWriteSnapshot() const override { return {}; }
 
     // -- Palette ------------------------------------------------------------
+
     PaletteSnapshot paletteSnapshot() const override { return {}; }
 
     // -- Sound --------------------------------------------------------------
+
     SoundSnapshot soundSnapshot() const override { return {}; }
     void setMuted(bool) override {}
 
@@ -229,9 +297,100 @@ public:
     // -- Live Activity ------------------------------------------------------
     LiveActivitySnapshot liveActivitySnapshot() const override { return {}; }
 
-    // -- Symbols ------------------------------------------------------------
+    // -- Symbols (read-only) ------------------------------------------------
     SymbolDatabase &symbolDatabase() override { return symbols_; }
     const SymbolDatabase &symbolDatabase() const override { return symbols_; }
+
+    // -- Symbol commands (Stage 5.3.1 — direct in mock) ---------------------
+
+    CommandResult requestCreateFunction(uint16_t addr, const std::string &name) override {
+        bool ok = symbols_.addSymbol(addr, name, SymbolType::Function);
+        CommandResult r; r.success = ok;
+        if (!ok) { r.error = "exists"; r.status = CommandResult::Failed; }
+        return r;
+    }
+
+    CommandResult requestRenameSymbol(uint16_t addr, const std::string &name) override {
+        bool ok = symbols_.renameSymbol(addr, name);
+        CommandResult r; r.success = ok;
+        if (!ok) { r.error = "not found"; r.status = CommandResult::Failed; }
+        return r;
+    }
+
+    CommandResult requestSetComment(uint16_t addr, const std::string &comment) override {
+        bool ok = symbols_.setComment(addr, comment);
+        CommandResult r; r.success = ok;
+        if (!ok) { r.error = "not found"; r.status = CommandResult::Failed; }
+        return r;
+    }
+
+    CommandResult requestRemoveSymbol(uint16_t addr) override {
+        bool ok = symbols_.removeSymbol(addr);
+        CommandResult r; r.success = ok;
+        if (!ok) { r.error = "not found"; r.status = CommandResult::Failed; }
+        return r;
+    }
+
+    CommandResult requestAddLabel(uint16_t addr, const std::string &name) override {
+        bool ok = symbols_.addSymbol(addr, name, SymbolType::Label);
+        CommandResult r; r.success = ok;
+        if (!ok) { r.error = "exists"; r.status = CommandResult::Failed; }
+        return r;
+    }
+
+    // -- Trace execution (Stage 5.3.1) --------------------------------------
+
+    TraceExecutionResult executeTrace(const TraceExecutionParams &params) override {
+        TraceExecutionResult result;
+        result.startSequence = seq_;
+        result.entrySp = cpu_.sp;
+        result.minSp = cpu_.sp;
+        result.maxSp = cpu_.sp;
+        result.exitReason = ExitReason::Unknown;
+
+        for (uint32_t i = 0; i < params.maxInstructions; ++i) {
+            uint16_t pc = cpu_.pc;
+            uint8_t opcode = memory_[pc];
+
+            simulateStep();
+
+            // Track SP bounds
+            if (cpu_.sp < result.minSp) result.minSp = cpu_.sp;
+            if (cpu_.sp > result.maxSp) result.maxSp = cpu_.sp;
+
+            // Check RET
+            if (params.stopOnRet && opcode == 0xC9) {
+                result.exitReason = ExitReason::Ret;
+                result.exitPc = pc;
+                break;
+            }
+
+            // Check HLT
+            if (opcode == 0x76) {
+                result.exitReason = ExitReason::Halt;
+                result.exitPc = pc;
+                break;
+            }
+
+            // Check caller return
+            if (params.stopOnCallerReturn && params.callerReturnAddress != 0
+                && cpu_.pc == params.callerReturnAddress) {
+                result.exitReason = ExitReason::CallerReturn;
+                result.exitPc = pc;
+                break;
+            }
+        }
+
+        if (result.exitReason == ExitReason::Unknown) {
+            result.exitReason = ExitReason::Timeout;
+            result.exitPc = cpu_.pc;
+        }
+
+        result.endSequence = seq_;
+        result.instructionsExecuted = static_cast<uint32_t>(result.endSequence - result.startSequence);
+        result.exitSp = cpu_.sp;
+        return result;
+    }
 
     // -- ROM ----------------------------------------------------------------
     bool loadRom(const std::string &, uint32_t) override { return true; }
@@ -255,6 +414,10 @@ public:
         instrHistory_.push_back(ev);
     }
 
+    void addMemoryEvent(const MemoryAccessEvent &ev) {
+        memHistory_.push_back(ev);
+    }
+
     void addIoEvent(const IoAccessEvent &ev) {
         ioHistory_.push_back(ev);
     }
@@ -271,6 +434,7 @@ private:
 
     uint64_t seq_ = 100;
     std::vector<InstructionEvent> instrHistory_;
+    std::vector<MemoryAccessEvent> memHistory_;
     std::vector<IoAccessEvent> ioHistory_;
 
     ScreenSnapshot screenSnap_;
@@ -281,4 +445,97 @@ private:
     std::vector<uint64_t> writeCount_;
 
     SymbolDatabase symbols_;
+
+    bool halted_ = false;
+    uint32_t runStepCount_ = 0;
+
+    // Simplified 8080 step for mock — handles key instructions
+    void simulateStep() {
+        uint16_t pc = cpu_.pc;
+        uint8_t opcode = memory_[pc];
+        uint8_t len = opcode_info::get_length(opcode);
+
+        // Record instruction event
+        InstructionEvent ie;
+        ie.sequence = seq_;
+        ie.pcBefore = pc;
+        ie.opcode = opcode;
+        ie.length = len;
+        ie.before = cpu_;
+        if (len >= 2) ie.operandBytes[0] = memory_[pc + 1];
+        if (len >= 3) ie.operandBytes[1] = memory_[pc + 2];
+
+        // Simulate key instructions
+        switch (opcode) {
+        case 0xC9: // RET
+            // Pop PC from stack
+            cpu_.pc = memory_[cpu_.sp] | (memory_[cpu_.sp + 1] << 8);
+            cpu_.sp += 2;
+            break;
+
+        case 0xCD: // CALL addr16
+        {
+            uint16_t target = memory_[pc + 1] | (memory_[pc + 2] << 8);
+            cpu_.sp -= 2;
+            memory_[cpu_.sp] = (pc + 3) & 0xFF;
+            memory_[cpu_.sp + 1] = ((pc + 3) >> 8) & 0xFF;
+            cpu_.pc = target;
+            break;
+        }
+
+        case 0xE5: // PUSH HL
+            cpu_.sp -= 2;
+            memory_[cpu_.sp] = cpu_.l;
+            memory_[cpu_.sp + 1] = cpu_.h;
+            cpu_.pc = pc + len;
+            break;
+
+        case 0xE1: // POP HL
+            cpu_.l = memory_[cpu_.sp];
+            cpu_.h = memory_[cpu_.sp + 1];
+            cpu_.sp += 2;
+            cpu_.pc = pc + len;
+            break;
+
+        case 0x76: // HLT
+            halted_ = true;
+            cpu_.pc = pc;  // PC stays at HLT
+            break;
+
+        case 0x77: // MOV M, A — write A to (HL)
+        {
+            uint16_t addr = (static_cast<uint16_t>(cpu_.h) << 8) | cpu_.l;
+            memory_[addr] = cpu_.a;
+            // Record memory write event
+            MemoryAccessEvent mev;
+            mev.instructionSequence = seq_;
+            mev.type = MemoryAccessType::Write;
+            mev.virt = addr;
+            mev.value = cpu_.a;
+            mev.stack = false;
+            memHistory_.push_back(mev);
+            cpu_.pc = pc + len;
+            break;
+        }
+
+        case 0xC3: // JMP addr16
+        {
+            uint16_t target = memory_[pc + 1] | (memory_[pc + 2] << 8);
+            cpu_.pc = target;
+            break;
+        }
+
+        default:
+            // Default: advance PC by instruction length
+            cpu_.pc = pc + len;
+            break;
+        }
+
+        ie.pcAfter = cpu_.pc;
+        ie.after = cpu_;
+        ie.cycles = 4;
+
+        instrHistory_.push_back(ie);
+        seq_++;
+    }
 };

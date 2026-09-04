@@ -260,10 +260,10 @@ static void test_full_scenario()
     CHECK_EQ(0x0005u, (unsigned)trace[2].pcBefore, "trace[2] = 0005 (CALL instr)");
     CHECK_EQ(SUB_ADDR, (unsigned)trace[3].pcBefore, "trace[3] = 0200 (CALL target)");
 
-    // Check VRAM activity — MOV M,A wrote to C000
-    auto activity = api.getVramActivity();
-    CHECK(activity.writeCount.size() > 0xC000, "activity has C000");
-    CHECK(activity.writeCount[0xC000] > 0, "VRAM write at C000 detected");
+    // Check VRAM write — MOV M,A wrote A=0x05 to C000
+    // Verify by reading memory directly (activity counters cleared)
+    uint8_t vramByte = backend.readMemory(0xC000);
+    CHECK_EQ(0x05u, (unsigned)vramByte, "VRAM write at C000 detected");
 
     printf("  Trace entries: %zu\n", trace.size());
 
@@ -279,8 +279,8 @@ static void test_full_scenario()
     CHECK(subCtx.size > 0, "function size > 0");
     CHECK_STR("sub_0200", subCtx.name, "auto-name");
 
-    // Check that it found VRAM writes
-    CHECK(subCtx.vramWrites.size() > 0, "VRAM writes detected in function");
+    // Check that VRAM source is unknown without trace
+    CHECK(subCtx.vramSource == DataSource::Unknown, "VRAM source unknown without trace");
 
     // Analyze the main program at 0x0000
     FunctionContext mainCtx = api.getFunctionContext(MAIN_ADDR);
@@ -299,16 +299,16 @@ static void test_full_scenario()
     printf("\n  --- Phase 5: ANNOTATE ---\n");
 
     // Create function at 0x0200
-    bool created = api.createFunction(SUB_ADDR);
-    CHECK(created, "function created at 0200");
+    auto created = api.createFunction(SUB_ADDR);
+    CHECK(created.success, "function created at 0200");
 
     // Rename it based on our hypothesis (it writes to VRAM)
-    bool renamed = api.renameFunction(SUB_ADDR, "DrawPixel");
-    CHECK(renamed, "renamed to DrawPixel");
+    auto renamed = api.renameFunction(SUB_ADDR, "DrawPixel");
+    CHECK(renamed.success, "renamed to DrawPixel");
 
     // Add a comment
-    bool commented = api.setFunctionComment(SUB_ADDR, "Writes A to VRAM C000");
-    CHECK(commented, "comment set");
+    auto commented = api.setFunctionComment(SUB_ADDR, "Writes A to VRAM C000");
+    CHECK(commented.success, "comment set");
 
     // Create function at 0x0000 (main loop)
     api.createFunction(MAIN_ADDR);
@@ -316,8 +316,8 @@ static void test_full_scenario()
     api.setFunctionComment(MAIN_ADDR, "Main loop: calls DrawPixel 5 times");
 
     // Add a label for VRAM base
-    bool labelOk = api.addLabel(0xC000, "VRAM_BASE");
-    CHECK(labelOk, "VRAM_BASE label created");
+    auto labelR = api.addLabel(0xC000, "VRAM_BASE");
+    CHECK(labelR.success, "VRAM_BASE label created");
 
     // Verify annotations via getFunctionContext
     FunctionContext annotated = api.getFunctionContext(SUB_ADDR);
@@ -357,8 +357,8 @@ static void test_full_scenario()
     backend.clearActivityCounters();
 
     // Set breakpoint at subroutine
-    int bpId = api.setBreakpoint(SUB_ADDR);
-    CHECK(bpId >= 0, "breakpoint set at 0200");
+    auto bpR = api.setBreakpoint(SUB_ADDR);
+    CHECK(bpR.success, "breakpoint set at 0200");
 
     // List breakpoints
     auto bps = api.listBreakpoints();
@@ -379,11 +379,12 @@ static void test_full_scenario()
     CHECK_EQ(0u, (unsigned)bpsAfter.size(), "breakpoints cleared");
 
     // ===================================================================
-    // PHASE 8: Test traceFunction
+    // PHASE 8: Test executeTrace (real execution experiment)
     // ===================================================================
-    printf("\n  --- Phase 8: traceFunction analysis ---\n");
+    printf("\n  --- Phase 8: executeTrace analysis ---\n");
 
-    // Reset and step through the subroutine again to populate trace
+    // Step to function entry (PC should be at 0x0200 after Phase 7 breakpoint)
+    // Reset and step through to reach the subroutine
     backend.reset();
     writeProgram(adapter);
     backend.clearHistory();
@@ -393,22 +394,20 @@ static void test_full_scenario()
     api.step(); // MVI A     at 0003
     api.step(); // CALL 0200 at 0005 → now at 0200
 
-    // Step through subroutine
-    api.step(); // PUSH H    at 0200
-    api.step(); // MVI H     at 0201
-    api.step(); // MVI L     at 0203
-    api.step(); // MOV M     at 0205
-    api.step(); // POP H     at 0206
-    api.step(); // RET       at 0207 → back to 0008
+    // Execute trace directly through backend (no emulation thread needed)
+    IDebugBackend::TraceExecutionParams params;
+    params.startPc = SUB_ADDR;
+    params.maxInstructions = 10000;
+    params.stopOnRet = true;
+    params.stopOnCallerReturn = false;
 
-    // Now analyze the trace for the subroutine
-    TraceResult tr = api.traceFunction(SUB_ADDR);
-    CHECK_EQ(SUB_ADDR, (unsigned)tr.entryPc, "trace entry at 0200");
-    CHECK(tr.executionCount > 0, "subroutine executed");
-    CHECK_EQ(0x0207u, (unsigned)tr.exitPc, "exit at RET (0207)");
+    auto traceExec = backend.executeTrace(params);
+    CHECK(traceExec.instructionsExecuted > 0, "subroutine executed");
+    CHECK(traceExec.exitReason == ExitReason::Ret, "exit reason Ret");
+    CHECK_EQ(0x0207u, (unsigned)traceExec.exitPc, "exit at RET (0207)");
 
-    printf("  Execution count: %lu\n", (unsigned long)tr.executionCount);
-    printf("  SP entry: %04X, SP exit: %04X\n", tr.spEntry, tr.spExit);
+    printf("  Instructions executed: %u\n", traceExec.instructionsExecuted);
+    printf("  SP entry: %04X, SP exit: %04X\n", traceExec.entrySp, traceExec.exitSp);
 
     // ===================================================================
     // Cleanup

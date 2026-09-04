@@ -12,6 +12,7 @@
 
 // Forward declarations for event types (defined in events.h)
 struct InstructionEvent;
+struct MemoryAccessEvent;
 struct IoAccessEvent;
 
 // ---------------------------------------------------------------------------
@@ -115,6 +116,9 @@ public:
     virtual size_t   instructionHistorySize() const = 0;
     virtual std::vector<InstructionEvent> instructionHistorySnapshot() const = 0;
 
+    virtual size_t   memoryHistorySize() const = 0;
+    virtual std::vector<MemoryAccessEvent> memoryHistorySnapshot() const = 0;
+
     virtual size_t   ioHistorySize() const = 0;
     virtual std::vector<IoAccessEvent> ioHistorySnapshot() const = 0;
 
@@ -156,10 +160,50 @@ public:
 
     virtual LiveActivitySnapshot liveActivitySnapshot() const = 0;
 
-    // -- Symbols ------------------------------------------------------------
+    // -- Symbols (read-only access for analysis) ----------------------------
 
     virtual SymbolDatabase       &symbolDatabase() = 0;
     virtual const SymbolDatabase &symbolDatabase() const = 0;
+
+    // -- Symbol commands (Stage 5.3.1 — through command protocol) -----------
+
+    virtual CommandResult requestCreateFunction(uint16_t addr, const std::string &name) = 0;
+    virtual CommandResult requestRenameSymbol(uint16_t addr, const std::string &name) = 0;
+    virtual CommandResult requestSetComment(uint16_t addr, const std::string &comment) = 0;
+    virtual CommandResult requestRemoveSymbol(uint16_t addr) = 0;
+    virtual CommandResult requestAddLabel(uint16_t addr, const std::string &name) = 0;
+
+    // -- Breakpoint commands (Stage 5.3.1 — through command protocol) -------
+
+    virtual CommandResult requestAddBreakpoint(uint16_t addr) = 0;
+    virtual CommandResult requestRemoveBreakpoint(uint16_t addr) = 0;
+    virtual CommandResult requestSetBreakpointEnabled(uint16_t addr, bool enabled) = 0;
+
+    // -- Trace execution (Stage 5.3.1 — real execution experiment) ----------
+
+    struct TraceExecutionParams
+    {
+        uint16_t startPc = 0;
+        uint32_t maxInstructions = 10000;
+        bool stopOnRet = true;
+        bool stopOnCallerReturn = true;
+        uint16_t callerReturnAddress = 0;
+    };
+
+    struct TraceExecutionResult
+    {
+        uint64_t startSequence = 0;
+        uint64_t endSequence = 0;
+        uint32_t instructionsExecuted = 0;
+        uint16_t exitPc = 0;
+        uint16_t entrySp = 0;
+        uint16_t exitSp = 0;
+        uint16_t minSp = 0;
+        uint16_t maxSp = 0;
+        ExitReason exitReason = ExitReason::Unknown;
+    };
+
+    virtual TraceExecutionResult executeTrace(const TraceExecutionParams &params) = 0;
 
     // -- ROM ----------------------------------------------------------------
 

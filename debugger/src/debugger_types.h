@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <string>
 #include <vector>
 
 // ---------------------------------------------------------------------------
@@ -126,4 +127,35 @@ struct DebuggerBreakpoint
 {
     uint16_t address;
     bool     enabled;
+};
+
+// ---------------------------------------------------------------------------
+// Command result (Stage 5.3.1)
+//
+// Every state-changing Backend command returns this.
+// ---------------------------------------------------------------------------
+
+struct CommandResult
+{
+    bool success = false;
+    std::string error;
+
+    enum Status { Completed, Failed, Timeout };
+    Status status = Completed;
+};
+
+// ---------------------------------------------------------------------------
+// Exit reason (Stage 5.3.1)
+//
+// How a trace execution ended.  Never present a heuristic as fact.
+// ---------------------------------------------------------------------------
+
+enum class ExitReason
+{
+    Ret,           // RET instruction executed
+    CallerReturn,  // PC returned to caller address
+    Timeout,       // max instruction count reached
+    Breakpoint,    // hit a breakpoint
+    Halt,          // HLT instruction
+    Unknown
 };

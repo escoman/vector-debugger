@@ -1,26 +1,80 @@
 #pragma once
 
+#include "debugger_types.h"
+
 #include <chrono>
 #include <cstdint>
 #include <string>
 #include <vector>
 
 // ---------------------------------------------------------------------------
-// Agent Types — Stage 5.3
+// Agent Types — Stage 5.3.1
 //
 // Data structures used by the Agent API for high-level analysis results,
 // annotations, and operation logging.
 //
+// CommandResult and ExitReason are defined in debugger_types.h (shared
+// with IDebugBackend).
+//
 // No dependency on Board, Memory, CPU, IO, ImGui, or SDL.
-// Only depends on standard library types.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Trace-attributed access types (Sections 11, 12, 13)
+//
+// Each access is tied to the PC of the instruction that caused it.
+// These are facts from a concrete execution experiment, not global counters.
+// ---------------------------------------------------------------------------
+
+struct TraceMemoryAccess
+{
+    uint16_t pc = 0;
+    uint16_t address = 0;
+    enum Type { Read, Write, Fetch };
+    Type type = Read;
+    uint8_t value = 0;
+};
+
+struct TraceIoAccess
+{
+    uint16_t pc = 0;
+    uint8_t port = 0;
+    bool isOutput = false;
+    uint8_t value = 0;
+};
+
+struct TraceVramWrite
+{
+    uint16_t pc = 0;
+    uint16_t address = 0;
+    uint8_t value = 0;
+};
+
+// ---------------------------------------------------------------------------
+// DataSource — provenance of a piece of information (Sections 14, 15)
+//
+// Every dynamic fact must have a source.  Heuristic/incomplete data must
+// NOT be presented as confirmed debugger facts.
+// ---------------------------------------------------------------------------
+
+enum class DataSource
+{
+    Disassembler,
+    SymbolDatabase,
+    XrefDatabase,
+    Trace,
+    Unknown
+};
 
 // ---------------------------------------------------------------------------
 // FunctionContext — result of getFunctionContext()
 //
 // Contains all available information about a function at a given address:
 // disassembled instructions, cross-references, memory/IO/VRAM access
-// statistics, and stack behavior analysis.
+// from trace, and stack behavior analysis.
+//
+// Every dynamic fact has a source (DataSource).  If trace data is
+// unavailable, dynamic fields are empty and source is Unknown.
 // ---------------------------------------------------------------------------
 
 struct FunctionContext
@@ -30,7 +84,7 @@ struct FunctionContext
     std::string name;             // from SymbolDatabase or auto-name
     std::string comment;
 
-    // -- Disassembled instruction -------------------------------------------
+    // -- Disassembled instructions ------------------------------------------
 
     struct Instruction
     {
@@ -41,68 +95,85 @@ struct FunctionContext
     };
     std::vector<Instruction> instructions;
 
+    // Whether the function boundary is heuristic (linear sweep without
+    // full CFG).  True when the boundary was not confirmed by trace.
+    bool isHeuristic = true;
+
     // -- Cross-references ---------------------------------------------------
 
     std::vector<uint16_t> callers;    // addresses that CALL this function
     std::vector<uint16_t> callees;    // addresses this function CALLs
 
-    // -- Memory access statistics -------------------------------------------
+    // -- Memory access (from trace) -----------------------------------------
 
-    struct MemoryAccess
-    {
-        uint16_t address = 0;
-        uint64_t count = 0;
-    };
-    std::vector<MemoryAccess> memoryReads;
-    std::vector<MemoryAccess> memoryWrites;
+    std::vector<TraceMemoryAccess> memoryReads;
+    std::vector<TraceMemoryAccess> memoryWrites;
+    DataSource memorySource = DataSource::Unknown;
 
-    // -- I/O access statistics ----------------------------------------------
+    // -- I/O access (from trace) --------------------------------------------
 
-    struct IoAccess
-    {
-        uint8_t port = 0;
-        uint64_t count = 0;
-        bool isOutput = false;
-    };
-    std::vector<IoAccess> ioAccesses;
+    std::vector<TraceIoAccess> ioAccesses;
+    DataSource ioSource = DataSource::Unknown;
 
-    // -- VRAM write statistics ----------------------------------------------
+    // -- VRAM writes (from trace) -------------------------------------------
 
-    struct VramWrite
-    {
-        uint16_t vramAddr = 0;
-        uint64_t count = 0;
-    };
-    std::vector<VramWrite> vramWrites;
+    std::vector<TraceVramWrite> vramWrites;
+    DataSource vramSource = DataSource::Unknown;
 
     // -- Stack behavior -----------------------------------------------------
 
     enum StackBehavior { Balanced, Unbalanced, Unknown };
     StackBehavior stackBehavior = Unknown;
+
+    uint16_t entrySp = 0;
+    uint16_t exitSp = 0;
+    uint16_t minSp = 0;
+    uint16_t maxSp = 0;
+    int callDepth = 0;
 };
 
 // ---------------------------------------------------------------------------
 // TraceResult — result of traceFunction()
 //
-// Contains dynamic execution data for a single function invocation:
-// entry/exit PCs, execution count, called functions, and resource access.
+// Contains dynamic execution data from a REAL execution experiment:
+// entry/exit PCs, executed addresses, attributed memory/IO/VRAM events,
+// stack tracking, and exit reason.
 // ---------------------------------------------------------------------------
 
 struct TraceResult
 {
     uint16_t entryPc = 0;
     uint16_t exitPc = 0;
-    uint64_t executionCount = 0;
 
+    uint32_t instructionCount = 0;
+    uint32_t executionCount = 0;
+
+    // All PCs executed during the trace (in order, with repeats)
+    std::vector<uint16_t> executedPcs;
+
+    // Attributed memory accesses (from the trace experiment)
+    std::vector<TraceMemoryAccess> memoryReads;
+    std::vector<TraceMemoryAccess> memoryWrites;
+
+    // Attributed I/O accesses
+    std::vector<TraceIoAccess> ioReads;
+    std::vector<TraceIoAccess> ioWrites;
+
+    // Attributed VRAM writes
+    std::vector<TraceVramWrite> vramWrites;
+
+    // Functions called during the trace
     std::vector<uint16_t> calledFunctions;
 
-    uint16_t spEntry = 0;
-    uint16_t spExit = 0;
+    // Stack tracking
+    uint16_t entrySp = 0;
+    uint16_t exitSp = 0;
+    uint16_t minSp = 0;
+    uint16_t maxSp = 0;
+    int callDepth = 0;
 
-    std::vector<FunctionContext::MemoryAccess> memoryReads;
-    std::vector<FunctionContext::MemoryAccess> memoryWrites;
-    std::vector<FunctionContext::IoAccess> ioAccesses;
-    std::vector<FunctionContext::VramWrite> vramWrites;
+    // How the trace ended
+    ExitReason exitReason = ExitReason::Unknown;
 };
 
 // ---------------------------------------------------------------------------
@@ -135,4 +206,6 @@ struct AgentLogEntry
     std::string arguments;
     std::string result;
     double executionTimeMs = 0;
+    bool success = true;
+    std::string error;
 };

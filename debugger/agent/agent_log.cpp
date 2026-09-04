@@ -20,6 +20,26 @@ void AgentLog::record(const std::string &tool,
     entries_.push_back(std::move(entry));
 }
 
+void AgentLog::record(const std::string &tool,
+                      const std::string &args,
+                      const std::string &result,
+                      double timeMs,
+                      bool success,
+                      const std::string &error)
+{
+    AgentLogEntry entry;
+    entry.timestamp = std::chrono::steady_clock::now();
+    entry.tool = tool;
+    entry.arguments = args;
+    entry.result = result;
+    entry.executionTimeMs = timeMs;
+    entry.success = success;
+    entry.error = error;
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    entries_.push_back(std::move(entry));
+}
+
 std::vector<AgentLogEntry> AgentLog::entries() const
 {
     std::lock_guard<std::mutex> lock(mutex_);

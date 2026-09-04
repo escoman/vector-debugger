@@ -7,12 +7,15 @@
 #include <set>
 #include <sstream>
 #include <iomanip>
+#include <thread>
 
 // ---------------------------------------------------------------------------
-// AgentApi implementation — Stage 5.3
+// AgentApi implementation — Stage 5.3.1
 //
 // All operations delegate to IDebugBackend.  No direct access to Board,
 // Memory, CPU, IO, TV, or any emulator internals.
+//
+// State-changing operations go through the Backend command protocol.
 // ---------------------------------------------------------------------------
 
 AgentApi::AgentApi(IDebugBackend &backend)
@@ -115,32 +118,46 @@ bool AgentApi::writeMemory(uint16_t address, const std::vector<uint8_t> &data)
 }
 
 // ---------------------------------------------------------------------------
-// Breakpoints
+// Breakpoints (through command protocol)
 // ---------------------------------------------------------------------------
 
-int AgentApi::setBreakpoint(uint16_t address)
+CommandResult AgentApi::setBreakpoint(uint16_t address)
 {
     auto t0 = std::chrono::steady_clock::now();
-    int id = backend_.addBreakpoint(address);
+    auto result = backend_.requestAddBreakpoint(address);
 
     std::ostringstream oss;
     oss << "addr=" << std::hex << address;
     log_.record("setBreakpoint", oss.str(),
-                id >= 0 ? ("id=" + std::to_string(id)) : "duplicate",
-                elapsedMs(t0));
-    return id;
+                result.success ? "ok" : result.error, elapsedMs(t0),
+                result.success, result.error);
+    return result;
 }
 
-bool AgentApi::clearBreakpoint(uint16_t address)
+CommandResult AgentApi::clearBreakpoint(uint16_t address)
 {
     auto t0 = std::chrono::steady_clock::now();
-    bool ok = backend_.removeBreakpoint(address);
+    auto result = backend_.requestRemoveBreakpoint(address);
 
     std::ostringstream oss;
     oss << "addr=" << std::hex << address;
-    log_.record("clearBreakpoint", oss.str(), ok ? "removed" : "not found",
-                elapsedMs(t0));
-    return ok;
+    log_.record("clearBreakpoint", oss.str(),
+                result.success ? "removed" : result.error, elapsedMs(t0),
+                result.success, result.error);
+    return result;
+}
+
+CommandResult AgentApi::setBreakpointEnabled(uint16_t address, bool enabled)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    auto result = backend_.requestSetBreakpointEnabled(address, enabled);
+
+    std::ostringstream oss;
+    oss << "addr=" << std::hex << address << " enabled=" << enabled;
+    log_.record("setBreakpointEnabled", oss.str(),
+                result.success ? "ok" : result.error, elapsedMs(t0),
+                result.success, result.error);
+    return result;
 }
 
 std::vector<DebuggerBreakpoint> AgentApi::listBreakpoints()
@@ -154,7 +171,7 @@ std::vector<DebuggerBreakpoint> AgentApi::listBreakpoints()
 }
 
 // ---------------------------------------------------------------------------
-// Trace / I/O / VRAM
+// Trace / I/O
 // ---------------------------------------------------------------------------
 
 std::vector<InstructionEvent> AgentApi::getExecutionTrace(size_t maxEntries)
@@ -162,7 +179,6 @@ std::vector<InstructionEvent> AgentApi::getExecutionTrace(size_t maxEntries)
     auto t0 = std::chrono::steady_clock::now();
     auto all = backend_.instructionHistorySnapshot();
 
-    // Return the last maxEntries entries
     if (all.size() > maxEntries) {
         all.erase(all.begin(), all.end() - static_cast<ptrdiff_t>(maxEntries));
     }
@@ -190,14 +206,6 @@ std::vector<IoAccessEvent> AgentApi::getIoTrace(size_t maxEntries)
     return all;
 }
 
-IDebugBackend::ActivitySnapshot AgentApi::getVramActivity()
-{
-    auto t0 = std::chrono::steady_clock::now();
-    auto snap = backend_.activitySnapshot();
-    log_.record("getVramActivity", "", "snapshot", elapsedMs(t0));
-    return snap;
-}
-
 // ---------------------------------------------------------------------------
 // Screen
 // ---------------------------------------------------------------------------
@@ -214,104 +222,106 @@ IDebugBackend::ScreenSnapshot AgentApi::getScreen()
 }
 
 // ---------------------------------------------------------------------------
-// Annotations — delegate to SymbolDatabase
+// Annotations — through Backend command protocol
 // ---------------------------------------------------------------------------
 
-bool AgentApi::createFunction(uint16_t address, uint16_t /*size*/)
+CommandResult AgentApi::createFunction(uint16_t address, uint16_t /*size*/)
 {
     auto t0 = std::chrono::steady_clock::now();
-    auto &db = backend_.symbolDatabase();
     std::string name = SymbolDatabase::autoName(address);
-    bool ok = db.addSymbol(address, name, SymbolType::Function);
+    auto result = backend_.requestCreateFunction(address, name);
 
     std::ostringstream oss;
     oss << "addr=" << std::hex << address << " name=" << name;
-    log_.record("createFunction", oss.str(), ok ? "created" : "exists",
-                elapsedMs(t0));
-    return ok;
+    log_.record("createFunction", oss.str(),
+                result.success ? "created" : result.error, elapsedMs(t0),
+                result.success, result.error);
+    return result;
 }
 
-bool AgentApi::renameFunction(uint16_t address, const std::string &name)
+CommandResult AgentApi::renameFunction(uint16_t address, const std::string &name)
 {
     auto t0 = std::chrono::steady_clock::now();
-    bool ok = backend_.symbolDatabase().renameSymbol(address, name);
+    auto result = backend_.requestRenameSymbol(address, name);
 
     std::ostringstream oss;
     oss << "addr=" << std::hex << address << " name=" << name;
-    log_.record("renameFunction", oss.str(), ok ? "renamed" : "not found",
-                elapsedMs(t0));
-    return ok;
+    log_.record("renameFunction", oss.str(),
+                result.success ? "renamed" : result.error, elapsedMs(t0),
+                result.success, result.error);
+    return result;
 }
 
-bool AgentApi::setFunctionComment(uint16_t address, const std::string &comment)
+CommandResult AgentApi::setFunctionComment(uint16_t address, const std::string &comment)
 {
     auto t0 = std::chrono::steady_clock::now();
-    bool ok = backend_.symbolDatabase().setComment(address, comment);
+    auto result = backend_.requestSetComment(address, comment);
 
     std::ostringstream oss;
     oss << "addr=" << std::hex << address;
     log_.record("setFunctionComment", oss.str(),
-                ok ? "ok" : "symbol not found", elapsedMs(t0));
-    return ok;
+                result.success ? "ok" : result.error, elapsedMs(t0),
+                result.success, result.error);
+    return result;
 }
 
-bool AgentApi::deleteFunction(uint16_t address)
+CommandResult AgentApi::deleteFunction(uint16_t address)
 {
     auto t0 = std::chrono::steady_clock::now();
-    bool ok = backend_.symbolDatabase().removeSymbol(address);
+    auto result = backend_.requestRemoveSymbol(address);
 
     std::ostringstream oss;
     oss << "addr=" << std::hex << address;
-    log_.record("deleteFunction", oss.str(), ok ? "deleted" : "not found",
-                elapsedMs(t0));
-    return ok;
+    log_.record("deleteFunction", oss.str(),
+                result.success ? "deleted" : result.error, elapsedMs(t0),
+                result.success, result.error);
+    return result;
 }
 
-bool AgentApi::addLabel(uint16_t address, const std::string &name)
+CommandResult AgentApi::addLabel(uint16_t address, const std::string &name)
 {
     auto t0 = std::chrono::steady_clock::now();
-    bool ok = backend_.symbolDatabase().addSymbol(address, name, SymbolType::Label);
+    auto result = backend_.requestAddLabel(address, name);
 
     std::ostringstream oss;
     oss << "addr=" << std::hex << address << " name=" << name;
-    log_.record("addLabel", oss.str(), ok ? "created" : "exists",
-                elapsedMs(t0));
-    return ok;
+    log_.record("addLabel", oss.str(),
+                result.success ? "created" : result.error, elapsedMs(t0),
+                result.success, result.error);
+    return result;
 }
 
-bool AgentApi::setComment(uint16_t address, const std::string &comment)
+CommandResult AgentApi::setComment(uint16_t address, const std::string &comment)
 {
-    // setComment works like setFunctionComment — delegates to SymbolDatabase
     return setFunctionComment(address, comment);
 }
 
-bool AgentApi::applyAnnotation(const Annotation &annotation)
+CommandResult AgentApi::applyAnnotation(const Annotation &annotation)
 {
     auto t0 = std::chrono::steady_clock::now();
-    bool ok = false;
+    CommandResult result;
 
     switch (annotation.type) {
     case Annotation::Function:
-        ok = createFunction(annotation.address);
-        if (!annotation.name.empty()) {
-            renameFunction(annotation.address, annotation.name);
+        result = createFunction(annotation.address);
+        if (result.success && !annotation.name.empty()) {
+            result = renameFunction(annotation.address, annotation.name);
         }
-        if (!annotation.comment.empty()) {
-            setFunctionComment(annotation.address, annotation.comment);
+        if (result.success && !annotation.comment.empty()) {
+            result = setFunctionComment(annotation.address, annotation.comment);
         }
-        ok = true;
         break;
 
     case Annotation::Label:
-        ok = addLabel(annotation.address, annotation.name);
+        result = addLabel(annotation.address, annotation.name);
         break;
 
     case Annotation::Comment:
-        ok = setComment(annotation.address, annotation.comment);
+        result = setComment(annotation.address, annotation.comment);
         break;
 
     case Annotation::Rename:
-        ok = renameFunction(annotation.address, annotation.name);
+        result = renameFunction(annotation.address, annotation.name);
         break;
     }
 
@@ -320,9 +330,10 @@ bool AgentApi::applyAnnotation(const Annotation &annotation)
         << " addr=" << std::hex << annotation.address
         << " confidence=" << std::fixed << std::setprecision(2)
         << annotation.confidence;
-    log_.record("applyAnnotation", oss.str(), ok ? "applied" : "failed",
-                elapsedMs(t0));
-    return ok;
+    log_.record("applyAnnotation", oss.str(),
+                result.success ? "applied" : result.error, elapsedMs(t0),
+                result.success, result.error);
+    return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -356,6 +367,7 @@ void AgentApi::clearLog()
 //
 // Linear disassembly starting at 'address' until:
 //   - RET (0xC9) or HLT (0x76) instruction
+//   - Unconditional JMP (0xC3) — code after is unreachable (Section 16)
 //   - A known symbol is encountered (other than the start address)
 //   - Maximum function size (4096 bytes) reached
 // ---------------------------------------------------------------------------
@@ -395,6 +407,11 @@ AgentApi::disassembleFunction(uint16_t address)
             break;
         }
 
+        // Stop after unconditional JMP (0xC3) — code after is unreachable
+        if (di.opcode == 0xC3) {
+            break;
+        }
+
         // Advance PC
         uint16_t nextPc = pc + di.length;
         if (nextPc <= pc) break;  // overflow guard
@@ -419,115 +436,86 @@ uint16_t AgentApi::estimateFunctionSize(uint16_t address)
 }
 
 // ---------------------------------------------------------------------------
-// Internal: analyzeStackBalance
+// Internal: collectTraceEvents
 //
-// Scan instruction history for entries within [funcStart, funcEnd).
-// Compare SP at function entry vs SP at RET/exit.
+// Collect memory/IO/VRAM events from history that fall within the
+// instruction sequence range [startSeq, endSeq).
+//
+// Memory events have instructionSequence — the sequence number of the
+// instruction that caused the access.  IO events similarly.
+//
+// For VRAM: writes to 0xC000-0xC0FF are memory writes, so they appear
+// in memHistory.  We filter them out separately.
 // ---------------------------------------------------------------------------
 
-FunctionContext::StackBehavior
-AgentApi::analyzeStackBalance(uint16_t funcStart, uint16_t funcEnd)
+void AgentApi::collectTraceEvents(
+    uint64_t startSeq, uint64_t endSeq,
+    std::vector<TraceMemoryAccess> &memReads,
+    std::vector<TraceMemoryAccess> &memWrites,
+    std::vector<TraceIoAccess> &ioReads,
+    std::vector<TraceIoAccess> &ioWrites,
+    std::vector<TraceVramWrite> &vramWrites)
 {
-    auto trace = backend_.instructionHistorySnapshot();
+    // --- Memory events ---
+    auto memHistory = backend_.memoryHistorySnapshot();
+    for (const auto &ev : memHistory) {
+        if (ev.instructionSequence < startSeq || ev.instructionSequence >= endSeq)
+            continue;
 
-    uint16_t spEntry = 0;
-    bool foundEntry = false;
-    bool foundExit = false;
-    bool balanced = true;
+        // We need the PC of the instruction that caused this access.
+        // The instruction history has pcBefore for each sequence number.
+        // For efficiency, we look it up from the instruction trace.
+        // But we don't have a direct mapping here — we'll use the
+        // instruction history to find the PC.
+        //
+        // Actually, MemoryAccessEvent doesn't have PC directly.
+        // The PC is the instruction at instructionSequence.
+        // We'll find it from instructionHistorySnapshot.
+        // (This is done in traceFunction where we have the instr trace.)
+        //
+        // For now, record with address and type.  PC attribution
+        // requires cross-referencing with instruction history.
 
-    for (const auto &ev : trace) {
-        // Look for instructions within the function range
-        if (ev.pcBefore < funcStart || ev.pcBefore >= funcEnd) continue;
-
-        // Check if this is a CALL to the function (entry point)
-        if (ev.pcBefore == funcStart && !foundEntry) {
-            spEntry = ev.before.sp;
-            foundEntry = true;
-        }
-
-        // Check for RET instruction within the function
-        if (ev.opcode == 0xC9) {  // RET
-            foundExit = true;
-            if (foundEntry && ev.after.sp != spEntry) {
-                balanced = false;
+        if (ev.type == MemoryAccessType::Write) {
+            // Check if VRAM (0xC000 - 0xC0FF)
+            if (ev.virt >= 0xC000 && ev.virt < 0xC100) {
+                TraceVramWrite vw;
+                vw.address = ev.virt;
+                vw.value = ev.value;
+                // PC will be filled by the caller
+                vramWrites.push_back(vw);
+            } else {
+                TraceMemoryAccess ma;
+                ma.address = ev.virt;
+                ma.type = TraceMemoryAccess::Write;
+                ma.value = ev.value;
+                memWrites.push_back(ma);
             }
+        } else if (ev.type == MemoryAccessType::Read) {
+            TraceMemoryAccess ma;
+            ma.address = ev.virt;
+            ma.type = TraceMemoryAccess::Read;
+            ma.value = ev.value;
+            memReads.push_back(ma);
         }
+        // Skip Fetch events (opcode fetches are not data accesses)
     }
 
-    if (!foundEntry || !foundExit) {
-        return FunctionContext::Unknown;
-    }
-    return balanced ? FunctionContext::Balanced : FunctionContext::Unbalanced;
-}
-
-// ---------------------------------------------------------------------------
-// Internal: collectMemoryAccess
-// ---------------------------------------------------------------------------
-
-void AgentApi::collectMemoryAccess(
-    uint16_t start, uint16_t end,
-    const IDebugBackend::ActivitySnapshot &activity,
-    std::vector<FunctionContext::MemoryAccess> &reads,
-    std::vector<FunctionContext::MemoryAccess> &writes)
-{
-    // activity vectors are 65536 entries (per-address)
-    for (uint32_t addr = start; addr <= end && addr < 0x10000; ++addr) {
-        if (addr < activity.readCount.size() && activity.readCount[addr] > 0) {
-            reads.push_back({static_cast<uint16_t>(addr), activity.readCount[addr]});
-        }
-        if (addr < activity.writeCount.size() && activity.writeCount[addr] > 0) {
-            writes.push_back({static_cast<uint16_t>(addr), activity.writeCount[addr]});
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Internal: collectIoAccess
-// ---------------------------------------------------------------------------
-
-void AgentApi::collectIoAccess(
-    uint16_t funcStart, uint16_t funcEnd,
-    const std::vector<IoAccessEvent> &ioHistory,
-    std::vector<FunctionContext::IoAccess> &ioAccesses)
-{
-    // Count I/O accesses that occurred while executing within the function.
-    // We approximate by checking if the instruction sequence falls within
-    // the range of sequences where PC was in the function.
-    //
-    // Simpler approach: collect all unique ports accessed, with counts.
-    // (A more precise version would cross-reference instruction sequences.)
-
-    std::map<uint16_t, FunctionContext::IoAccess> portMap;
-
+    // --- IO events ---
+    auto ioHistory = backend_.ioHistorySnapshot();
     for (const auto &ev : ioHistory) {
-        uint16_t key = (static_cast<uint16_t>(ev.port) << 8) |
-                       (ev.type == IoAccessType::Out ? 1 : 0);
-        auto &entry = portMap[key];
-        entry.port = ev.port;
-        entry.isOutput = (ev.type == IoAccessType::Out);
-        entry.count++;
-    }
+        if (ev.instructionSequence < startSeq || ev.instructionSequence >= endSeq)
+            continue;
 
-    for (auto &kv : portMap) {
-        ioAccesses.push_back(kv.second);
-    }
-}
+        TraceIoAccess io;
+        io.port = ev.port;
+        io.isOutput = (ev.type == IoAccessType::Out);
+        io.value = ev.value;
 
-// ---------------------------------------------------------------------------
-// Internal: collectVramWrites
-// ---------------------------------------------------------------------------
-
-void AgentApi::collectVramWrites(
-    const IDebugBackend::ActivitySnapshot &activity,
-    std::vector<FunctionContext::VramWrite> &vramWrites)
-{
-    // VRAM is at 0xC000 - 0xC0FF (256 bytes)
-    for (uint32_t addr = 0xC000; addr <= 0xC0FF; ++addr) {
-        if (addr < activity.writeCount.size() && activity.writeCount[addr] > 0) {
-            vramWrites.push_back({
-                static_cast<uint16_t>(addr),
-                activity.writeCount[addr]
-            });
+        if (ev.type == IoAccessType::Out) {
+            ioWrites.push_back(io);
+        } else {
+            ioReads.push_back(io);
         }
     }
 }
@@ -542,7 +530,7 @@ FunctionContext AgentApi::getFunctionContext(uint16_t address)
     FunctionContext ctx;
     ctx.address = address;
 
-    // 1. Name and comment from SymbolDatabase
+    // 1. Name and comment from SymbolDatabase (read-only)
     const auto &db = backend_.symbolDatabase();
     const DebugSymbol *sym = db.findSymbol(address);
     if (sym) {
@@ -552,7 +540,7 @@ FunctionContext AgentApi::getFunctionContext(uint16_t address)
         ctx.name = SymbolDatabase::autoName(address);
     }
 
-    // 2. Disassemble function
+    // 2. Disassemble function (static — from Disassembler)
     ctx.instructions = disassembleFunction(address);
     if (!ctx.instructions.empty()) {
         auto &last = ctx.instructions.back();
@@ -563,7 +551,6 @@ FunctionContext AgentApi::getFunctionContext(uint16_t address)
     // 3. Callers — xrefs TO this address (filter for CALL instructions)
     auto xrefs = db.xrefsTo(address);
     for (const auto &xr : xrefs) {
-        // Check if the xref source is a CALL instruction
         uint8_t opcode = backend_.readMemory(xr.from);
         bool isCall = (opcode == 0xCD ||  // CALL
                        opcode == 0xC4 || opcode == 0xCC ||
@@ -599,21 +586,14 @@ FunctionContext AgentApi::getFunctionContext(uint16_t address)
         }
     }
 
-    // 5. Memory access from activity snapshot
-    uint16_t funcEnd = address + ctx.size;
-    auto activity = backend_.activitySnapshot();
-    collectMemoryAccess(address, funcEnd, activity,
-                        ctx.memoryReads, ctx.memoryWrites);
-
-    // 6. I/O accesses
-    auto ioHistory = backend_.ioHistorySnapshot();
-    collectIoAccess(address, funcEnd, ioHistory, ctx.ioAccesses);
-
-    // 7. VRAM writes
-    collectVramWrites(activity, ctx.vramWrites);
-
-    // 8. Stack behavior
-    ctx.stackBehavior = analyzeStackBalance(address, funcEnd);
+    // 5. Dynamic data: no trace available by default
+    //    Memory/IO/VRAM fields remain empty with DataSource::Unknown.
+    //    If a trace was previously run, the caller can populate these
+    //    from the TraceResult.
+    ctx.memorySource = DataSource::Unknown;
+    ctx.ioSource = DataSource::Unknown;
+    ctx.vramSource = DataSource::Unknown;
+    ctx.stackBehavior = FunctionContext::Unknown;
 
     std::ostringstream oss;
     oss << "addr=" << std::hex << address
@@ -627,7 +607,13 @@ FunctionContext AgentApi::getFunctionContext(uint16_t address)
 }
 
 // ---------------------------------------------------------------------------
-// High-level: traceFunction (simplified — analyzes existing trace history)
+// High-level: traceFunction — REAL execution experiment (Section 8)
+//
+// 1. Set temporary breakpoint at function entry
+// 2. Run until breakpoint hit (function entry)
+// 3. Execute trace (step through function, collect events)
+// 4. Remove temporary breakpoint
+// 5. Build TraceResult with attributed events
 // ---------------------------------------------------------------------------
 
 TraceResult AgentApi::traceFunction(uint16_t address)
@@ -636,68 +622,189 @@ TraceResult AgentApi::traceFunction(uint16_t address)
     TraceResult result;
     result.entryPc = address;
 
-    // Determine function range
-    uint16_t funcSize = estimateFunctionSize(address);
-    uint16_t funcEnd = address + funcSize;
+    // 1. Set temporary breakpoint at function entry
+    auto bpResult = backend_.requestAddBreakpoint(address);
+    if (!bpResult.success) {
+        // Breakpoint already exists — that's OK for tracing
+        // (the function address already has a breakpoint)
+    }
 
-    // Analyze existing instruction history
-    auto trace = backend_.instructionHistorySnapshot();
+    // 2. Run until breakpoint hit
+    backend_.requestRun();
 
-    std::set<uint16_t> calledSet;
-    std::map<uint16_t, uint64_t> readMap;
-    std::map<uint16_t, uint64_t> writeMap;
-    uint64_t execCount = 0;
+    // Wait until the backend is paused (breakpoint hit)
+    // In test scenarios (no emulation thread), requestRun in mock
+    // should simulate running to the breakpoint.
+    // In real debugger, the emulation thread processes requestRun
+    // and stops at the breakpoint.
+    int waitLimit = 1000;
+    while (!backend_.isPaused() && waitLimit-- > 0) {
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
 
-    for (const auto &ev : trace) {
-        // Count executions at function entry
-        if (ev.pcBefore == address) {
-            execCount++;
-            if (result.spEntry == 0) {
-                result.spEntry = ev.before.sp;
-            }
-        }
+    if (!backend_.isPaused()) {
+        // Failed to reach function entry
+        backend_.requestRemoveBreakpoint(address);
+        result.exitReason = ExitReason::Timeout;
+        log_.record("traceFunction", "addr=" + std::to_string(address),
+                     "failed to reach function entry", elapsedMs(t0));
+        return result;
+    }
 
-        // Instructions within the function range
-        if (ev.pcBefore >= address && ev.pcBefore < funcEnd) {
-            // Track SP at exit (RET)
-            if (ev.opcode == 0xC9) {  // RET
-                result.exitPc = ev.pcBefore;
-                result.spExit = ev.after.sp;
-            }
+    // 3. Execute trace — step through function collecting events
+    IDebugBackend::TraceExecutionParams params;
+    params.startPc = address;
+    params.maxInstructions = 10000;
+    params.stopOnRet = true;
+    params.stopOnCallerReturn = false;
 
-            // Track CALL targets
-            uint8_t opcode = ev.opcode;
-            bool isCall = (opcode == 0xCD ||
-                           opcode == 0xC4 || opcode == 0xCC ||
-                           opcode == 0xD4 || opcode == 0xDC ||
-                           opcode == 0xE4 || opcode == 0xEC ||
-                           opcode == 0xF4 || opcode == 0xFC);
-            if (isCall && ev.length == 3) {
-                uint16_t target = static_cast<uint16_t>(
-                    ev.operandBytes[0] | (ev.operandBytes[1] << 8));
-                calledSet.insert(target);
-            }
+    auto traceExec = backend_.executeTrace(params);
+
+    // 4. Remove temporary breakpoint
+    backend_.requestRemoveBreakpoint(address);
+
+    // 5. Build TraceResult from execution data
+    result.exitPc = traceExec.exitPc;
+    result.entrySp = traceExec.entrySp;
+    result.exitSp = traceExec.exitSp;
+    result.minSp = traceExec.minSp;
+    result.maxSp = traceExec.maxSp;
+    result.instructionCount = traceExec.instructionsExecuted;
+    result.executionCount = 1;  // single trace invocation
+    result.exitReason = traceExec.exitReason;
+
+    // 6. Collect events from history using sequence range
+    auto instrTrace = backend_.instructionHistorySnapshot();
+    auto memHistory = backend_.memoryHistorySnapshot();
+    auto ioHistory = backend_.ioHistorySnapshot();
+
+    // Build PC lookup: sequence → pcBefore
+    std::map<uint64_t, uint16_t> seqToPc;
+    for (const auto &ie : instrTrace) {
+        if (ie.sequence >= traceExec.startSequence &&
+            ie.sequence < traceExec.endSequence) {
+            seqToPc[ie.sequence] = ie.pcBefore;
+            result.executedPcs.push_back(ie.pcBefore);
         }
     }
 
-    result.executionCount = execCount;
+    // Memory events with PC attribution
+    for (const auto &ev : memHistory) {
+        if (ev.instructionSequence < traceExec.startSequence ||
+            ev.instructionSequence >= traceExec.endSequence)
+            continue;
+
+        uint16_t pc = 0;
+        auto it = seqToPc.find(ev.instructionSequence);
+        if (it != seqToPc.end()) pc = it->second;
+
+        if (ev.type == MemoryAccessType::Write) {
+            if (ev.virt >= 0xC000 && ev.virt < 0xC100) {
+                // VRAM write
+                TraceVramWrite vw;
+                vw.pc = pc;
+                vw.address = ev.virt;
+                vw.value = ev.value;
+                result.vramWrites.push_back(vw);
+            } else {
+                TraceMemoryAccess ma;
+                ma.pc = pc;
+                ma.address = ev.virt;
+                ma.type = TraceMemoryAccess::Write;
+                ma.value = ev.value;
+                result.memoryWrites.push_back(ma);
+            }
+        } else if (ev.type == MemoryAccessType::Read) {
+            TraceMemoryAccess ma;
+            ma.pc = pc;
+            ma.address = ev.virt;
+            ma.type = TraceMemoryAccess::Read;
+            ma.value = ev.value;
+            result.memoryReads.push_back(ma);
+        }
+    }
+
+    // IO events with PC attribution
+    for (const auto &ev : ioHistory) {
+        if (ev.instructionSequence < traceExec.startSequence ||
+            ev.instructionSequence >= traceExec.endSequence)
+            continue;
+
+        uint16_t pc = 0;
+        auto it = seqToPc.find(ev.instructionSequence);
+        if (it != seqToPc.end()) pc = it->second;
+
+        TraceIoAccess io;
+        io.pc = pc;
+        io.port = ev.port;
+        io.isOutput = (ev.type == IoAccessType::Out);
+        io.value = ev.value;
+
+        if (ev.type == IoAccessType::Out) {
+            result.ioWrites.push_back(io);
+        } else {
+            result.ioReads.push_back(io);
+        }
+    }
+
+    // Extract called functions from instruction trace
+    std::set<uint16_t> calledSet;
+    for (const auto &ie : instrTrace) {
+        if (ie.sequence < traceExec.startSequence ||
+            ie.sequence >= traceExec.endSequence)
+            continue;
+
+        uint8_t opcode = ie.opcode;
+        bool isCall = (opcode == 0xCD ||
+                       opcode == 0xC4 || opcode == 0xCC ||
+                       opcode == 0xD4 || opcode == 0xDC ||
+                       opcode == 0xE4 || opcode == 0xEC ||
+                       opcode == 0xF4 || opcode == 0xFC);
+        if (isCall && ie.length == 3) {
+            uint16_t target = static_cast<uint16_t>(
+                ie.operandBytes[0] | (ie.operandBytes[1] << 8));
+            calledSet.insert(target);
+        }
+
+        // RST instructions
+        bool isRst = (opcode == 0xC7 || opcode == 0xCF ||
+                      opcode == 0xD7 || opcode == 0xDF ||
+                      opcode == 0xE7 || opcode == 0xEF ||
+                      opcode == 0xF7 || opcode == 0xFF);
+        if (isRst) {
+            uint16_t target = static_cast<uint16_t>(opcode & 0x38);
+            calledSet.insert(target);
+        }
+    }
     result.calledFunctions.assign(calledSet.begin(), calledSet.end());
 
-    // Memory access from activity snapshot
-    auto activity = backend_.activitySnapshot();
-    collectMemoryAccess(address, funcEnd, activity,
-                        result.memoryReads, result.memoryWrites);
+    // Stack depth tracking
+    result.callDepth = 0;
+    int depth = 0;
+    for (const auto &ie : instrTrace) {
+        if (ie.sequence < traceExec.startSequence ||
+            ie.sequence >= traceExec.endSequence)
+            continue;
 
-    // I/O accesses
-    auto ioHistory = backend_.ioHistorySnapshot();
-    collectIoAccess(address, funcEnd, ioHistory, result.ioAccesses);
-
-    // VRAM writes
-    collectVramWrites(activity, result.vramWrites);
+        uint8_t opcode = ie.opcode;
+        bool isCall = (opcode == 0xCD ||
+                       opcode == 0xC4 || opcode == 0xCC ||
+                       opcode == 0xD4 || opcode == 0xDC ||
+                       opcode == 0xE4 || opcode == 0xEC ||
+                       opcode == 0xF4 || opcode == 0xFC);
+        bool isRst = (opcode == 0xC7 || opcode == 0xCF ||
+                      opcode == 0xD7 || opcode == 0xDF ||
+                      opcode == 0xE7 || opcode == 0xEF ||
+                      opcode == 0xF7 || opcode == 0xFF);
+        if (isCall || isRst) depth++;
+        if (opcode == 0xC9) depth--;  // RET
+    }
+    result.callDepth = depth;
 
     std::ostringstream oss;
     oss << "addr=" << std::hex << address
-        << " execCount=" << std::dec << execCount
+        << " instrs=" << std::dec << result.instructionCount
+        << " exit=" << static_cast<int>(result.exitReason)
         << " callees=" << result.calledFunctions.size();
     log_.record("traceFunction", oss.str(), "done", elapsedMs(t0));
 

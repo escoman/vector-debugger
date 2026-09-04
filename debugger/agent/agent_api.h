@@ -10,16 +10,19 @@
 #include <vector>
 
 // ---------------------------------------------------------------------------
-// AgentApi — Stage 5.3
+// AgentApi — Stage 5.3.1
 //
 // AI Agent interface to the Vector-06C Debugger.
 //
 // All operations go through IDebugBackend — no direct access to Board,
 // Memory, CPU, IO, TV, or any emulator internals.
 //
-// Thread safety: state-changing operations (run, pause, step, reset,
-// writeMemory, setBreakpoint) use the existing DebugBackend command
-// protocol which serializes access to the emulation thread.
+// State-changing operations use the Backend command protocol:
+//   - Breakpoint mutations: requestAddBreakpoint / requestRemoveBreakpoint
+//   - Annotation mutations: requestCreateFunction / requestRenameSymbol etc.
+//
+// Read-only operations (getCpuState, readMemory, symbolDatabase() const)
+// are safe snapshot queries.
 // ---------------------------------------------------------------------------
 
 class AgentApi
@@ -43,31 +46,31 @@ public:
     std::vector<uint8_t> readMemory(uint16_t address, size_t size);
     bool writeMemory(uint16_t address, const std::vector<uint8_t> &data);
 
-    // -- Breakpoints --------------------------------------------------------
+    // -- Breakpoints (through command protocol) -----------------------------
 
-    int  setBreakpoint(uint16_t address);
-    bool clearBreakpoint(uint16_t address);
+    CommandResult setBreakpoint(uint16_t address);
+    CommandResult clearBreakpoint(uint16_t address);
+    CommandResult setBreakpointEnabled(uint16_t address, bool enabled);
     std::vector<DebuggerBreakpoint> listBreakpoints();
 
     // -- Trace / I/O / VRAM -------------------------------------------------
 
     std::vector<InstructionEvent> getExecutionTrace(size_t maxEntries = 1000);
     std::vector<IoAccessEvent>    getIoTrace(size_t maxEntries = 1000);
-    IDebugBackend::ActivitySnapshot getVramActivity();
 
     // -- Screen -------------------------------------------------------------
 
     IDebugBackend::ScreenSnapshot getScreen();
 
-    // -- Annotations (direct apply to SymbolDatabase) -----------------------
+    // -- Annotations (through command protocol) -----------------------------
 
-    bool createFunction(uint16_t address, uint16_t size = 0);
-    bool renameFunction(uint16_t address, const std::string &name);
-    bool setFunctionComment(uint16_t address, const std::string &comment);
-    bool deleteFunction(uint16_t address);
-    bool addLabel(uint16_t address, const std::string &name);
-    bool setComment(uint16_t address, const std::string &comment);
-    bool applyAnnotation(const Annotation &annotation);
+    CommandResult createFunction(uint16_t address, uint16_t size = 0);
+    CommandResult renameFunction(uint16_t address, const std::string &name);
+    CommandResult setFunctionComment(uint16_t address, const std::string &comment);
+    CommandResult deleteFunction(uint16_t address);
+    CommandResult addLabel(uint16_t address, const std::string &name);
+    CommandResult setComment(uint16_t address, const std::string &comment);
+    CommandResult applyAnnotation(const Annotation &annotation);
 
     // -- High-level analysis ------------------------------------------------
 
@@ -89,34 +92,22 @@ private:
 
     // -- Internal helpers ---------------------------------------------------
 
-    // Disassemble a function starting at 'address' until RET/HLT or
-    // the next known symbol.  Returns the instruction list.
+    // Disassemble a function starting at 'address' until RET/HLT/unconditional
+    // JMP or the next known symbol.  Returns the instruction list.
     std::vector<FunctionContext::Instruction> disassembleFunction(uint16_t address);
 
-    // Estimate function size by linear disassembly until RET/HLT.
+    // Estimate function size by linear disassembly until RET/HLT/JMP.
     uint16_t estimateFunctionSize(uint16_t address);
 
-    // Analyze stack balance from execution trace for a function range.
-    FunctionContext::StackBehavior analyzeStackBalance(
-        uint16_t funcStart, uint16_t funcEnd);
-
-    // Collect memory reads/writes from activity snapshot for an address range.
-    void collectMemoryAccess(
-        uint16_t start, uint16_t end,
-        const IDebugBackend::ActivitySnapshot &activity,
-        std::vector<FunctionContext::MemoryAccess> &reads,
-        std::vector<FunctionContext::MemoryAccess> &writes);
-
-    // Collect I/O accesses from IO history for instructions within range.
-    void collectIoAccess(
-        uint16_t funcStart, uint16_t funcEnd,
-        const std::vector<IoAccessEvent> &ioHistory,
-        std::vector<FunctionContext::IoAccess> &ioAccesses);
-
-    // Collect VRAM writes from activity snapshot.
-    void collectVramWrites(
-        const IDebugBackend::ActivitySnapshot &activity,
-        std::vector<FunctionContext::VramWrite> &vramWrites);
+    // Collect attributed memory/IO/VRAM events from history using
+    // instruction sequence range [startSeq, endSeq).
+    void collectTraceEvents(
+        uint64_t startSeq, uint64_t endSeq,
+        std::vector<TraceMemoryAccess> &memReads,
+        std::vector<TraceMemoryAccess> &memWrites,
+        std::vector<TraceIoAccess> &ioReads,
+        std::vector<TraceIoAccess> &ioWrites,
+        std::vector<TraceVramWrite> &vramWrites);
 
     // Timer helper for logging.
     static double elapsedMs(std::chrono::steady_clock::time_point start);

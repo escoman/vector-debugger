@@ -101,14 +101,20 @@ public:
     // Legacy: remove by id (backward compat with tests)
     void removeBreakpoint(int id);
 
+    // -- IDebugBackend: breakpoint commands (Stage 5.3.1) -------------------
+
+    CommandResult requestAddBreakpoint(uint16_t addr) override;
+    CommandResult requestRemoveBreakpoint(uint16_t addr) override;
+    CommandResult requestSetBreakpointEnabled(uint16_t addr, bool enabled) override;
+
     // -- IDebugBackend: history ---------------------------------------------
 
     uint64_t instructionSequence() const override;
     size_t   instructionHistorySize() const override;
     std::vector<InstructionEvent> instructionHistorySnapshot() const override;
 
-    size_t   memoryHistorySize() const;
-    std::vector<struct MemoryAccessEvent> memoryHistorySnapshot() const;
+    size_t   memoryHistorySize() const override;
+    std::vector<struct MemoryAccessEvent> memoryHistorySnapshot() const override;
 
     size_t   ioHistorySize() const override;
     std::vector<IoAccessEvent> ioHistorySnapshot() const override;
@@ -145,6 +151,18 @@ public:
     SymbolDatabase       &symbolDatabase() override;
     const SymbolDatabase &symbolDatabase() const override;
 
+    // -- IDebugBackend: symbol commands (Stage 5.3.1) -----------------------
+
+    CommandResult requestCreateFunction(uint16_t addr, const std::string &name) override;
+    CommandResult requestRenameSymbol(uint16_t addr, const std::string &name) override;
+    CommandResult requestSetComment(uint16_t addr, const std::string &comment) override;
+    CommandResult requestRemoveSymbol(uint16_t addr) override;
+    CommandResult requestAddLabel(uint16_t addr, const std::string &name) override;
+
+    // -- IDebugBackend: trace execution (Stage 5.3.1) -----------------------
+
+    TraceExecutionResult executeTrace(const TraceExecutionParams &params) override;
+
     // -- debug logging (backward compatibility) -----------------------------
 
     std::function<void(const char *line)> onTrace;
@@ -166,6 +184,25 @@ public:
     // -- memory statistics --------------------------------------------------
 
     std::vector<struct MemoryStats> memoryStatsSnapshot() const;
+
+    // -- Generic command protocol (Stage 5.3.1) -----------------------------
+
+    enum class GenericCommandType {
+        None,
+        AddBreakpoint, RemoveBreakpoint, SetBreakpointEnabled,
+        CreateFunction, RenameSymbol, SetComment, RemoveSymbol, AddLabel
+    };
+
+    struct GenericCommand {
+        GenericCommandType type = GenericCommandType::None;
+        uint16_t address = 0;
+        std::string name;
+        std::string comment;
+        bool enabled = false;
+        CommandResult result;
+    };
+
+    CommandResult submitCommand(GenericCommand &cmd);
 
     // -- emulation thread API (not part of IDebugBackend) --------------------
 
@@ -284,5 +321,12 @@ private:
     // -- Screen mutex -------------------------------------------------------
 
     mutable std::mutex screenMutex_;
+
+    // -- Generic command protocol (Stage 5.3.1) -----------------------------
+
+    std::atomic<bool> emulationLoopRunning_{false};
+    GenericCommand *pendingGenericCommand_ = nullptr;
+
+    void executeGenericCommand(GenericCommand &cmd);
 
 };
