@@ -14,6 +14,7 @@
 #include "call_graph_window.h"
 #include "search_window.h"
 #include "keyboard_window.h"
+#include "rom_file_dialog.h"
 #include "workspace_manager.h"
 #include "idebug_backend.h"
 #include "events.h"
@@ -119,6 +120,9 @@ private:
     
     // Keyboard window (Stage 5.3)
     KeyboardWindow keyboardWindow_;
+    
+    // ROM File Dialog (custom, non-blocking)
+    RomFileDialog romFileDialog_;
     
     // Instruction History cache (Stage 3.12 — avoid per-frame snapshot)
     std::vector<InstructionEvent> cachedHistEntries_;

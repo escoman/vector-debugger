@@ -19,40 +19,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cctype>
 #include <string>
-
-// ---------------------------------------------------------------------------
-// Native file dialog (zenity on Linux)
-// ---------------------------------------------------------------------------
-
-static std::string showNativeFileOpenDialog(const std::string &startDir = "")
-{
-#ifdef __linux__
-    std::string cmd = "zenity --title='Open ROM' --file-selection";
-    if (!startDir.empty()) {
-        cmd += " --filename='" + startDir + "/'";
-    }
-    cmd += " --file-filter='ROM files | *.rom *.r0m *.bin *.ROM *.R0M *.BIN'";
-    cmd += " --file-filter='All files | *'";
-    cmd += " 2>/dev/null";
-
-    FILE *fp = popen(cmd.c_str(), "r");
-    if (!fp) return {};
-
-    char buf[1024];
-    std::string result;
-    if (fgets(buf, sizeof(buf), fp)) {
-        result = buf;
-        // Remove trailing newline
-        while (!result.empty() && (result.back() == '\n' || result.back() == '\r'))
-            result.pop_back();
-    }
-    pclose(fp);
-    return result;
-#else
-    return {};
-#endif
-}
 
 // ---------------------------------------------------------------------------
 // Lifecycle
@@ -292,12 +260,11 @@ void DebuggerGui::render(IDebugBackend &backend)
         ImGui::End();
     }
 
-    // --- Open ROM dialog ---
+    // --- Open ROM dialog (custom, non-blocking) ---
     if (showOpenRomDialog_) {
         showOpenRomDialog_ = false;
         std::string lastDir = workspaceManager_.getSetting("LastRomDirectory");
-        std::string path = showNativeFileOpenDialog(lastDir);
-        if (!path.empty()) {
+        romFileDialog_.onFileSelected = [this, &backend](const std::string &path) {
             // Save the directory of the selected ROM
             size_t lastSlash = path.rfind('/');
             if (lastSlash != std::string::npos) {
@@ -305,13 +272,17 @@ void DebuggerGui::render(IDebugBackend &backend)
                     path.substr(0, lastSlash));
             }
             uint32_t org = 0;
-            if (true) { // auto-detect
-                size_t dot = path.rfind('.');
-                if (dot != std::string::npos) {
-                    std::string ext = path.substr(dot);
-                    if (ext == ".rom") org = 0x0100;
-                    else if (ext == ".r0m") org = 0x0000;
+            // Auto-detect load address based on extension
+            size_t dot = path.rfind('.');
+            if (dot != std::string::npos) {
+                std::string ext = path.substr(dot);
+                // Convert to lowercase for comparison
+                std::string extLower;
+                for (char c : ext) {
+                    extLower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
                 }
+                if (extLower == ".rom") org = 0x0100;
+                else if (extLower == ".r0m") org = 0x0000;
             }
             backend.requestPause();
             if (backend.loadRom(path, org)) {
@@ -324,8 +295,12 @@ void DebuggerGui::render(IDebugBackend &backend)
                 snprintf(romErrorBuffer_, sizeof(romErrorBuffer_),
                          "Failed to load: %s", path.c_str());
             }
-        }
+        };
+        romFileDialog_.show(lastDir);
     }
+    
+    // Render the ROM file dialog if open
+    romFileDialog_.render();
     if (romErrorBuffer_[0]) {
         ImGui::OpenPopup("ROM Error");
     }
@@ -683,6 +658,10 @@ void DebuggerGui::renderToolbar(IDebugBackend &backend)
             if (ImGui::MenuItem("Open ROM...")) {
                 showOpenRomDialog_ = true;
                 romErrorBuffer_[0] = '\0';
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Exit")) {
+                quit_ = true;
             }
             ImGui::EndMenu();
         }
