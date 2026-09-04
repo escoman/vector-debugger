@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <functional>
+#include <future>
 #include <string>
 #include <vector>
 
@@ -179,7 +180,7 @@ public:
     virtual CommandResult requestRemoveBreakpoint(uint16_t addr) = 0;
     virtual CommandResult requestSetBreakpointEnabled(uint16_t addr, bool enabled) = 0;
 
-    // -- Trace execution (Stage 5.3.1 — real execution experiment) ----------
+    // -- Trace execution (Stage 5.3.2 — through Command Queue) --------------
 
     struct TraceExecutionParams
     {
@@ -203,7 +204,10 @@ public:
         ExitReason exitReason = ExitReason::Unknown;
     };
 
-    virtual TraceExecutionResult executeTrace(const TraceExecutionParams &params) = 0;
+    // Asynchronous trace execution — goes through Command Queue.
+    // Returns a future that resolves when the Emulation Thread completes the trace.
+    virtual std::future<TraceExecutionResult>
+        requestExecuteTrace(const TraceExecutionParams &params) = 0;
 
     // -- ROM ----------------------------------------------------------------
 

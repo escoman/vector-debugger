@@ -172,7 +172,7 @@ MemorySnapshot DebugBackend::readMemorySnapshot(uint16_t start, size_t size)
 }
 
 // ---------------------------------------------------------------------------
-// Memory write (Stage 3.5 — through emulation thread)
+// Memory write (Stage 5.3.2 — through Command Queue)
 // ---------------------------------------------------------------------------
 
 bool DebugBackend::writeMemoryByte(uint16_t address, uint8_t value)
@@ -184,81 +184,26 @@ bool DebugBackend::writeMemory(uint16_t address, const uint8_t* data, size_t siz
 {
     if (!data || size == 0) return false;
 
-    // Post write command for emulation thread
-    {
-        std::lock_guard<std::mutex> lock(commandMutex_);
-        writeAddress_ = address;
-        writeData_.assign(data, data + size);
-        writeResult_  = false;
-        pendingCommand_ = PendingCommand::MemoryWrite;
-        stepCompleted_  = false;
-    }
-    commandCv_.notify_one();
-
-    // Wait for the emulation thread to complete the write
-    std::unique_lock<std::mutex> lock(commandMutex_);
-    resultCv_.wait(lock, [this]{ return stepCompleted_; });
-
-    return writeResult_;
-}
-
-void DebugBackend::processWriteCommand()
-{
-    std::lock_guard<std::mutex> lock(stateMutex_);
-    if (state_ != DebuggerState::Paused) {
-        writeResult_ = false;
-        return;
-    }
-
-    executeWriteMemory();
-    writeResult_ = true;
-}
-
-void DebugBackend::executeWriteMemory()
-{
-    for (size_t i = 0; i < writeData_.size(); ++i) {
-        uint16_t addr = static_cast<uint16_t>((writeAddress_ + i) & 0xFFFF);
-        target_->writeMemory(addr, writeData_[i]);
-    }
+    auto cmd = std::make_unique<Command>();
+    cmd->type = CommandType::MemoryWrite;
+    cmd->address = address;
+    cmd->writeData.assign(data, data + size);
+    auto result = submitAndWait(std::move(cmd));
+    return result.success;
 }
 
 // ---------------------------------------------------------------------------
-// Register write (Stage 3.6 — through emulation thread)
+// Register write (Stage 5.3.2 — through Command Queue)
 // ---------------------------------------------------------------------------
 
 bool DebugBackend::writeRegister(RegisterId id, uint16_t value)
 {
-    {
-        std::lock_guard<std::mutex> lock(commandMutex_);
-        writeRegId_     = id;
-        writeRegValue_  = value;
-        writeRegResult_ = false;
-        pendingCommand_ = PendingCommand::RegisterWrite;
-        stepCompleted_  = false;
-    }
-    commandCv_.notify_one();
-
-    std::unique_lock<std::mutex> lock(commandMutex_);
-    resultCv_.wait(lock, [this]{ return stepCompleted_; });
-
-    return writeRegResult_;
-}
-
-void DebugBackend::processRegisterWrite()
-{
-    std::lock_guard<std::mutex> lock(stateMutex_);
-    if (state_ != DebuggerState::Paused) {
-        writeRegResult_ = false;
-        return;
-    }
-
-    executeRegisterWrite();
-    writeRegResult_ = true;
-}
-
-void DebugBackend::executeRegisterWrite()
-{
-    target_->writeCpuRegister(static_cast<int>(writeRegId_), writeRegValue_);
+    auto cmd = std::make_unique<Command>();
+    cmd->type = CommandType::RegisterWrite;
+    cmd->regId = id;
+    cmd->regValue = value;
+    auto result = submitAndWait(std::move(cmd));
+    return result.success;
 }
 
 // ---------------------------------------------------------------------------
@@ -714,207 +659,363 @@ const SymbolDatabase &DebugBackend::symbolDatabase() const
 }
 
 // ---------------------------------------------------------------------------
-// Stage 5.3.1: Symbol commands (through command protocol)
+// Stage 5.3.2: Symbol commands (through Command Queue)
 // ---------------------------------------------------------------------------
 
 CommandResult DebugBackend::requestCreateFunction(uint16_t addr, const std::string &name)
 {
-    GenericCommand cmd;
-    cmd.type = GenericCommandType::CreateFunction;
-    cmd.address = addr;
-    cmd.name = name;
-    return submitCommand(cmd);
+    auto cmd = std::make_unique<Command>();
+    cmd->type = CommandType::CreateFunction;
+    cmd->address = addr;
+    cmd->name = name;
+    return submitAndWait(std::move(cmd));
 }
 
 CommandResult DebugBackend::requestRenameSymbol(uint16_t addr, const std::string &name)
 {
-    GenericCommand cmd;
-    cmd.type = GenericCommandType::RenameSymbol;
-    cmd.address = addr;
-    cmd.name = name;
-    return submitCommand(cmd);
+    auto cmd = std::make_unique<Command>();
+    cmd->type = CommandType::RenameSymbol;
+    cmd->address = addr;
+    cmd->name = name;
+    return submitAndWait(std::move(cmd));
 }
 
 CommandResult DebugBackend::requestSetComment(uint16_t addr, const std::string &comment)
 {
-    GenericCommand cmd;
-    cmd.type = GenericCommandType::SetComment;
-    cmd.address = addr;
-    cmd.comment = comment;
-    return submitCommand(cmd);
+    auto cmd = std::make_unique<Command>();
+    cmd->type = CommandType::SetComment;
+    cmd->address = addr;
+    cmd->comment = comment;
+    return submitAndWait(std::move(cmd));
 }
 
 CommandResult DebugBackend::requestRemoveSymbol(uint16_t addr)
 {
-    GenericCommand cmd;
-    cmd.type = GenericCommandType::RemoveSymbol;
-    cmd.address = addr;
-    return submitCommand(cmd);
+    auto cmd = std::make_unique<Command>();
+    cmd->type = CommandType::RemoveSymbol;
+    cmd->address = addr;
+    return submitAndWait(std::move(cmd));
 }
 
 CommandResult DebugBackend::requestAddLabel(uint16_t addr, const std::string &name)
 {
-    GenericCommand cmd;
-    cmd.type = GenericCommandType::AddLabel;
-    cmd.address = addr;
-    cmd.name = name;
-    return submitCommand(cmd);
+    auto cmd = std::make_unique<Command>();
+    cmd->type = CommandType::AddLabel;
+    cmd->address = addr;
+    cmd->name = name;
+    return submitAndWait(std::move(cmd));
 }
 
 // ---------------------------------------------------------------------------
-// Stage 5.3.1: Breakpoint commands (through command protocol)
+// Stage 5.3.2: Breakpoint commands (through Command Queue)
 // ---------------------------------------------------------------------------
 
 CommandResult DebugBackend::requestAddBreakpoint(uint16_t addr)
 {
-    GenericCommand cmd;
-    cmd.type = GenericCommandType::AddBreakpoint;
-    cmd.address = addr;
-    return submitCommand(cmd);
+    auto cmd = std::make_unique<Command>();
+    cmd->type = CommandType::AddBreakpoint;
+    cmd->address = addr;
+    return submitAndWait(std::move(cmd));
 }
 
 CommandResult DebugBackend::requestRemoveBreakpoint(uint16_t addr)
 {
-    GenericCommand cmd;
-    cmd.type = GenericCommandType::RemoveBreakpoint;
-    cmd.address = addr;
-    return submitCommand(cmd);
+    auto cmd = std::make_unique<Command>();
+    cmd->type = CommandType::RemoveBreakpoint;
+    cmd->address = addr;
+    return submitAndWait(std::move(cmd));
 }
 
 CommandResult DebugBackend::requestSetBreakpointEnabled(uint16_t addr, bool enabled)
 {
-    GenericCommand cmd;
-    cmd.type = GenericCommandType::SetBreakpointEnabled;
-    cmd.address = addr;
-    cmd.enabled = enabled;
-    return submitCommand(cmd);
+    auto cmd = std::make_unique<Command>();
+    cmd->type = CommandType::SetBreakpointEnabled;
+    cmd->address = addr;
+    cmd->enabled = enabled;
+    return submitAndWait(std::move(cmd));
 }
 
 // ---------------------------------------------------------------------------
-// Stage 5.3.1: Generic command mechanism
+// Stage 5.3.2: Command Queue implementation
 // ---------------------------------------------------------------------------
 
-CommandResult DebugBackend::submitCommand(GenericCommand &cmd)
+// -- CommandQueue methods --
+
+void DebugBackend::CommandQueue::enqueue(std::unique_ptr<Command> cmd)
+{
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        queue_.push(std::move(cmd));
+    }
+    cv_.notify_one();
+}
+
+std::unique_ptr<DebugBackend::Command> DebugBackend::CommandQueue::tryDequeue()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (queue_.empty()) return nullptr;
+    auto cmd = std::move(queue_.front());
+    queue_.pop();
+    return cmd;
+}
+
+std::unique_ptr<DebugBackend::Command> DebugBackend::CommandQueue::waitAndDequeue()
+{
+    std::unique_lock<std::mutex> lock(mutex_);
+    cv_.wait(lock, [this]{ return !queue_.empty(); });
+    auto cmd = std::move(queue_.front());
+    queue_.pop();
+    return cmd;
+}
+
+bool DebugBackend::CommandQueue::empty() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return queue_.empty();
+}
+
+// -- submitAndWait: dual-mode command submission --
+
+CommandResult DebugBackend::submitAndWait(std::unique_ptr<Command> cmd)
 {
     if (!emulationLoopRunning_) {
-        // Direct execution — safe when no emulation thread is running
-        // (test scenario, or debugger paused without runUntilPause loop).
-        executeGenericCommand(cmd);
-        return cmd.result;
+        // Direct execution — no emulation thread running (test scenario).
+        executeCommand(*cmd);
+        return cmd->promise.get_future().get();
     }
 
-    // Post to emulation thread and wait for completion
-    {
-        std::lock_guard<std::mutex> lock(commandMutex_);
-        pendingGenericCommand_ = &cmd;
-        stepCompleted_ = false;
+    // Enqueue for emulation thread and wait for result
+    auto future = cmd->promise.get_future();
+    commandQueue_.enqueue(std::move(cmd));
+
+    auto status = future.wait_for(std::chrono::seconds(5));
+    if (status == std::future_status::timeout) {
+        CommandResult r;
+        r.success = false;
+        r.error = "command timed out";
+        r.status = CommandResult::Timeout;
+        return r;
     }
-    commandCv_.notify_one();
-
-    std::unique_lock<std::mutex> lock(commandMutex_);
-    resultCv_.wait(lock, [this]{ return stepCompleted_; });
-
-    return cmd.result;
+    return future.get();
 }
 
-void DebugBackend::executeGenericCommand(GenericCommand &cmd)
+// -- executeCommand: runs on Emulation Thread --
+
+void DebugBackend::executeCommand(Command &cmd)
 {
+    CommandResult result;
+    result.success = true;
+    result.status = CommandResult::Completed;
+
     switch (cmd.type) {
-    case GenericCommandType::AddBreakpoint: {
+    case CommandType::AddBreakpoint: {
         int id = addBreakpoint(cmd.address);
         if (id >= 0) {
-            cmd.result.success = true;
+            result.success = true;
         } else {
-            cmd.result.success = false;
-            cmd.result.error = "breakpoint already exists at this address";
-            cmd.result.status = CommandResult::Failed;
+            result.success = false;
+            result.error = "breakpoint already exists at this address";
+            result.status = CommandResult::Failed;
         }
+        syncBreakpointsToTarget();
         break;
     }
-    case GenericCommandType::RemoveBreakpoint: {
+    case CommandType::RemoveBreakpoint: {
         bool ok = removeBreakpoint(cmd.address);
-        cmd.result.success = ok;
+        result.success = ok;
         if (!ok) {
-            cmd.result.error = "no breakpoint at this address";
-            cmd.result.status = CommandResult::Failed;
+            result.error = "no breakpoint at this address";
+            result.status = CommandResult::Failed;
         }
+        syncBreakpointsToTarget();
         break;
     }
-    case GenericCommandType::SetBreakpointEnabled: {
+    case CommandType::SetBreakpointEnabled: {
         bool ok = setBreakpointEnabled(cmd.address, cmd.enabled);
-        cmd.result.success = ok;
+        result.success = ok;
         if (!ok) {
-            cmd.result.error = "no breakpoint at this address";
-            cmd.result.status = CommandResult::Failed;
+            result.error = "no breakpoint at this address";
+            result.status = CommandResult::Failed;
         }
+        syncBreakpointsToTarget();
         break;
     }
-    case GenericCommandType::CreateFunction: {
+    case CommandType::CreateFunction: {
         bool ok = symbols_.addSymbol(cmd.address, cmd.name, SymbolType::Function);
-        cmd.result.success = ok;
+        result.success = ok;
         if (!ok) {
-            cmd.result.error = "symbol already exists at this address";
-            cmd.result.status = CommandResult::Failed;
+            result.error = "symbol already exists at this address";
+            result.status = CommandResult::Failed;
         }
         break;
     }
-    case GenericCommandType::RenameSymbol: {
+    case CommandType::RenameSymbol: {
         bool ok = symbols_.renameSymbol(cmd.address, cmd.name);
-        cmd.result.success = ok;
+        result.success = ok;
         if (!ok) {
-            cmd.result.error = "symbol not found";
-            cmd.result.status = CommandResult::Failed;
+            result.error = "symbol not found";
+            result.status = CommandResult::Failed;
         }
         break;
     }
-    case GenericCommandType::SetComment: {
+    case CommandType::SetComment: {
         bool ok = symbols_.setComment(cmd.address, cmd.comment);
-        cmd.result.success = ok;
+        result.success = ok;
         if (!ok) {
-            cmd.result.error = "symbol not found";
-            cmd.result.status = CommandResult::Failed;
+            result.error = "symbol not found";
+            result.status = CommandResult::Failed;
         }
         break;
     }
-    case GenericCommandType::RemoveSymbol: {
+    case CommandType::RemoveSymbol: {
         bool ok = symbols_.removeSymbol(cmd.address);
-        cmd.result.success = ok;
+        result.success = ok;
         if (!ok) {
-            cmd.result.error = "symbol not found";
-            cmd.result.status = CommandResult::Failed;
+            result.error = "symbol not found";
+            result.status = CommandResult::Failed;
         }
         break;
     }
-    case GenericCommandType::AddLabel: {
+    case CommandType::AddLabel: {
         bool ok = symbols_.addSymbol(cmd.address, cmd.name, SymbolType::Label);
-        cmd.result.success = ok;
+        result.success = ok;
         if (!ok) {
-            cmd.result.error = "symbol already exists at this address";
-            cmd.result.status = CommandResult::Failed;
+            result.error = "symbol already exists at this address";
+            result.status = CommandResult::Failed;
         }
         break;
     }
+    case CommandType::Step: {
+        stepInstruction();
+        break;
+    }
+    case CommandType::Reset: {
+        running_.store(false, std::memory_order_release);
+        reset();
+        break;
+    }
+    case CommandType::MemoryWrite: {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        if (state_ == DebuggerState::Paused) {
+            for (size_t i = 0; i < cmd.writeData.size(); ++i) {
+                uint16_t addr = static_cast<uint16_t>((cmd.address + i) & 0xFFFF);
+                target_->writeMemory(addr, cmd.writeData[i]);
+            }
+            result.success = true;
+        } else {
+            result.success = false;
+            result.error = "cannot write memory while running";
+            result.status = CommandResult::Failed;
+        }
+        break;
+    }
+    case CommandType::RegisterWrite: {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        if (state_ == DebuggerState::Paused) {
+            target_->writeCpuRegister(static_cast<int>(cmd.regId), cmd.regValue);
+            result.success = true;
+        } else {
+            result.success = false;
+            result.error = "cannot write register while running";
+            result.status = CommandResult::Failed;
+        }
+        break;
+    }
+    case CommandType::ExecuteTrace: {
+        if (traceBusy_.exchange(true)) {
+            result.success = false;
+            result.error = "trace busy";
+            result.status = CommandResult::Failed;
+            // Deliver empty trace result via pending promise
+            std::shared_ptr<std::promise<TraceExecutionResult>> tp;
+            {
+                std::lock_guard<std::mutex> lock(commandMutex_);
+                tp = pendingTracePromise_;
+                pendingTracePromise_ = nullptr;
+            }
+            if (tp) tp->set_value(TraceExecutionResult{});
+        } else {
+            auto traceResult = executeTraceInternal(cmd.traceParams);
+            result.success = true;
+            traceBusy_.store(false);
+            // Deliver trace result via pending promise
+            std::shared_ptr<std::promise<TraceExecutionResult>> tp;
+            {
+                std::lock_guard<std::mutex> lock(commandMutex_);
+                tp = pendingTracePromise_;
+                pendingTracePromise_ = nullptr;
+            }
+            if (tp) tp->set_value(std::move(traceResult));
+        }
+        break;
+    }
+    case CommandType::Run:
+    case CommandType::Pause:
+    case CommandType::Quit:
+        // These are handled by the emulation loop directly, not through executeCommand.
+        result.success = true;
+        break;
     default:
-        cmd.result.success = false;
-        cmd.result.error = "unknown command type";
-        cmd.result.status = CommandResult::Failed;
+        result.success = false;
+        result.error = "unknown command type";
+        result.status = CommandResult::Failed;
         break;
     }
 
-    // Sync breakpoints to target after any breakpoint mutation
-    if (cmd.type == GenericCommandType::AddBreakpoint ||
-        cmd.type == GenericCommandType::RemoveBreakpoint ||
-        cmd.type == GenericCommandType::SetBreakpointEnabled) {
-        syncBreakpointsToTarget();
-    }
+    cmd.promise.set_value(result);
 }
 
 // ---------------------------------------------------------------------------
-// Stage 5.3.1: Trace execution (real execution experiment)
+// Stage 5.3.2: Trace execution (through Command Queue)
+// ---------------------------------------------------------------------------
+
+std::future<DebugBackend::TraceExecutionResult>
+DebugBackend::requestExecuteTrace(const TraceExecutionParams &params)
+{
+    // Create promise/future for the TraceExecutionResult
+    auto tracePromise = std::make_shared<std::promise<TraceExecutionResult>>();
+    auto traceResultFuture = tracePromise->get_future();
+
+    // Store the promise so executeCommand can fulfill it
+    {
+        std::lock_guard<std::mutex> lock(commandMutex_);
+        pendingTracePromise_ = tracePromise;
+    }
+
+    if (!emulationLoopRunning_) {
+        // Direct execution — no emulation thread (test scenario)
+        if (traceBusy_.exchange(true)) {
+            tracePromise->set_value(TraceExecutionResult{});
+            // Caller should check exitReason == Unknown
+        } else {
+            auto traceResult = executeTraceInternal(params);
+            traceBusy_.store(false);
+            tracePromise->set_value(traceResult);
+        }
+        std::lock_guard<std::mutex> lock(commandMutex_);
+        pendingTracePromise_ = nullptr;
+    } else {
+        // Enqueue for emulation thread
+        auto cmd = std::make_unique<Command>();
+        cmd->type = CommandType::ExecuteTrace;
+        cmd->traceParams = params;
+        auto cmdFuture = cmd->promise.get_future();
+        commandQueue_.enqueue(std::move(cmd));
+
+        // Wait for command completion (the trace result is delivered
+        // via pendingTracePromise_ inside executeCommand)
+        cmdFuture.wait();
+    }
+
+    return traceResultFuture;
+}
+
+// ---------------------------------------------------------------------------
+// executeTraceInternal — runs exclusively on Emulation Thread
 // ---------------------------------------------------------------------------
 
 DebugBackend::TraceExecutionResult
-DebugBackend::executeTrace(const TraceExecutionParams &params)
+DebugBackend::executeTraceInternal(const TraceExecutionParams &params)
 {
     TraceExecutionResult result;
     result.startSequence = instructionSequence_;
@@ -1143,15 +1244,15 @@ void DebugBackend::formatTraceLine(char *buf, size_t bufsize,
 
 void DebugBackend::requestStep()
 {
-    {
-        std::lock_guard<std::mutex> lock(commandMutex_);
-        pendingCommand_ = PendingCommand::Step;
-        stepCompleted_  = false;
+    if (!emulationLoopRunning_) {
+        // Test scenario — execute directly
+        stepInstruction();
+        return;
     }
-    commandCv_.notify_one();
-
-    std::unique_lock<std::mutex> lock(commandMutex_);
-    resultCv_.wait(lock, [this]{ return stepCompleted_; });
+    // Enqueue Step command for emulation thread
+    auto cmd = std::make_unique<Command>();
+    cmd->type = CommandType::Step;
+    submitAndWait(std::move(cmd));
 }
 
 void DebugBackend::requestRun()
@@ -1164,7 +1265,18 @@ void DebugBackend::requestRun()
         pauseRequested_ = false;
     }
     running_.store(true, std::memory_order_release);
-    commandCv_.notify_one();
+
+    if (!emulationLoopRunning_) {
+        // Test scenario — no emulation thread.
+        // Flags are set; actual execution happens via stepInstruction()
+        // or when runUntilPause() is started in a separate thread.
+        return;
+    }
+
+    // Emulation loop is running — enqueue Run command to wake processOneCommand
+    auto cmd = std::make_unique<Command>();
+    cmd->type = CommandType::Run;
+    commandQueue_.enqueue(std::move(cmd));
 }
 
 void DebugBackend::requestPause()
@@ -1175,37 +1287,43 @@ void DebugBackend::requestPause()
         std::lock_guard<std::mutex> lock(commandMutex_);
         pauseRequested_ = true;
     }
-    commandCv_.notify_one();
 }
 
 void DebugBackend::requestReset()
 {
-    {
-        std::lock_guard<std::mutex> lock(commandMutex_);
-        pendingCommand_ = PendingCommand::Reset;
-        stepCompleted_  = false;
-        pauseRequested_ = true;  // Signal running loop to exit
-    }
-    commandCv_.notify_one();
+    running_.store(false, std::memory_order_release);
 
-    std::unique_lock<std::mutex> lock(commandMutex_);
-    resultCv_.wait(lock, [this]{ return stepCompleted_; });
+    if (!emulationLoopRunning_) {
+        // Test scenario — reset directly
+        reset();
+        return;
+    }
+
+    // Enqueue Reset command for emulation thread
+    auto cmd = std::make_unique<Command>();
+    cmd->type = CommandType::Reset;
+    submitAndWait(std::move(cmd));
 }
 
 void DebugBackend::waitForCompletion()
 {
-    std::unique_lock<std::mutex> lock(commandMutex_);
-    resultCv_.wait(lock, [this]{ return stepCompleted_; });
+    // Legacy method — kept for backward compatibility.
+    // With Command Queue, callers use submitAndWait() futures instead.
 }
 
 void DebugBackend::requestQuit()
 {
     {
         std::lock_guard<std::mutex> lock(commandMutex_);
-        quitRequested_  = true;
-        pendingCommand_ = PendingCommand::Quit;
+        quitRequested_ = true;
     }
-    commandCv_.notify_one();
+
+    if (emulationLoopRunning_) {
+        // Enqueue Quit to wake up processOneCommand
+        auto cmd = std::make_unique<Command>();
+        cmd->type = CommandType::Quit;
+        commandQueue_.enqueue(std::move(cmd));
+    }
 }
 
 bool DebugBackend::isQuitRequested() const
@@ -1216,71 +1334,28 @@ bool DebugBackend::isQuitRequested() const
 
 void DebugBackend::processOneCommand()
 {
-    std::unique_lock<std::mutex> lock(commandMutex_);
-    commandCv_.wait(lock, [this]{
-        return pendingCommand_ != PendingCommand::None ||
-               running_.load(std::memory_order_acquire) ||
-               quitRequested_;
-    });
+    if (!emulationLoopRunning_) {
+        // Test scenario — no emulation thread.
+        // Commands are executed directly by submitAndWait / requestRun.
+        return;
+    }
+
+    // Wait for a command from the queue (blocks until available)
+    auto cmd = commandQueue_.waitAndDequeue();
 
     if (quitRequested_) return;
 
-    if (running_.load(std::memory_order_acquire)) return;
-
-    PendingCommand cmd = pendingCommand_;
-    pendingCommand_ = PendingCommand::None;
-
-    if (cmd == PendingCommand::Quit) {
-        if (target_) target_->debuggerDetached();
-        return;
-    }
-    else if (cmd == PendingCommand::Step) {
-        stepInstruction();
-        stepCompleted_ = true;
-        resultCv_.notify_one();
-        return;
-    }
-    else if (cmd == PendingCommand::Reset) {
+    // Pause before trace execution — trace needs CPU in Paused state
+    if (cmd->type == CommandType::ExecuteTrace) {
         running_.store(false, std::memory_order_release);
-        reset();
-        stepCompleted_ = true;
-        resultCv_.notify_one();
-        return;
-    }
-    else if (cmd == PendingCommand::MemoryWrite) {
-        lock.unlock();
-        processWriteCommand();
         {
-            std::lock_guard<std::mutex> lk(commandMutex_);
-            stepCompleted_ = true;
+            std::lock_guard<std::mutex> lock(commandMutex_);
+            state_ = DebuggerState::Paused;
+            pauseRequested_ = false;
         }
-        resultCv_.notify_one();
-        return;
-    }
-    else if (cmd == PendingCommand::RegisterWrite) {
-        lock.unlock();
-        processRegisterWrite();
-        {
-            std::lock_guard<std::mutex> lk(commandMutex_);
-            stepCompleted_ = true;
-        }
-        resultCv_.notify_one();
-        return;
     }
 
-    // Stage 5.3.1: generic command from Agent/GUI thread
-    if (pendingGenericCommand_) {
-        auto *gcmd = pendingGenericCommand_;
-        pendingGenericCommand_ = nullptr;
-        lock.unlock();
-        executeGenericCommand(*gcmd);
-        {
-            std::lock_guard<std::mutex> lk(commandMutex_);
-            stepCompleted_ = true;
-        }
-        resultCv_.notify_one();
-        return;
-    }
+    executeCommand(*cmd);
 }
 
 // ---------------------------------------------------------------------------
@@ -1324,15 +1399,32 @@ void DebugBackend::executeFramesTarget_()
             lastFrameTime_ = Clock::now();
         }
 
+        // Process any commands queued during frame execution
+        while (auto cmd = commandQueue_.tryDequeue()) {
+            if (cmd->type == CommandType::Quit) {
+                quitRequested_ = true;
+                running_.store(false, std::memory_order_release);
+                break;
+            }
+            if (cmd->type == CommandType::Run) {
+                // Already running — just fulfill the promise
+                cmd->promise.set_value(CommandResult{true, "", CommandResult::Completed});
+                continue;
+            }
+            if (cmd->type == CommandType::Pause) {
+                running_.store(false, std::memory_order_release);
+                cmd->promise.set_value(CommandResult{true, "", CommandResult::Completed});
+                break;
+            }
+            // Other commands (breakpoints, symbols) — safe during Running
+            executeCommand(*cmd);
+        }
+
         // If PC didn't change, target stopped (breakpoint or debugger_interrupt)
-        if (pcAfterFrame == pcBeforeFrame) {
+        if (pcAfterFrame == pcBeforeFrame && !quitRequested_) {
             if (checkBreakpoint()) {
                 stopReason_ = StopReason::Breakpoint;
                 running_.store(false, std::memory_order_release);
-                {
-                    std::lock_guard<std::mutex> lk(commandMutex_);
-                    state_ = DebuggerState::Paused;
-                }
                 break;
             }
         }
@@ -1351,10 +1443,6 @@ void DebugBackend::executeFramesTarget_()
         if (checkBreakpoint()) {
             stopReason_ = StopReason::Breakpoint;
             running_.store(false, std::memory_order_release);
-            {
-                std::lock_guard<std::mutex> lk(commandMutex_);
-                state_ = DebuggerState::Paused;
-            }
             break;
         }
     }
@@ -1405,50 +1493,22 @@ void DebugBackend::runUntilPause()
 
     emulationLoopRunning_ = true;
 
-    // Set up poll_debugger callback for command checking
+    // Set up poll_debugger callback — checks flags set by other threads
     target_->setPollCallback([this]() {
-        std::lock_guard<std::mutex> lock(commandMutex_);
-
-        if (quitRequested_ || pendingCommand_ == PendingCommand::Quit) {
+        if (quitRequested_) {
             target_->debuggerBreak();
             return;
         }
 
-        // Stage 3.13: break requested from GUI thread
         if (breakRequested_.load(std::memory_order_acquire)) {
             breakRequested_.store(false, std::memory_order_release);
             target_->debuggerBreak();
             return;
         }
 
-        if (pendingCommand_ == PendingCommand::Step) {
-            pendingCommand_ = PendingCommand::None;
-            stepInstruction();
-            stepCompleted_ = true;
-            resultCv_.notify_one();
-            target_->debuggerBreak();
-            return;
-        }
-
-        if (!running_.load(std::memory_order_relaxed) || pauseRequested_) {
+        if (pauseRequested_ || !running_.load(std::memory_order_relaxed)) {
             pauseRequested_ = true;
             target_->debuggerBreak();
-            return;
-        }
-
-        if (pendingCommand_ == PendingCommand::MemoryWrite) {
-            writeResult_ = false;
-            pendingCommand_ = PendingCommand::None;
-            stepCompleted_ = true;
-            resultCv_.notify_one();
-            return;
-        }
-
-        if (pendingCommand_ == PendingCommand::RegisterWrite) {
-            writeRegResult_ = false;
-            pendingCommand_ = PendingCommand::None;
-            stepCompleted_ = true;
-            resultCv_.notify_one();
             return;
         }
     });
@@ -1456,11 +1516,15 @@ void DebugBackend::runUntilPause()
     // Enable debugging mode
     target_->debuggerAttached();
 
-    // Main emulation loop (PSP-style)
+    // Main emulation loop
     while (true) {
         processOneCommand();
 
         if (quitRequested_) {
+            {
+                std::lock_guard<std::mutex> lk(commandMutex_);
+                state_ = DebuggerState::Paused;
+            }
             target_->debuggerDetached();
             emulationLoopRunning_ = false;
             return;

@@ -410,6 +410,27 @@ if(ENABLE_AI_AGENT)
         LINK_FLAGS "-no-pie"
         POSITION_INDEPENDENT_CODE OFF
     )
+
+    # Agent integration tests (Stage 5.3.2 — 20 mandatory tests)
+    # Uses real DebugBackend + NoBoardTarget — needs CORE_SOURCES + options.
+    add_executable(test_agent_integration
+        ${AGENT_DIR}/tests/test_agent_integration.cpp
+        ${DBG_SOURCES}
+        ${CORE_SOURCES}
+        ${SRC_DIR}/options.cpp
+    )
+
+    target_include_directories(test_agent_integration PRIVATE
+        ${AGENT_DIR}
+        ${DBG_SRC_DIR}
+        ${SRC_DIR}
+    )
+
+    target_link_libraries(test_agent_integration
+        debugger_agent
+        ${Boost_LIBRARIES}
+        pthread
+    )
 endif()
 
 include_directories(${SDL2_INCLUDE_DIR})

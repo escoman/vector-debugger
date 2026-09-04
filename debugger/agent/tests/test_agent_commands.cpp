@@ -392,7 +392,7 @@ static void test_trace_timeout()
     params.stopOnRet = true;
     params.stopOnCallerReturn = false;
 
-    auto result = mock.executeTrace(params);
+    auto result = mock.requestExecuteTrace(params).get();
 
     CHECK(result.exitReason == ExitReason::Timeout, "exitReason is Timeout");
     CHECK_EQ(10u, (unsigned)result.instructionsExecuted, "exactly maxInstructions executed");

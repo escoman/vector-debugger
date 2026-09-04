@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <future>
 #include <map>
 #include <vector>
 
@@ -338,9 +339,14 @@ public:
         return r;
     }
 
-    // -- Trace execution (Stage 5.3.1) --------------------------------------
+    // -- Trace execution (Stage 5.3.2 — through queue) -----------------------
 
-    TraceExecutionResult executeTrace(const TraceExecutionParams &params) override {
+    std::future<TraceExecutionResult>
+    requestExecuteTrace(const TraceExecutionParams &params) override {
+        // Mock: execute synchronously, deliver via promise/future
+        auto promise = std::make_shared<std::promise<TraceExecutionResult>>();
+        auto future = promise->get_future();
+
         TraceExecutionResult result;
         result.startSequence = seq_;
         result.entrySp = cpu_.sp;
@@ -389,7 +395,9 @@ public:
         result.endSequence = seq_;
         result.instructionsExecuted = static_cast<uint32_t>(result.endSequence - result.startSequence);
         result.exitSp = cpu_.sp;
-        return result;
+
+        promise->set_value(result);
+        return future;
     }
 
     // -- ROM ----------------------------------------------------------------

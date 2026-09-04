@@ -4,12 +4,14 @@
 #include <cstddef>
 #include <vector>
 #include <map>
+#include <queue>
 #include <functional>
 #include <mutex>
 #include <condition_variable>
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <future>
 
 #include "idebug_backend.h"
 #include "debug_target.h"
@@ -159,9 +161,10 @@ public:
     CommandResult requestRemoveSymbol(uint16_t addr) override;
     CommandResult requestAddLabel(uint16_t addr, const std::string &name) override;
 
-    // -- IDebugBackend: trace execution (Stage 5.3.1) -----------------------
+    // -- IDebugBackend: trace execution (Stage 5.3.2 — through queue) -------
 
-    TraceExecutionResult executeTrace(const TraceExecutionParams &params) override;
+    std::future<TraceExecutionResult>
+        requestExecuteTrace(const TraceExecutionParams &params) override;
 
     // -- debug logging (backward compatibility) -----------------------------
 
@@ -185,24 +188,50 @@ public:
 
     std::vector<struct MemoryStats> memoryStatsSnapshot() const;
 
-    // -- Generic command protocol (Stage 5.3.1) -----------------------------
+    // -- Command Queue (Stage 5.3.2) ----------------------------------------
 
-    enum class GenericCommandType {
-        None,
+    enum class CommandType {
+        // Execution state
+        Run, Pause, Step, Reset, Quit,
+        // Memory/Register
+        MemoryWrite, RegisterWrite,
+        // Breakpoints
         AddBreakpoint, RemoveBreakpoint, SetBreakpointEnabled,
-        CreateFunction, RenameSymbol, SetComment, RemoveSymbol, AddLabel
+        // Symbols
+        CreateFunction, RenameSymbol, SetComment, RemoveSymbol, AddLabel,
+        // Trace
+        ExecuteTrace
     };
 
-    struct GenericCommand {
-        GenericCommandType type = GenericCommandType::None;
+    struct Command {
+        CommandType type = CommandType::Quit;
+        // Parameters (only relevant fields used per command type)
         uint16_t address = 0;
         std::string name;
         std::string comment;
         bool enabled = false;
-        CommandResult result;
+        // Memory write
+        std::vector<uint8_t> writeData;
+        // Register write
+        RegisterId regId = RegisterId::AF;
+        uint16_t regValue = 0;
+        // Trace
+        TraceExecutionParams traceParams;
+        // Result delivery
+        std::promise<CommandResult> promise;
     };
 
-    CommandResult submitCommand(GenericCommand &cmd);
+    class CommandQueue {
+    public:
+        void enqueue(std::unique_ptr<Command> cmd);
+        std::unique_ptr<Command> tryDequeue();
+        std::unique_ptr<Command> waitAndDequeue();
+        bool empty() const;
+    private:
+        std::queue<std::unique_ptr<Command>> queue_;
+        mutable std::mutex mutex_;
+        std::condition_variable cv_;
+    };
 
     // -- emulation thread API (not part of IDebugBackend) --------------------
 
@@ -262,39 +291,17 @@ private:
     static constexpr int kTargetFps = 50;
     static constexpr auto kFrameDuration = std::chrono::microseconds(1000000 / kTargetFps);  // 20 ms
 
-    // -- Stage 3.1: thread-safe command protocol ------------------------------
-
-    enum class PendingCommand { None, Step, Run, Pause, Reset, Quit, MemoryWrite, RegisterWrite };
+    // -- Thread-safe command protocol (Stage 5.3.2 — Command Queue) ---------
 
     mutable std::mutex      commandMutex_;
     std::condition_variable commandCv_;
-    std::condition_variable resultCv_;
-    PendingCommand          pendingCommand_ = PendingCommand::None;
-    bool                    stepCompleted_  = false;
     bool                    quitRequested_  = false;
     mutable std::mutex      stateMutex_;
 
     std::atomic<bool>       running_{false};
     std::atomic<bool>       breakRequested_{false};
 
-    // -- memory write command state -----------------------------------------
-
-    uint16_t                writeAddress_   = 0;
-    std::vector<uint8_t>    writeData_;
-    bool                    writeResult_    = false;
-
-    void processWriteCommand();
-    void executeWriteMemory();
-
-    // -- register write command state ---------------------------------------
-
-    RegisterId  writeRegId_    = RegisterId::AF;
-    uint16_t    writeRegValue_ = 0;
-    bool        writeRegResult_ = false;
     uint16_t    lastPc_        = 0;
-
-    void processRegisterWrite();
-    void executeRegisterWrite();
 
     std::map<int, DebuggerBreakpoint>::iterator findBreakpointByAddress(uint16_t address);
     std::map<int, DebuggerBreakpoint>::const_iterator findBreakpointByAddress(uint16_t address) const;
@@ -322,11 +329,21 @@ private:
 
     mutable std::mutex screenMutex_;
 
-    // -- Generic command protocol (Stage 5.3.1) -----------------------------
+    // -- Command Queue (Stage 5.3.2) ----------------------------------------
 
     std::atomic<bool> emulationLoopRunning_{false};
-    GenericCommand *pendingGenericCommand_ = nullptr;
+    CommandQueue commandQueue_;
+    std::atomic<bool> traceBusy_{false};
 
-    void executeGenericCommand(GenericCommand &cmd);
+    // Pending trace result promise (set by requestExecuteTrace, fulfilled by executeCommand)
+    std::shared_ptr<std::promise<TraceExecutionResult>> pendingTracePromise_;
+
+    void executeCommand(Command &cmd);
+    TraceExecutionResult executeTraceInternal(const TraceExecutionParams &params);
+
+    // Helper: dual-mode command submission.
+    // If emulation loop is running — enqueue and wait for result.
+    // If not (test scenario) — execute directly on calling thread.
+    CommandResult submitAndWait(std::unique_ptr<Command> cmd);
 
 };

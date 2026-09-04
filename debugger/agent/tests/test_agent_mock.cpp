@@ -401,7 +401,7 @@ static void test_full_scenario()
     params.stopOnRet = true;
     params.stopOnCallerReturn = false;
 
-    auto traceExec = backend.executeTrace(params);
+    auto traceExec = backend.requestExecuteTrace(params).get();
     CHECK(traceExec.instructionsExecuted > 0, "subroutine executed");
     CHECK(traceExec.exitReason == ExitReason::Ret, "exit reason Ret");
     CHECK_EQ(0x0207u, (unsigned)traceExec.exitPc, "exit at RET (0207)");

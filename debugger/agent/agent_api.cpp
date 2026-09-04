@@ -658,7 +658,7 @@ TraceResult AgentApi::traceFunction(uint16_t address)
     params.stopOnRet = true;
     params.stopOnCallerReturn = false;
 
-    auto traceExec = backend_.executeTrace(params);
+    auto traceExec = backend_.requestExecuteTrace(params).get();
 
     // 4. Remove temporary breakpoint
     backend_.requestRemoveBreakpoint(address);
