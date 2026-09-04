@@ -276,34 +276,8 @@ target_link_libraries(test_live_map
     pthread
 )
 
-include_directories(${SDL2_INCLUDE_DIR})
-include_directories(${IMGUI_DIR})
-include_directories(${IMGUI_DIR}/backends)
-include_directories(${DBG_GUI_DIR})
-
-set(GUI_SOURCES
-    ${DBG_GUI_DIR}/main.cpp
-    ${DBG_GUI_DIR}/gui.cpp
-    ${DBG_GUI_DIR}/workspace_manager.cpp
-    ${DBG_GUI_DIR}/memory_inspector_window.cpp
-    ${DBG_GUI_DIR}/stack_view_window.cpp
-    ${DBG_GUI_DIR}/breakpoints_window.cpp
-    ${DBG_GUI_DIR}/disassembly_window.cpp
-    ${DBG_GUI_DIR}/execution_trace_window.cpp
-    ${DBG_GUI_DIR}/io_inspector_window.cpp
-    ${DBG_GUI_DIR}/vector_screen_window.cpp
-    ${DBG_GUI_DIR}/memory_map_window.cpp
-    ${DBG_GUI_DIR}/functions_window.cpp
-    ${DBG_GUI_DIR}/xrefs_window.cpp
-    ${DBG_GUI_DIR}/call_graph_window.cpp
-    ${DBG_GUI_DIR}/search_window.cpp
-    ${DBG_GUI_DIR}/keyboard_window.cpp
-    ${DBG_GUI_DIR}/rom_file_dialog.cpp
-    ${DBG_GUI_DIR}/sound_window.cpp
-)
-
 # ---------------------------------------------------------------------------
-# Binary resources for v06c-debugger (boot ROM, window icon)
+# Binary resources (boot ROM, window icon)
 # ---------------------------------------------------------------------------
 
 find_program(OBJCOPY objcopy)
@@ -343,11 +317,120 @@ add_custom_command(
     DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/icon64.png
 )
 
+set(BINARY_RESOURCES
+    ${CMAKE_CURRENT_BINARY_DIR}/boots.bin.o
+    ${CMAKE_CURRENT_BINARY_DIR}/icon64.png.o
+)
+
+# ---------------------------------------------------------------------------
+# AI Agent Module (Stage 5.3) — optional, off by default
+# ---------------------------------------------------------------------------
+
+option(ENABLE_AI_AGENT "Build AI Agent module for dynamic ROM analysis" OFF)
+
+if(ENABLE_AI_AGENT)
+    set(AGENT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/agent)
+
+    add_library(debugger_agent STATIC
+        ${AGENT_DIR}/agent_api.cpp
+        ${AGENT_DIR}/agent_log.cpp
+    )
+
+    target_include_directories(debugger_agent PUBLIC
+        ${AGENT_DIR}
+        ${DBG_SRC_DIR}
+        ${SRC_DIR}
+    )
+
+    target_link_libraries(debugger_agent
+        debugger_core
+        pthread
+    )
+
+    # Agent API tests (use mock backend — no Board/SDL dependency)
+    add_executable(test_agent_api
+        ${AGENT_DIR}/tests/test_agent_api.cpp
+    )
+
+    target_include_directories(test_agent_api PRIVATE
+        ${AGENT_DIR}
+        ${DBG_SRC_DIR}
+        ${SRC_DIR}
+    )
+
+    target_link_libraries(test_agent_api
+        debugger_agent
+        debugger_core
+        ${Boost_LIBRARIES}
+        pthread
+    )
+
+    # Mock Agent scenario test (uses real DebugBackend + DebugAdapter)
+    add_executable(test_agent_mock
+        ${AGENT_DIR}/tests/test_agent_mock.cpp
+        ${AGENT_DIR}/agent_api.cpp
+        ${AGENT_DIR}/agent_log.cpp
+        ${BINARY_RESOURCES}
+    )
+
+    target_include_directories(test_agent_mock PRIVATE
+        ${AGENT_DIR}
+        ${DBG_SRC_DIR}
+        ${SRC_DIR}
+    )
+
+    target_link_libraries(test_agent_mock
+        debugger_adapter
+        debugger_core
+        ${SDL2_LIBRARY}
+        ${Boost_LIBRARIES}
+        pthread
+    )
+
+    # Binary resources produce absolute symbols — disable PIE
+    set_target_properties(test_agent_mock PROPERTIES
+        LINK_FLAGS "-no-pie"
+        POSITION_INDEPENDENT_CODE OFF
+    )
+endif()
+
+include_directories(${SDL2_INCLUDE_DIR})
+include_directories(${IMGUI_DIR})
+include_directories(${IMGUI_DIR}/backends)
+include_directories(${DBG_GUI_DIR})
+
+set(GUI_SOURCES
+    ${DBG_GUI_DIR}/main.cpp
+    ${DBG_GUI_DIR}/gui.cpp
+    ${DBG_GUI_DIR}/workspace_manager.cpp
+    ${DBG_GUI_DIR}/memory_inspector_window.cpp
+    ${DBG_GUI_DIR}/stack_view_window.cpp
+    ${DBG_GUI_DIR}/breakpoints_window.cpp
+    ${DBG_GUI_DIR}/disassembly_window.cpp
+    ${DBG_GUI_DIR}/execution_trace_window.cpp
+    ${DBG_GUI_DIR}/io_inspector_window.cpp
+    ${DBG_GUI_DIR}/vector_screen_window.cpp
+    ${DBG_GUI_DIR}/memory_map_window.cpp
+    ${DBG_GUI_DIR}/functions_window.cpp
+    ${DBG_GUI_DIR}/xrefs_window.cpp
+    ${DBG_GUI_DIR}/call_graph_window.cpp
+    ${DBG_GUI_DIR}/search_window.cpp
+    ${DBG_GUI_DIR}/keyboard_window.cpp
+    ${DBG_GUI_DIR}/rom_file_dialog.cpp
+    ${DBG_GUI_DIR}/sound_window.cpp
+)
+
+# ---------------------------------------------------------------------------
+# GUI executable
+# ---------------------------------------------------------------------------
+
+# Find OpenGL
+find_package(OpenGL REQUIRED)
+
 add_executable(v06c-debugger
     ${GUI_SOURCES}
     ${IMGUI_SOURCES}
-    ${CMAKE_CURRENT_BINARY_DIR}/boots.bin.o
-    ${CMAKE_CURRENT_BINARY_DIR}/icon64.png.o
+    ${BINARY_RESOURCES}
 )
 
 target_link_libraries(v06c-debugger
