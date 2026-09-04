@@ -297,6 +297,7 @@ set(GUI_SOURCES
     ${DBG_GUI_DIR}/xrefs_window.cpp
     ${DBG_GUI_DIR}/call_graph_window.cpp
     ${DBG_GUI_DIR}/search_window.cpp
+    ${DBG_GUI_DIR}/keyboard_window.cpp
 )
 
 # ---------------------------------------------------------------------------

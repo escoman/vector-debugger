@@ -53,6 +53,11 @@ public:
 
     bool loadRom(const std::string &path, uint32_t org = 0) override;
 
+    // -- IDebugBackend: keyboard injection ----------------------------------
+
+    void pressKey(int scancode) override;
+    void releaseKey(int scancode) override;
+
     // -- IDebugBackend: memory access ---------------------------------------
 
     uint8_t readMemory(uint16_t address) override;

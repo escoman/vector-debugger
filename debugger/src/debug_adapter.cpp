@@ -334,6 +334,20 @@ ScreenData DebugAdapter::screenSnapshot()
 }
 
 // ---------------------------------------------------------------------------
+// IDebugTarget: Keyboard injection
+// ---------------------------------------------------------------------------
+
+void DebugAdapter::pressKey(int scancode)
+{
+    keyboard.apply_key(static_cast<SDL_Scancode>(scancode), false);
+}
+
+void DebugAdapter::releaseKey(int scancode)
+{
+    keyboard.apply_key(static_cast<SDL_Scancode>(scancode), true);
+}
+
+// ---------------------------------------------------------------------------
 // IDebugTarget: ROM / init
 // ---------------------------------------------------------------------------
 

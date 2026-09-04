@@ -178,6 +178,8 @@ public:
             if (bps[i].enabled) board_.insert_breakpoint(0, bps[i].address, 1);
     }
     ScreenData screenSnapshot() override { return {}; }
+    void pressKey(int) override {}
+    void releaseKey(int) override {}
     bool loadRom(const std::string&, uint32_t) override { return false; }
     void initCpu(uint16_t pc, uint16_t sp) override {
         i8080_jump(pc); i8080_setreg_sp(sp); i8080_init();

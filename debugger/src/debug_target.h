@@ -63,6 +63,11 @@ public:
 
     virtual ScreenData screenSnapshot() = 0;
 
+    // -- Keyboard injection -------------------------------------------------
+
+    virtual void pressKey(int scancode) {}
+    virtual void releaseKey(int scancode) {}
+
     // -- ROM / init ---------------------------------------------------------
 
     virtual bool loadRom(const std::string &path, uint32_t org) = 0;

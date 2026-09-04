@@ -155,4 +155,9 @@ public:
     // -- ROM ----------------------------------------------------------------
 
     virtual bool loadRom(const std::string &path, uint32_t org = 0) = 0;
+
+    // -- Keyboard injection -------------------------------------------------
+
+    virtual void pressKey(int scancode) = 0;
+    virtual void releaseKey(int scancode) = 0;
 };

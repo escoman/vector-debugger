@@ -264,6 +264,23 @@ void WorkspaceManager::markDirty()
 }
 
 // ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+std::string WorkspaceManager::getSetting(const std::string &key,
+                                          const std::string &defaultVal) const
+{
+    auto it = settings_.find(key);
+    return (it != settings_.end()) ? it->second : defaultVal;
+}
+
+void WorkspaceManager::setSetting(const std::string &key, const std::string &value)
+{
+    settings_[key] = value;
+    markDirty();
+}
+
+// ---------------------------------------------------------------------------
 // File I/O
 // ---------------------------------------------------------------------------
 
@@ -295,6 +312,12 @@ bool WorkspaceManager::saveToFile(const std::string &name)
     file << "\n[Visibility]\n";
     file << serializeVisibility();
 
+    // Write settings section
+    file << "\n[Settings]\n";
+    for (const auto &pair : settings_) {
+        file << pair.first << "=" << pair.second << "\n";
+    }
+
     return true;
 }
 
@@ -311,9 +334,11 @@ bool WorkspaceManager::loadFromFile(const std::string &name)
     // Parse sections
     std::string iniContent;
     std::string visContent;
+    std::string settingsContent;
 
     size_t imguiStart = content.find("[ImGui]");
     size_t visStart = content.find("[Visibility]");
+    size_t settingsStart = content.find("[Settings]");
 
     if (imguiStart != std::string::npos) {
         size_t dataStart = content.find('\n', imguiStart);
@@ -335,7 +360,15 @@ bool WorkspaceManager::loadFromFile(const std::string &name)
         size_t dataStart = content.find('\n', visStart);
         if (dataStart == std::string::npos) dataStart = content.size();
         else dataStart++;
-        visContent = content.substr(dataStart);
+        size_t dataEnd = (settingsStart != std::string::npos) ? settingsStart : content.size();
+        visContent = content.substr(dataStart, dataEnd - dataStart);
+    }
+
+    if (settingsStart != std::string::npos) {
+        size_t dataStart = content.find('\n', settingsStart);
+        if (dataStart == std::string::npos) dataStart = content.size();
+        else dataStart++;
+        settingsContent = content.substr(dataStart);
     }
 
     // Apply ImGui layout
@@ -347,6 +380,23 @@ bool WorkspaceManager::loadFromFile(const std::string &name)
     // Apply visibility
     if (!visContent.empty()) {
         deserializeVisibility(visContent);
+    }
+
+    // Parse settings
+    if (!settingsContent.empty()) {
+        settings_.clear();
+        std::istringstream ss(settingsContent);
+        std::string line;
+        while (std::getline(ss, line)) {
+            while (!line.empty() && (line.back() == '\n' || line.back() == '\r' ||
+                                      line.back() == ' ')) {
+                line.pop_back();
+            }
+            if (line.empty()) continue;
+            size_t eq = line.find('=');
+            if (eq == std::string::npos) continue;
+            settings_[line.substr(0, eq)] = line.substr(eq + 1);
+        }
     }
 
     return true;
@@ -542,6 +592,7 @@ void WorkspaceManager::buildDefaultLayout(unsigned int dockspaceId)
     ImGui::DockBuilderDockWindow("Cross References", centerTop);
     ImGui::DockBuilderDockWindow("Call Graph", centerTop);
     ImGui::DockBuilderDockWindow("Search", rightTop);
+    ImGui::DockBuilderDockWindow("Keyboard", leftBottom);
 }
 
 void WorkspaceManager::buildScreenAnalysisLayout(unsigned int dockspaceId)

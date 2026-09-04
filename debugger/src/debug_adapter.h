@@ -60,6 +60,9 @@ public:
 
     ScreenData screenSnapshot() override;
 
+    void pressKey(int scancode) override;
+    void releaseKey(int scancode) override;
+
     bool loadRom(const std::string &path, uint32_t org) override;
     void initCpu(uint16_t pc, uint16_t sp) override;
 

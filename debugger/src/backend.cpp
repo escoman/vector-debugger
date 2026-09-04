@@ -111,6 +111,20 @@ bool DebugBackend::loadRom(const std::string &path, uint32_t org)
 }
 
 // ---------------------------------------------------------------------------
+// Keyboard injection
+// ---------------------------------------------------------------------------
+
+void DebugBackend::pressKey(int scancode)
+{
+    if (target_) target_->pressKey(scancode);
+}
+
+void DebugBackend::releaseKey(int scancode)
+{
+    if (target_) target_->releaseKey(scancode);
+}
+
+// ---------------------------------------------------------------------------
 // Memory callback installation (with chaining)
 // ---------------------------------------------------------------------------
 

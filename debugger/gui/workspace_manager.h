@@ -61,6 +61,11 @@ public:
     bool isDirty() const;
     void markDirty();
 
+    // Settings — persistent key-value pairs stored in workspace ini.
+    // Used for things like last ROM directory, etc.
+    std::string getSetting(const std::string &key, const std::string &defaultVal = "") const;
+    void setSetting(const std::string &key, const std::string &value);
+
     // Preset layout builders (public for testability)
     using LayoutBuilder = std::function<void(unsigned int dockspaceId)>;
     static void buildDefaultLayout(unsigned int dockspaceId);
@@ -103,4 +108,7 @@ private:
     void saveCurrentVisibility();
     void restoreVisibility();
     std::map<std::string, bool> savedVisibility_;
+
+    // Persistent settings (stored in [Settings] section of workspace ini)
+    std::map<std::string, std::string> settings_;
 };

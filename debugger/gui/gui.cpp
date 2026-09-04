@@ -25,14 +25,18 @@
 // Native file dialog (zenity on Linux)
 // ---------------------------------------------------------------------------
 
-static std::string showNativeFileOpenDialog()
+static std::string showNativeFileOpenDialog(const std::string &startDir = "")
 {
 #ifdef __linux__
-    FILE *fp = popen(
-        "zenity --title='Open ROM' --file-selection"
-        " --file-filter='ROM files | *.rom *.r0m *.bin *.ROM *.R0M *.BIN'"
-        " --file-filter='All files | *'"
-        " 2>/dev/null", "r");
+    std::string cmd = "zenity --title='Open ROM' --file-selection";
+    if (!startDir.empty()) {
+        cmd += " --filename='" + startDir + "/'";
+    }
+    cmd += " --file-filter='ROM files | *.rom *.r0m *.bin *.ROM *.R0M *.BIN'";
+    cmd += " --file-filter='All files | *'";
+    cmd += " 2>/dev/null";
+
+    FILE *fp = popen(cmd.c_str(), "r");
     if (!fp) return {};
 
     char buf[1024];
@@ -272,8 +276,15 @@ void DebuggerGui::render(IDebugBackend &backend)
     // --- Open ROM dialog ---
     if (showOpenRomDialog_) {
         showOpenRomDialog_ = false;
-        std::string path = showNativeFileOpenDialog();
+        std::string lastDir = workspaceManager_.getSetting("LastRomDirectory");
+        std::string path = showNativeFileOpenDialog(lastDir);
         if (!path.empty()) {
+            // Save the directory of the selected ROM
+            size_t lastSlash = path.rfind('/');
+            if (lastSlash != std::string::npos) {
+                workspaceManager_.setSetting("LastRomDirectory",
+                    path.substr(0, lastSlash));
+            }
             uint32_t org = 0;
             if (true) { // auto-detect
                 size_t dot = path.rfind('.');
@@ -358,6 +369,7 @@ void DebuggerGui::render(IDebugBackend &backend)
     xrefsWindow_.render(backend);
     callGraphWindow_.render(backend);
     searchWindow_.render(backend);
+    keyboardWindow_.render(backend);
 
     // Register visibility refs on first frame (triggers workspace loading)
     static bool visRegsRegistered = false;
@@ -377,6 +389,7 @@ void DebuggerGui::render(IDebugBackend &backend)
             {"Cross References", &xrefsWindow_.getVisibleRef()},
             {"Call Graph", &callGraphWindow_.getVisibleRef()},
             {"Search", &searchWindow_.getVisibleRef()},
+            {"Keyboard", &keyboardWindow_.getVisibleRef()},
         });
         visRegsRegistered = true;
     }
@@ -672,6 +685,7 @@ void DebuggerGui::renderToolbar(IDebugBackend &backend)
             ImGui::MenuItem("Cross References", nullptr, &xrefsWindow_.getVisibleRef());
             ImGui::MenuItem("Call Graph", nullptr, &callGraphWindow_.getVisibleRef());
             ImGui::MenuItem("Search", nullptr, &searchWindow_.getVisibleRef());
+            ImGui::MenuItem("Keyboard", nullptr, &keyboardWindow_.getVisibleRef());
             ImGui::Separator();
             if (ImGui::MenuItem("Cascade")) {
                 layoutCascade();
@@ -804,6 +818,7 @@ void DebuggerGui::layoutCascade()
         {"Cross References", &xrefsWindow_.getVisibleRef()},
         {"Call Graph", &callGraphWindow_.getVisibleRef()},
         {"Search", &searchWindow_.getVisibleRef()},
+        {"Keyboard", &keyboardWindow_.getVisibleRef()},
     };
 
     ImGuiViewport *vp = ImGui::GetMainViewport();
@@ -839,6 +854,7 @@ void DebuggerGui::applyCascade()
         {"Cross References", &xrefsWindow_.getVisibleRef()},
         {"Call Graph", &callGraphWindow_.getVisibleRef()},
         {"Search", &searchWindow_.getVisibleRef()},
+        {"Keyboard", &keyboardWindow_.getVisibleRef()},
     };
 
     for (auto &w : wins) {
@@ -879,6 +895,7 @@ void DebuggerGui::layoutTile()
         {"Cross References", &xrefsWindow_.getVisibleRef()},
         {"Call Graph", &callGraphWindow_.getVisibleRef()},
         {"Search", &searchWindow_.getVisibleRef()},
+        {"Keyboard", &keyboardWindow_.getVisibleRef()},
     };
     for (auto &w : all) {
         if (w.visible && *w.visible) visible.push_back(w);

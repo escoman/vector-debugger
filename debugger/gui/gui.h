@@ -13,6 +13,7 @@
 #include "xrefs_window.h"
 #include "call_graph_window.h"
 #include "search_window.h"
+#include "keyboard_window.h"
 #include "workspace_manager.h"
 #include "idebug_backend.h"
 #include "events.h"
@@ -114,6 +115,9 @@ private:
     
     // Search window (Stage 4.8)
     SearchWindow searchWindow_;
+    
+    // Keyboard window (Stage 5.3)
+    KeyboardWindow keyboardWindow_;
     
     // Instruction History cache (Stage 3.12 — avoid per-frame snapshot)
     std::vector<InstructionEvent> cachedHistEntries_;
