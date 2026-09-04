@@ -632,14 +632,13 @@ TraceResult AgentApi::traceFunction(uint16_t address)
     // 2. Run until breakpoint hit
     backend_.requestRun();
 
-    // Wait until the backend is paused (breakpoint hit)
-    // In test scenarios (no emulation thread), requestRun in mock
-    // should simulate running to the breakpoint.
-    // In real debugger, the emulation thread processes requestRun
-    // and stops at the breakpoint.
-    int waitLimit = 1000;
+    // Stage 5.3.3.1: Wait for backend to pause (breakpoint hit).
+    // No sleep_for / busy-wait — use yield() to cooperate with scheduler.
+    // In test scenarios (MockBackend), requestRun() is synchronous and
+    // the backend is already paused when we reach this point.
+    int waitLimit = 10000;
     while (!backend_.isPaused() && waitLimit-- > 0) {
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
+        std::this_thread::yield();
     }
 
     if (!backend_.isPaused()) {

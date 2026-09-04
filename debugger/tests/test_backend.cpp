@@ -216,6 +216,8 @@ static void setup(Memory &mem, DebugBackend *&dbg)
     test_target = new NoBoardTarget(mem);
     dbg = new DebugBackend(*test_target);
     test_dbg = dbg;
+    // Stage 5.3.3.1: Enable test-only synchronous fallback (no emulation thread)
+    dbg->testSynchronous_ = true;
     dbg->reset();
 }
 

@@ -155,6 +155,32 @@ static const uint8_t subroutine[] = {
     0xC9,
 };
 
+// IO test program: OUT instruction
+static const uint8_t io_test_program[] = {
+    // 0x0000: LXI SP, 0xC100
+    0x31, 0x00, 0xC1,
+    // 0x0003: MVI A, 0x55
+    0x3E, 0x55,
+    // 0x0005: OUT 0x03
+    0xD3, 0x03,
+    // 0x0007: HLT
+    0x76,
+};
+
+// VRAM write test program
+static const uint8_t vram_test_program[] = {
+    // 0x0000: LXI SP, 0xC100
+    0x31, 0x00, 0xC1,
+    // 0x0003: LXI H, 0xC000
+    0x21, 0x00, 0xC0,
+    // 0x0006: MVI A, 0x42
+    0x3E, 0x42,
+    // 0x0008: MOV M, A   (writes 0x42 to 0xC000 = VRAM)
+    0x77,
+    // 0x0009: HLT
+    0x76,
+};
+
 // Simple loop program for running tests
 static const uint8_t loop_program[] = {
     // 0x0000: LXI SP, 0xC100
@@ -192,6 +218,8 @@ struct TestFixture {
         Options.nosound = true;
         target = new NoBoardTarget(mem);
         backend = new DebugBackend(*target);
+        // Stage 5.3.3.1: Enable test-only synchronous fallback
+        backend->testSynchronous_ = true;
         backend->reset();
         // Set HAL globals for i8080 CPU
         hal_memory = &mem;
@@ -1019,6 +1047,221 @@ static void test_pc0000_not_unknown()
 }
 
 // ---------------------------------------------------------------------------
+// Stage 5.3.3.1: Mandatory fixup tests
+// ---------------------------------------------------------------------------
+
+// Test: Quit with multiple pending commands (Section 17)
+static void test_quit_with_multiple_pending_commands()
+{
+    TEST_BEGIN("quit_with_multiple_pending_commands");
+    TestFixture f;
+    writeProgram(f.mem, loop_program, sizeof(loop_program), 0x0000);
+    f.initCpu(0x0000);
+
+    std::thread emuThread([&]{ f.backend->runUntilPause(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Enqueue commands from multiple threads + quit
+    std::atomic<int> completedCount{0};
+    std::vector<std::thread> threads;
+
+    for (int i = 0; i < 5; i++) {
+        uint16_t addr = static_cast<uint16_t>(0x1000 + i * 0x100);
+        threads.emplace_back([&f, &completedCount, addr]{
+            auto r = f.backend->requestAddBreakpoint(addr);
+            completedCount++;
+            (void)r.status; // Completed or Cancelled — both acceptable
+        });
+    }
+
+    // Small delay to let some commands enqueue
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    f.backend->requestQuit();
+
+    for (auto &t : threads) t.join();
+    emuThread.join();
+
+    CHECK_EQ(5u, (unsigned)completedCount.load(), "all 5 callers received result");
+    TEST_END();
+}
+
+// Test: IO attribution with OUT instruction (Section 19)
+static void test_io_attribution_with_out_instruction()
+{
+    TEST_BEGIN("io_attribution_with_out_instruction");
+    TestFixture f;
+    writeProgram(f.mem, io_test_program, sizeof(io_test_program), 0x0000);
+    f.initCpu(0x0000);
+
+    IDebugBackend::TraceExecutionParams params;
+    params.startPc = 0x0000;
+    params.maxInstructions = 10;
+    params.stopOnRet = false;
+
+    auto result = f.backend->requestExecuteTrace(params).get();
+    CHECK(result.instructionsExecuted >= 3, "executed through OUT instruction");
+
+    // Check IO history for OUT event during trace
+    auto ioHistory = f.backend->ioHistorySnapshot();
+    bool foundIoOut = false;
+    for (const auto &ev : ioHistory) {
+        if (ev.instructionSequence >= result.startSequence &&
+            ev.instructionSequence < result.endSequence &&
+            ev.type == IoAccessType::Out &&
+            ev.port == 0x03) {
+            foundIoOut = true;
+            CHECK_EQ(0x55u, (unsigned)ev.value, "IO OUT value is 0x55");
+            break;
+        }
+    }
+    CHECK(foundIoOut, "IO OUT event found at port 0x03");
+
+    // Verify PC attribution: OUT is at PC=0x0005
+    std::map<uint64_t, uint16_t> seqToPc;
+    auto instrTrace = f.backend->instructionHistorySnapshot();
+    for (const auto &ie : instrTrace) {
+        if (ie.sequence >= result.startSequence &&
+            ie.sequence < result.endSequence) {
+            seqToPc[ie.sequence] = ie.pcBefore;
+        }
+    }
+    for (const auto &ev : ioHistory) {
+        if (ev.instructionSequence >= result.startSequence &&
+            ev.instructionSequence < result.endSequence &&
+            ev.type == IoAccessType::Out) {
+            auto it = seqToPc.find(ev.instructionSequence);
+            if (it != seqToPc.end()) {
+                CHECK_EQ(0x0005u, (unsigned)it->second, "IO event PC = 0x0005 (OUT instruction)");
+            }
+            break;
+        }
+    }
+    TEST_END();
+}
+
+// Test: Memory/VRAM attribution detailed (Section 20)
+static void test_memory_vram_attribution_detailed()
+{
+    TEST_BEGIN("memory_vram_attribution_detailed");
+    TestFixture f;
+    writeProgram(f.mem, vram_test_program, sizeof(vram_test_program), 0x0000);
+    f.initCpu(0x0000);
+
+    IDebugBackend::TraceExecutionParams params;
+    params.startPc = 0x0000;
+    params.maxInstructions = 10;
+    params.stopOnRet = false;
+
+    auto result = f.backend->requestExecuteTrace(params).get();
+    CHECK(result.instructionsExecuted >= 4, "executed through MOV M,A");
+
+    // Check memory history for VRAM write at 0xC000
+    auto memHistory = f.backend->memoryHistorySnapshot();
+    bool foundVramWrite = false;
+    for (const auto &ev : memHistory) {
+        if (ev.instructionSequence >= result.startSequence &&
+            ev.instructionSequence < result.endSequence &&
+            ev.type == MemoryAccessType::Write &&
+            ev.virt == 0xC000) {
+            foundVramWrite = true;
+            CHECK_EQ(0x42u, (unsigned)ev.value, "VRAM write value is 0x42");
+            break;
+        }
+    }
+    CHECK(foundVramWrite, "VRAM write at 0xC000 found");
+
+    // Verify PC attribution: MOV M,A is at PC=0x0008
+    std::map<uint64_t, uint16_t> seqToPc;
+    auto instrTrace = f.backend->instructionHistorySnapshot();
+    for (const auto &ie : instrTrace) {
+        if (ie.sequence >= result.startSequence &&
+            ie.sequence < result.endSequence) {
+            seqToPc[ie.sequence] = ie.pcBefore;
+        }
+    }
+    for (const auto &ev : memHistory) {
+        if (ev.instructionSequence >= result.startSequence &&
+            ev.instructionSequence < result.endSequence &&
+            ev.type == MemoryAccessType::Write &&
+            ev.virt == 0xC000) {
+            auto it = seqToPc.find(ev.instructionSequence);
+            if (it != seqToPc.end()) {
+                CHECK_EQ(0x0008u, (unsigned)it->second, "VRAM write PC = 0x0008 (MOV M,A)");
+            }
+            break;
+        }
+    }
+    TEST_END();
+}
+
+// Test: Cancelled command not executed (Section 8)
+static void test_cancelled_command_not_executed()
+{
+    TEST_BEGIN("cancelled_command_not_executed");
+    TestFixture f;
+    writeProgram(f.mem, test_program, sizeof(test_program), 0x0000);
+    f.initCpu();
+    // initCpu() calls i8080_init() which resets PC to 0.
+    // Set PC to 0x0003 via writeCpuRegister (calls i8080_jump without i8080_init).
+    f.target->writeCpuRegister(static_cast<int>(IDebugBackend::RegisterId::PC), 0x0003);
+
+    // Verify PC is at 0x0003
+    uint16_t pcBefore = f.backend->getCpuState().pc;
+    CHECK_EQ(0x0003u, (unsigned)pcBefore, "PC at 0x0003 before");
+
+    // Submit a Step command that is pre-cancelled via submitAndWait().
+    // The test synchronous path should detect cancelled=true and return Cancelled
+    // WITHOUT executing the Step (which would advance PC).
+    auto cmd = std::make_unique<DebugBackend::Command>();
+    cmd->type = DebugBackend::CommandType::Step;
+    cmd->cancelled.store(true, std::memory_order_release);
+
+    auto result = f.backend->submitAndWait(std::move(cmd));
+
+    // Verify: command was cancelled, not executed
+    CHECK(!result.success, "cancelled command returned success=false");
+    CHECK(result.status == CommandResult::Cancelled, "status is Cancelled");
+
+    // Verify: PC hasn't changed (Step was NOT executed)
+    uint16_t pcAfter = f.backend->getCpuState().pc;
+    CHECK_EQ(pcBefore, pcAfter, "PC unchanged — cancelled command not executed");
+
+    // Now verify that a non-cancelled command DOES execute
+    auto r = f.backend->requestAddBreakpoint(0x0500);
+    CHECK(r.success, "non-cancelled command executed successfully");
+    CHECK(f.backend->hasBreakpoint(0x0500), "breakpoint exists");
+    TEST_END();
+}
+
+// Test: Executing command completes (Section 8.1)
+static void test_executing_command_completes()
+{
+    TEST_BEGIN("executing_command_completes");
+    TestFixture f;
+    writeProgram(f.mem, test_program, sizeof(test_program), 0x0000);
+    f.initCpu();
+
+    // Verify: in test mode, commands go through Executing state and complete
+    auto r1 = f.backend->requestAddBreakpoint(0x0300);
+    CHECK(r1.success, "first command completed");
+    CHECK(r1.status == CommandResult::Completed, "status is Completed");
+
+    // Multiple sequential commands should all complete
+    auto r2 = f.backend->requestCreateFunction(0x0200, "TestFunc");
+    CHECK(r2.success, "second command completed");
+    CHECK(r2.status == CommandResult::Completed, "status is Completed");
+
+    auto r3 = f.backend->requestAddBreakpoint(0x0400);
+    CHECK(r3.success, "third command completed");
+
+    // Verify all mutations took effect
+    CHECK(f.backend->hasBreakpoint(0x0300), "bp 0x0300 exists");
+    CHECK(f.backend->hasBreakpoint(0x0400), "bp 0x0400 exists");
+    CHECK(f.backend->symbolDatabase().findSymbol(0x0200) != nullptr, "symbol exists");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -1027,7 +1270,7 @@ int main()
     setbuf(stdout, nullptr);
 
     printf("\n\033[1;33m========================================\033[0m\n");
-    printf("\033[1;33m  Agent Integration Tests — Stage 5.3.3\033[0m\n");
+    printf("\033[1;33m  Agent Integration Tests — Stage 5.3.3.1\033[0m\n");
     printf("\033[1;33m========================================\033[0m\n");
 
     // Non-threaded tests
@@ -1062,6 +1305,13 @@ int main()
     test_no_pending_promise_after_quit();           // 25
     test_no_command_lost_during_shutdown();         // 26
     test_pc0000_not_unknown();                      // 27
+
+    // Stage 5.3.3.1 fixup tests
+    test_quit_with_multiple_pending_commands();     // 28
+    test_io_attribution_with_out_instruction();     // 29
+    test_memory_vram_attribution_detailed();        // 30
+    test_cancelled_command_not_executed();          // 31
+    test_executing_command_completes();             // 32
 
     printf("\n\033[1;33m========================================\033[0m\n");
     printf("  Results: %d/%d passed", tests_passed, tests_run);

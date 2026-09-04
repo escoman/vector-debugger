@@ -47,6 +47,10 @@ public:
 
     ~DebugBackend();
 
+    // Stage 5.3.3.1: Test-only flag — allows synchronous command execution
+    // when no emulation thread is running. Production code must NEVER set this.
+    bool testSynchronous_ = false;
+
     // -- Target integration (Stage 3.13a) -----------------------------------
 
     void attachTarget(IDebugTarget *target);
@@ -203,6 +207,9 @@ public:
         ExecuteTrace
     };
 
+    // Stage 5.3.3.1: Explicit command lifecycle state machine
+    enum class CommandState { Queued, Executing };
+
     struct Command {
         CommandType type = CommandType::Quit;
         // Parameters (only relevant fields used per command type)
@@ -218,7 +225,9 @@ public:
         // Trace
         TraceExecutionParams traceParams;
         std::shared_ptr<std::promise<TraceExecutionResult>> tracePromise;
-        // Cancellation (Stage 5.3.3)
+        // Stage 5.3.3.1: Command lifecycle state
+        std::atomic<CommandState> state{CommandState::Queued};
+        // Cancellation (Stage 5.3.3) — only checked while Queued
         std::atomic<bool> cancelled{false};
         // Result delivery
         std::promise<CommandResult> promise;
@@ -248,6 +257,11 @@ public:
     void pause();
     void reset();
 
+    // Helper: dual-mode command submission.
+    // If emulation loop is running — enqueue and wait for result.
+    // If not (test scenario) — execute directly on calling thread.
+    CommandResult submitAndWait(std::unique_ptr<Command> cmd);
+
 private:
     IDebugTarget *target_;
 
@@ -256,8 +270,8 @@ private:
     std::map<int, DebuggerBreakpoint> breakpoints_;
     int nextId_;
 
-    bool pauseRequested_;
-    std::atomic<bool> pauseRequestedAtomic_{false};  // Stage 5.3.3: atomic fast-path
+    // Stage 5.3.3.1: pauseRequested_ removed — only atomic version remains.
+    std::atomic<bool> pauseRequestedAtomic_{false};
 
     StopReason stopReason_ = StopReason::None;
     bool       skipBreakpoint_ = false;
@@ -341,10 +355,5 @@ private:
 
     void executeCommand(Command &cmd);
     TraceExecutionResult executeTraceInternal(const TraceExecutionParams &params);
-
-    // Helper: dual-mode command submission.
-    // If emulation loop is running — enqueue and wait for result.
-    // If not (test scenario) — execute directly on calling thread.
-    CommandResult submitAndWait(std::unique_ptr<Command> cmd);
 
 };

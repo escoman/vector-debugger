@@ -180,6 +180,8 @@ static void test_full_scenario()
 
     // Create DebugBackend wrapping the adapter
     DebugBackend backend(adapter);
+    // Stage 5.3.3.1: Enable test-only synchronous fallback (no emulation thread)
+    backend.testSynchronous_ = true;
 
     // Create AgentApi wrapping the backend
     AgentApi api(backend);

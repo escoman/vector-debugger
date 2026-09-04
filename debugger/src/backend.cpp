@@ -60,7 +60,6 @@ DebugBackend::DebugBackend(IDebugTarget &target)
     : target_(&target)
     , state_(DebuggerState::Paused)
     , nextId_(1)
-    , pauseRequested_(false)
     , instructionSequence_(0)
     , instrumentationEnabled_(true)
     , fetchRemaining_(0)
@@ -106,7 +105,6 @@ bool DebugBackend::loadRom(const std::string &path, uint32_t org)
 
     // Set state to Paused
     state_ = DebuggerState::Paused;
-    pauseRequested_ = false;
     pauseRequestedAtomic_.store(false, std::memory_order_release);
 
     return true;
@@ -238,7 +236,6 @@ void DebugBackend::reset()
     target_->reset(false);
 
     state_ = DebuggerState::Paused;
-    pauseRequested_ = false;
     pauseRequestedAtomic_.store(false, std::memory_order_release);
     stopReason_ = StopReason::Reset;
 
@@ -335,7 +332,7 @@ StepResult DebugBackend::stepInstructionDetailed()
 void DebugBackend::run()
 {
     state_ = DebuggerState::Running;
-    pauseRequested_ = false;
+    pauseRequestedAtomic_.store(false, std::memory_order_release);
 
     skipBreakpoint_ = checkBreakpoint();
 
@@ -351,10 +348,10 @@ void DebugBackend::run()
             break;
         }
 
-        if (pauseRequested_) {
+        if (pauseRequestedAtomic_.load(std::memory_order_acquire)) {
             stopReason_ = StopReason::UserPause;
             state_ = DebuggerState::Paused;
-            pauseRequested_ = false;
+            pauseRequestedAtomic_.store(false, std::memory_order_release);
             break;
         }
 
@@ -364,10 +361,8 @@ void DebugBackend::run()
 
 void DebugBackend::pause()
 {
-    pauseRequested_ = true;
-    if (state_ == DebuggerState::Running) {
-        // Will be consumed at the next iteration in run().
-    }
+    // Stage 5.3.3.1: Use atomic pause signal
+    pauseRequestedAtomic_.store(true, std::memory_order_release);
 }
 
 // ---------------------------------------------------------------------------
@@ -766,23 +761,40 @@ bool DebugBackend::CommandQueue::empty() const
 
 CommandResult DebugBackend::submitAndWait(std::unique_ptr<Command> cmd)
 {
-    if (!emulationLoopRunning_) {
-        // Direct execution — no emulation thread running (test scenario).
-        executeCommand(*cmd);
-        return cmd->promise.get_future().get();
-    }
-
-    // Enqueue for emulation thread and wait for result
+    // Get future before moving cmd — promise.get_future() can only be called once
     auto future = cmd->promise.get_future();
 
-    // Keep a raw pointer to mark cancellation on timeout
+    // Stage 5.3.3.1: Test-only synchronous fallback.
+    // Production code must NEVER use this path — all production goes through the queue.
+    if (testSynchronous_ && !emulationLoopRunning_) {
+        // Check cancellation before execution (matches production path in processOneCommand)
+        if (cmd->cancelled.load(std::memory_order_acquire)) {
+            CommandResult r;
+            r.success = false;
+            r.error = "cancelled";
+            r.status = CommandResult::Cancelled;
+            cmd->promise.set_value(r);
+            return future.get();
+        }
+        cmd->state.store(CommandState::Executing, std::memory_order_release);
+        executeCommand(*cmd);
+        return future.get();
+    }
+
+    // Stage 5.3.3.1: Production path — always enqueue.
     Command *rawCmd = cmd.get();
     commandQueue_.enqueue(std::move(cmd));
 
     auto status = future.wait_for(std::chrono::seconds(5));
     if (status == std::future_status::timeout) {
-        // Stage 5.3.3: Mark command as cancelled.
-        // The emulation thread will check cancelled before executing.
+        // Stage 5.3.3.1: Check command state before deciding on timeout.
+        auto cmdState = rawCmd->state.load(std::memory_order_acquire);
+        if (cmdState == CommandState::Executing) {
+            // Command is already executing — must wait for completion.
+            // Do NOT return Timeout for an executing state-changing command.
+            return future.get();
+        }
+        // Command is still Queued — safe to cancel, it won't execute.
         rawCmd->cancelled.store(true, std::memory_order_release);
         CommandResult r;
         r.success = false;
@@ -939,6 +951,17 @@ void DebugBackend::executeCommand(Command &cmd)
         break;
     }
     case CommandType::Run:
+        // Stage 5.3.3.1: Set Running state. In production, the emulation loop
+        // picks up running_ after processOneCommand returns.
+        // In test mode, run() may be called separately if actual execution needed.
+        running_.store(true, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lock(commandMutex_);
+            state_ = DebuggerState::Running;
+            pauseRequestedAtomic_.store(false, std::memory_order_release);
+        }
+        skipBreakpoint_ = checkBreakpoint();
+        break;
     case CommandType::Pause:
     case CommandType::Quit:
         // These are handled by the emulation loop directly, not through executeCommand.
@@ -961,34 +984,25 @@ void DebugBackend::executeCommand(Command &cmd)
 std::future<DebugBackend::TraceExecutionResult>
 DebugBackend::requestExecuteTrace(const TraceExecutionParams &params)
 {
-    // Create promise/future for the TraceExecutionResult
+    // Stage 5.3.3.1: Always through Command Queue.
+    // No direct-execution fallback in production.
     auto tracePromise = std::make_shared<std::promise<TraceExecutionResult>>();
     auto traceResultFuture = tracePromise->get_future();
 
-    // Stage 5.3.3: trace promise is owned by the Command, not stored globally
     auto cmd = std::make_unique<Command>();
     cmd->type = CommandType::ExecuteTrace;
     cmd->traceParams = params;
     cmd->tracePromise = tracePromise;
 
-    if (!emulationLoopRunning_) {
-        // Direct execution — no emulation thread (test scenario)
-        if (traceBusy_.exchange(true)) {
-            tracePromise->set_value(TraceExecutionResult{});
-        } else {
-            auto traceResult = executeTraceInternal(params);
-            traceBusy_.store(false);
-            tracePromise->set_value(std::move(traceResult));
-        }
-        cmd->promise.set_value(CommandResult{true, "", CommandResult::Completed});
+    if (testSynchronous_ && !emulationLoopRunning_) {
+        // Test-only: execute synchronously
+        cmd->state.store(CommandState::Executing, std::memory_order_release);
+        executeCommand(*cmd);
     } else {
-        // Enqueue for emulation thread
+        // Production: enqueue and wait for command completion
         auto cmdFuture = cmd->promise.get_future();
         commandQueue_.enqueue(std::move(cmd));
-
-        // Wait for command completion (the trace result is delivered
-        // via cmd->tracePromise inside executeCommand)
-        cmdFuture.wait();
+        cmdFuture.wait();  // Wait until trace result is delivered
     }
 
     return traceResultFuture;
@@ -1247,50 +1261,26 @@ void DebugBackend::requestStep()
 
 void DebugBackend::requestRun()
 {
-    // Stage 5.3.3: No CPU/Board access from calling thread.
+    // Stage 5.3.3.1: Always through Command Queue.
+    // No CPU/Board access from calling thread.
     // skipBreakpoint_ is computed by emulation thread in executeFramesTarget_().
-
-    if (!emulationLoopRunning_) {
-        // Test scenario — no emulation thread.
-        // Set flags directly; execution happens via stepInstruction()
-        // or when runUntilPause() is started in a separate thread.
-        {
-            std::lock_guard<std::mutex> lock(commandMutex_);
-            state_ = DebuggerState::Running;
-            pauseRequested_ = false;
-        }
-        running_.store(true, std::memory_order_release);
-        return;
-    }
-
-    // Emulation loop is running — enqueue Run command
     auto cmd = std::make_unique<Command>();
     cmd->type = CommandType::Run;
-    commandQueue_.enqueue(std::move(cmd));
+    submitAndWait(std::move(cmd));
 }
 
 void DebugBackend::requestPause()
 {
-    running_.store(false, std::memory_order_release);
+    // Stage 5.3.3.1: Pure atomic — no mutex, no Board/CPU access.
+    pauseRequestedAtomic_.store(true, std::memory_order_release);
     breakRequested_.store(true, std::memory_order_release);
-    pauseRequestedAtomic_.store(true, std::memory_order_release);  // Stage 5.3.3: atomic fast-path
-    {
-        std::lock_guard<std::mutex> lock(commandMutex_);
-        pauseRequested_ = true;
-    }
+    running_.store(false, std::memory_order_release);
 }
 
 void DebugBackend::requestReset()
 {
+    // Stage 5.3.3.1: Always through Command Queue.
     running_.store(false, std::memory_order_release);
-
-    if (!emulationLoopRunning_) {
-        // Test scenario — reset directly
-        reset();
-        return;
-    }
-
-    // Enqueue Reset command for emulation thread
     auto cmd = std::make_unique<Command>();
     cmd->type = CommandType::Reset;
     submitAndWait(std::move(cmd));
@@ -1304,14 +1294,11 @@ void DebugBackend::waitForCompletion()
 
 void DebugBackend::requestQuit()
 {
+    // Stage 5.3.3.1: Always enqueue Quit command + set atomic signal.
     quitRequested_.store(true, std::memory_order_release);
-
-    if (emulationLoopRunning_) {
-        // Enqueue Quit to wake up processOneCommand
-        auto cmd = std::make_unique<Command>();
-        cmd->type = CommandType::Quit;
-        commandQueue_.enqueue(std::move(cmd));
-    }
+    auto cmd = std::make_unique<Command>();
+    cmd->type = CommandType::Quit;
+    commandQueue_.enqueue(std::move(cmd));
 }
 
 bool DebugBackend::isQuitRequested() const
@@ -1323,20 +1310,24 @@ void DebugBackend::processOneCommand()
 {
     if (!emulationLoopRunning_) {
         // Test scenario — no emulation thread.
-        // Commands are executed directly by submitAndWait / requestRun.
+        // Commands are executed directly by submitAndWait.
         return;
     }
 
     // Wait for a command from the queue (blocks until available)
     auto cmd = commandQueue_.waitAndDequeue();
 
+    // Stage 5.3.3.1: Transition to Executing state
+    cmd->state.store(CommandState::Executing, std::memory_order_release);
+
     // Stage 5.3.3: Every command must receive a result, even on quit.
-    if (quitRequested_.load(std::memory_order_acquire)) {
+    if (quitRequested_.load(std::memory_order_acquire) &&
+        cmd->type != CommandType::Quit) {
         cmd->promise.set_value(CommandResult{false, "quit requested", CommandResult::Cancelled});
         return;
     }
 
-    // Check cancellation (Stage 5.3.3)
+    // Stage 5.3.3.1: Check cancellation (only valid while Queued; now Executing)
     if (cmd->cancelled.load(std::memory_order_acquire)) {
         cmd->promise.set_value(CommandResult{false, "cancelled", CommandResult::Cancelled});
         return;
@@ -1348,7 +1339,7 @@ void DebugBackend::processOneCommand()
         {
             std::lock_guard<std::mutex> lock(commandMutex_);
             state_ = DebuggerState::Paused;
-            pauseRequested_ = false;
+            pauseRequestedAtomic_.store(false, std::memory_order_release);
         }
     }
 
@@ -1428,13 +1419,13 @@ void DebugBackend::executeFramesTarget_()
             }
         }
 
-        if (pauseRequested_ || !running_.load(std::memory_order_acquire)) {
+        if (pauseRequestedAtomic_.load(std::memory_order_acquire) || !running_.load(std::memory_order_acquire)) {
             running_.store(false, std::memory_order_release);
             {
                 std::lock_guard<std::mutex> lk(commandMutex_);
                 stopReason_ = StopReason::UserPause;
                 state_ = DebuggerState::Paused;
-                pauseRequested_ = false;
+                pauseRequestedAtomic_.store(false, std::memory_order_release);
             }
             break;
         }
@@ -1469,13 +1460,13 @@ void DebugBackend::executeFramesNoTarget_()
             }
             break;
         }
-        if (pauseRequested_ || !running_.load(std::memory_order_acquire)) {
+        if (pauseRequestedAtomic_.load(std::memory_order_acquire) || !running_.load(std::memory_order_acquire)) {
             running_.store(false, std::memory_order_release);
             {
                 std::lock_guard<std::mutex> lk(commandMutex_);
                 stopReason_ = StopReason::UserPause;
                 state_ = DebuggerState::Paused;
-                pauseRequested_ = false;
+                pauseRequestedAtomic_.store(false, std::memory_order_release);
             }
             break;
         }
@@ -1504,7 +1495,6 @@ void DebugBackend::runUntilPause()
 
         if (pauseRequestedAtomic_.load(std::memory_order_acquire) || !running_.load(std::memory_order_relaxed)) {
             pauseRequestedAtomic_.store(true, std::memory_order_release);
-            pauseRequested_ = true;
             target_->debuggerBreak();
             return;
         }
