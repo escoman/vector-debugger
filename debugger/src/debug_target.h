@@ -63,6 +63,10 @@ public:
 
     virtual ScreenData screenSnapshot() = 0;
 
+    // -- Palette ------------------------------------------------------------
+
+    virtual PaletteSnapshot paletteSnapshot() const { return {}; }
+
     // -- Keyboard injection -------------------------------------------------
 
     virtual void pressKey(int scancode) {}

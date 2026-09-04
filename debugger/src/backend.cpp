@@ -732,6 +732,15 @@ DebugBackend::ScreenSnapshot DebugBackend::screenSnapshot() const
 }
 
 // ---------------------------------------------------------------------------
+// Palette snapshot
+// ---------------------------------------------------------------------------
+
+PaletteSnapshot DebugBackend::paletteSnapshot() const
+{
+    return target_->paletteSnapshot();
+}
+
+// ---------------------------------------------------------------------------
 // Stage 4.2: Activity snapshot
 // ---------------------------------------------------------------------------
 

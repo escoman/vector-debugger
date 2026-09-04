@@ -61,6 +61,20 @@ struct ScreenData
 };
 
 // ---------------------------------------------------------------------------
+// Palette snapshot (16 Vector-06C colors)
+// ---------------------------------------------------------------------------
+
+struct PaletteSnapshot
+{
+    struct Color {
+        uint8_t r, g, b;      // decoded 8-bit RGB
+        uint8_t rawByte;       // original Vector-06C palette byte (B:7-6 G:5-3 R:2-0)
+    };
+    Color entries[16];
+    int count = 0;  // number of valid entries (0 = not available)
+};
+
+// ---------------------------------------------------------------------------
 // Debugger state machine
 // ---------------------------------------------------------------------------
 

@@ -333,6 +333,24 @@ ScreenData DebugAdapter::screenSnapshot()
     return data;
 }
 
+PaletteSnapshot DebugAdapter::paletteSnapshot() const
+{
+    PaletteSnapshot snap;
+    snap.count = 16;
+    for (int i = 0; i < 16; ++i) {
+        uint8_t raw = io.RawPaletteByte(i);
+        // Vector-06C palette byte: B:7-6 G:5-3 R:2-0
+        int r3 = raw & 0x07;         // 3 bits, 0-7
+        int g3 = (raw >> 3) & 0x07;  // 3 bits, 0-7
+        int b2 = (raw >> 6) & 0x03;  // 2 bits, 0-3
+        snap.entries[i].r = static_cast<uint8_t>(r3 * 255 / 7);
+        snap.entries[i].g = static_cast<uint8_t>(g3 * 255 / 7);
+        snap.entries[i].b = static_cast<uint8_t>(b2 * 255 / 3);
+        snap.entries[i].rawByte = raw;
+    }
+    return snap;
+}
+
 // ---------------------------------------------------------------------------
 // IDebugTarget: Keyboard injection
 // ---------------------------------------------------------------------------

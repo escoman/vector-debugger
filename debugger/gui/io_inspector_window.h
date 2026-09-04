@@ -28,6 +28,7 @@ public:
     enum class TypeFilter { All, In, Out };
 
     IoInspectorWindow() {}
+    ~IoInspectorWindow() = default;
 
     // Render the window. Call every frame.
     void render(IDebugBackend &backend);
@@ -90,6 +91,7 @@ private:
     void renderToolbar(IDebugBackend &backend);
     void renderIoTable(IDebugBackend &backend);
     void renderHardwareState(IDebugBackend &backend);
+    void renderPalette(IDebugBackend &backend);
 
     // Resolve PC for an I/O event by cross-referencing instructionSequence
     uint16_t resolvePc(uint64_t instructionSequence) const;

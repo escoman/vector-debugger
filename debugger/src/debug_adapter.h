@@ -59,6 +59,7 @@ public:
     void syncBreakpoints(const DebuggerBreakpoint *bps, size_t count) override;
 
     ScreenData screenSnapshot() override;
+    PaletteSnapshot paletteSnapshot() const override;
 
     void pressKey(int scancode) override;
     void releaseKey(int scancode) override;

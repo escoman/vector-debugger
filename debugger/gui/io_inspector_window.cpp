@@ -62,6 +62,9 @@ void IoInspectorWindow::render(IDebugBackend &backend)
     // Render hardware state
     renderHardwareState(backend);
 
+    // Render palette
+    renderPalette(backend);
+
     ImGui::End();
 }
 
@@ -240,4 +243,40 @@ void IoInspectorWindow::renderHardwareState(IDebugBackend &backend)
 
     ImGui::Spacing();
     ImGui::TextDisabled("(Timer, AY, FD1793, Keyboard: not available via current backend API)");
+}
+
+// ---------------------------------------------------------------------------
+// Palette
+// ---------------------------------------------------------------------------
+
+void IoInspectorWindow::renderPalette(IDebugBackend &backend)
+{
+    if (!ImGui::CollapsingHeader("Palette")) {
+        return;
+    }
+
+    PaletteSnapshot pal = backend.paletteSnapshot();
+    if (pal.count == 0) {
+        ImGui::TextDisabled("(palette not available)");
+        return;
+    }
+
+    for (int i = 0; i < pal.count; ++i) {
+        const auto &c = pal.entries[i];
+
+        // Draw color swatch via ImDrawList (guaranteed to render each frame)
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        ImU32 col = IM_COL32(c.r, c.g, c.b, 255);
+        ImGui::GetWindowDrawList()->AddRectFilled(
+            p, ImVec2(p.x + 20, p.y + 20), col);
+        // Border
+        ImGui::GetWindowDrawList()->AddRect(
+            p, ImVec2(p.x + 20, p.y + 20),
+            IM_COL32(128, 128, 128, 255));
+        ImGui::Dummy(ImVec2(20, 20));
+        ImGui::SameLine();
+
+        ImGui::Text("[%02X]  #%02X%02X%02X  (%02X)",
+                    i, c.r, c.g, c.b, c.rawByte);
+    }
 }

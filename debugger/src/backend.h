@@ -122,6 +122,10 @@ public:
     VideoModeSnapshot  videoModeSnapshot() const override;
     VramWriteSnapshot  vramWriteSnapshot() const override;
 
+    // -- IDebugBackend: palette ---------------------------------------------
+
+    PaletteSnapshot paletteSnapshot() const override;
+
     // -- IDebugBackend: activity --------------------------------------------
 
     ActivitySnapshot activitySnapshot() const override;

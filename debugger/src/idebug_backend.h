@@ -127,6 +127,10 @@ public:
     virtual VideoModeSnapshot  videoModeSnapshot() const = 0;
     virtual VramWriteSnapshot  vramWriteSnapshot() const = 0;
 
+    // -- Palette ------------------------------------------------------------
+
+    virtual PaletteSnapshot paletteSnapshot() const = 0;
+
     // -- Activity -----------------------------------------------------------
 
     virtual ActivitySnapshot activitySnapshot() const = 0;

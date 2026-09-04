@@ -14,6 +14,7 @@
 class IO {
 private:
     uint32_t palette[16];
+    uint8_t  raw_palette[16];  // raw Vector-06C palette byte per entry (for debugger)
 
     Memory & kvaz;
     Keyboard & keyboard;
@@ -46,6 +47,7 @@ public:
     {
         for (unsigned i = 0; i < sizeof(palette)/sizeof(palette[0]); ++i) {
             palette[i] = 0xff000000;
+            raw_palette[i] = 0;
         }
         outport = outbyte = palettebyte = -1;
     }
@@ -55,9 +57,11 @@ public:
         // Create boot-time yellow/blue yeblette using correct pixelformat
         for (int i = 0; i < 16; ++i) {
             if (i & 2) {
+                this->raw_palette[i] = (0 << 6) | (5 << 3) | 5; // yellow
                 this->palette[i] = rgb2pixelformat(5, 5, 0); 
             } 
             else {
+                this->raw_palette[i] = (2 << 6) | (0 << 3) | 0; // blue
                 this->palette[i] = rgb2pixelformat(0, 0, 2); 
             }
         }
@@ -308,6 +312,7 @@ public:
             int g = (w8 & 0x38) >> 3;
             int r = (w8 & 0x07);
 
+            this->raw_palette[index] = w8 & 0xFF;
             this->palette[index] = rgb2pixelformat(r,g,b);
             //printf("commit palette: %02x = %02x\n", index, this->palette[index]);
             this->palettebyte = -1;
@@ -342,6 +347,11 @@ public:
     uint32_t Palette(int index) const
     {
         return this->palette[index];
+    }
+
+    uint8_t RawPaletteByte(int index) const
+    {
+        return this->raw_palette[index & 0x0F];
     }
 
     Keyboard & the_keyboard() const
