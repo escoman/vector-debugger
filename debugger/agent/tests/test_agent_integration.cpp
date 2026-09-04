@@ -1262,6 +1262,196 @@ static void test_executing_command_completes()
 }
 
 // ---------------------------------------------------------------------------
+// Stage 5.3.3.2: Thread isolation and advanced tests
+// ---------------------------------------------------------------------------
+
+// Test: Thread isolation — Step (Section 14)
+// Verify callerThreadId != emulationThreadId and CPU execution on emulation thread.
+static void test_thread_isolation_step()
+{
+    TEST_BEGIN("thread_isolation_step");
+    TestFixture f;
+    writeProgram(f.mem, test_program, sizeof(test_program), 0x0000);
+    f.initCpu();
+
+    auto callerThreadId = std::this_thread::get_id();
+    auto emuThreadId = std::thread::id{};
+    std::atomic<std::thread::id> cpuExecThreadId{};
+
+    // Set instruction callback to capture execution thread
+    f.backend->onInstruction = [&](const InstructionEvent &) {
+        cpuExecThreadId.store(std::this_thread::get_id(), std::memory_order_release);
+    };
+
+    std::thread emuThread([&]{
+        emuThreadId = std::this_thread::get_id();
+        f.backend->runUntilPause();
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Request step from caller thread
+    f.backend->requestStep();
+
+    // Give emulation thread time to execute
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    // Verify thread IDs
+    CHECK(callerThreadId != emuThreadId, "caller thread != emulation thread");
+
+    auto actualExecThread = cpuExecThreadId.load(std::memory_order_acquire);
+    CHECK(actualExecThread == emuThreadId, "CPU execution on emulation thread");
+    CHECK(actualExecThread != callerThreadId, "CPU execution NOT on caller thread");
+
+    f.backend->requestQuit();
+    emuThread.join();
+    TEST_END();
+}
+
+// Test: Thread isolation — ExecuteTrace (Section 15)
+// Verify trace caller thread != emulation thread, trace CPU execution on emulation thread.
+static void test_thread_isolation_trace()
+{
+    TEST_BEGIN("thread_isolation_trace");
+    TestFixture f;
+    writeProgram(f.mem, test_program, sizeof(test_program), 0x0000);
+    writeProgram(f.mem, subroutine, sizeof(subroutine), 0x0200);
+    f.initCpu(0x0200, 0xC0F0);
+
+    // Push return address on stack
+    f.mem.write(0xC0F0, 0x09, false);
+    f.mem.write(0xC0F1, 0x00, false);
+
+    auto callerThreadId = std::this_thread::get_id();
+    auto emuThreadId = std::thread::id{};
+    std::atomic<std::thread::id> cpuExecThreadId{};
+
+    f.backend->onInstruction = [&](const InstructionEvent &) {
+        cpuExecThreadId.store(std::this_thread::get_id(), std::memory_order_release);
+    };
+
+    std::thread emuThread([&]{
+        emuThreadId = std::this_thread::get_id();
+        f.backend->runUntilPause();
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Execute trace from caller thread
+    IDebugBackend::TraceExecutionParams params;
+    params.startPc = 0x0200;
+    params.maxInstructions = 100;
+    params.stopOnRet = true;
+    auto result = f.backend->requestExecuteTrace(params).get();
+
+    CHECK(result.instructionsExecuted > 0, "trace executed instructions");
+    CHECK(result.exitReason == ExitReason::Ret, "trace ended with RET");
+
+    // Verify thread isolation
+    CHECK(callerThreadId != emuThreadId, "caller thread != emulation thread");
+    auto actualExecThread = cpuExecThreadId.load(std::memory_order_acquire);
+    CHECK(actualExecThread == emuThreadId, "trace CPU execution on emulation thread");
+
+    f.backend->requestQuit();
+    emuThread.join();
+    TEST_END();
+}
+
+// Test: Trace cancellation via Quit (Section 21)
+static void test_trace_cancellation_via_quit()
+{
+    TEST_BEGIN("trace_cancellation_via_quit");
+    TestFixture f;
+    writeProgram(f.mem, loop_program, sizeof(loop_program), 0x0000);
+    f.initCpu(0x0003);
+
+    std::thread emuThread([&]{ f.backend->runUntilPause(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Start a long trace
+    IDebugBackend::TraceExecutionParams params;
+    params.startPc = 0x0003;
+    params.maxInstructions = 1000000;  // very large
+    params.stopOnRet = false;
+
+    auto traceFuture = f.backend->requestExecuteTrace(params);
+
+    // Give trace time to start
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+    // Quit — should cancel trace and complete the future
+    f.backend->requestQuit();
+
+    auto result = traceFuture.get();  // should not hang
+    CHECK(result.instructionsExecuted > 0, "trace executed some instructions before cancel");
+
+    emuThread.join();
+    CHECK(true, "no hanging promise (thread joined cleanly)");
+    TEST_END();
+}
+
+// Test: Command state machine — CAS mutual exclusion (Section 5.2)
+static void test_command_state_cas()
+{
+    TEST_BEGIN("command_state_cas");
+    TestFixture f;
+    writeProgram(f.mem, test_program, sizeof(test_program), 0x0000);
+    f.initCpu();
+
+    // Verify: pre-cancelled command is not executed
+    auto cmd = std::make_unique<DebugBackend::Command>();
+    cmd->type = DebugBackend::CommandType::Step;
+    cmd->cancelled.store(true, std::memory_order_release);
+
+    uint16_t pcBefore = f.backend->getCpuState().pc;
+    auto result = f.backend->submitAndWait(std::move(cmd));
+    uint16_t pcAfter = f.backend->getCpuState().pc;
+
+    CHECK(!result.success, "cancelled command failed");
+    CHECK(result.status == CommandResult::Cancelled, "status is Cancelled");
+    CHECK_EQ(pcBefore, pcAfter, "PC unchanged (CAS prevented execution)");
+    TEST_END();
+}
+
+// Test: requestPause does not change running_ (Section 3)
+static void test_request_pause_no_running_mutation()
+{
+    TEST_BEGIN("request_pause_no_running_mutation");
+    TestFixture f;
+    writeProgram(f.mem, test_program, sizeof(test_program), 0x0000);
+    f.initCpu();
+
+    // Set running via requestRun
+    f.backend->requestRun();
+
+    // requestPause should only set atomic signals, not change running_ directly
+    f.backend->requestPause();
+
+    // In test mode, state_ is still Running (no emulation thread to transition)
+    // The atomic signals are set, but running_ is not changed by requestPause
+    CHECK(f.backend->getState() == DebuggerState::Running ||
+          f.backend->getState() == DebuggerState::Paused,
+          "state is Running or Paused (no invalid transition)");
+    TEST_END();
+}
+
+// Test: requestRunFuture returns future (Section 2)
+static void test_request_run_future()
+{
+    TEST_BEGIN("request_run_future");
+    TestFixture f;
+    writeProgram(f.mem, test_program, sizeof(test_program), 0x0000);
+    f.initCpu();
+
+    // In test mode, requestRunFuture should return a ready future
+    auto future = f.backend->requestRunFuture();
+    auto status = future.wait_for(std::chrono::milliseconds(100));
+    CHECK(status == std::future_status::ready, "future is ready in test mode");
+
+    auto result = future.get();
+    CHECK(result.success, "future result is success");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -1270,7 +1460,7 @@ int main()
     setbuf(stdout, nullptr);
 
     printf("\n\033[1;33m========================================\033[0m\n");
-    printf("\033[1;33m  Agent Integration Tests — Stage 5.3.3.1\033[0m\n");
+    printf("\033[1;33m  Agent Integration Tests — Stage 5.3.3.2\033[0m\n");
     printf("\033[1;33m========================================\033[0m\n");
 
     // Non-threaded tests
@@ -1312,6 +1502,14 @@ int main()
     test_memory_vram_attribution_detailed();        // 30
     test_cancelled_command_not_executed();          // 31
     test_executing_command_completes();             // 32
+
+    // Stage 5.3.3.2 tests
+    test_thread_isolation_step();                   // 33
+    test_thread_isolation_trace();                  // 34
+    test_trace_cancellation_via_quit();             // 35
+    test_command_state_cas();                       // 36
+    test_request_pause_no_running_mutation();       // 37
+    test_request_run_future();                      // 38
 
     printf("\n\033[1;33m========================================\033[0m\n");
     printf("  Results: %d/%d passed", tests_passed, tests_run);

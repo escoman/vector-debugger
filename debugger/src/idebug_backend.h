@@ -85,6 +85,9 @@ public:
     // -- Execution control (from GUI thread) --------------------------------
 
     virtual void requestRun()    = 0;
+    // Stage 5.3.3.2: Run + wait for next pause (breakpoint/pause hit).
+    // Returns a future that completes when the Emulation Thread transitions to Paused.
+    virtual std::future<CommandResult> requestRunFuture() = 0;
     virtual void requestPause()  = 0;
     virtual void requestStep()   = 0;
     virtual void requestReset()  = 0;

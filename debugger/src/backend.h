@@ -86,6 +86,7 @@ public:
     // -- IDebugBackend: execution control -----------------------------------
 
     void requestRun()      override;
+    std::future<CommandResult> requestRunFuture();  // Stage 5.3.3.2: returns pause future
     void requestPause()    override;
     void requestStep()     override;
     void requestReset()    override;
@@ -207,8 +208,9 @@ public:
         ExecuteTrace
     };
 
-    // Stage 5.3.3.1: Explicit command lifecycle state machine
-    enum class CommandState { Queued, Executing };
+    // Stage 5.3.3.2: Explicit command lifecycle state machine
+    // Transitions: Queued→Executing, Queued→Cancelled, Executing→Completed
+    enum class CommandState { Queued, Executing, Cancelled, Completed };
 
     struct Command {
         CommandType type = CommandType::Quit;
@@ -262,6 +264,9 @@ public:
     // If not (test scenario) — execute directly on calling thread.
     CommandResult submitAndWait(std::unique_ptr<Command> cmd);
 
+    // Stage 5.3.3.2: test-only accessor for emulation thread detection
+    bool isEmulationLoopRunning() const { return emulationLoopRunning_.load(std::memory_order_acquire); }
+
 private:
     IDebugTarget *target_;
 
@@ -314,10 +319,16 @@ private:
     mutable std::mutex      commandMutex_;
     std::condition_variable commandCv_;
     std::atomic<bool>       quitRequested_{false};   // Stage 5.3.3: atomic
-    mutable std::mutex      stateMutex_;
+    mutable std::mutex      stateMutex_;   // Stage 5.3.3.2: sole protector of state_
 
     std::atomic<bool>       running_{false};
     std::atomic<bool>       breakRequested_{false};
+
+    // Stage 5.3.3.2: Pause promise — fulfilled by Emulation Thread when
+    // state transitions to Paused after Run.  Allows traceFunction() to
+    // wait via future instead of polling isPaused().
+    std::mutex nextPauseMutex_;
+    std::unique_ptr<std::promise<void>> nextPausePromise_;
 
     uint16_t    lastPc_        = 0;
 

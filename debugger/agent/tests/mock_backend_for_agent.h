@@ -115,6 +115,17 @@ public:
         }
     }
 
+    // Stage 5.3.3.2: Mock implementation — runs synchronously, returns fulfilled future
+    std::future<CommandResult> requestRunFuture() override {
+        requestRun();
+        std::promise<CommandResult> p;
+        CommandResult r;
+        r.success = true;
+        r.status = CommandResult::Completed;
+        p.set_value(r);
+        return p.get_future();
+    }
+
     void requestPause() override { state_ = DebuggerState::Paused; }
     void requestStep() override { simulateStep(); }
     void requestReset() override {
