@@ -72,4 +72,11 @@ public:
 
     virtual bool loadRom(const std::string &path, uint32_t org) = 0;
     virtual void initCpu(uint16_t pc, uint16_t sp) = 0;
+
+    // -- Frame pacing -------------------------------------------------------
+    // Real targets (DebugAdapter) execute full frames and need 50 Hz pacing.
+    // Test targets (NoBoardTarget) execute one instruction per "frame" and
+    // should run at full speed.
+
+    virtual bool framePacingEnabled() const { return true; }
 };

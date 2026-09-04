@@ -129,6 +129,10 @@ static ProcessResult spawnDebugger(const std::string &binary,
         dup2(pipefd[1], STDERR_FILENO);
         close(pipefd[1]);
 
+        // Redirect workspace writes to a temp directory so that smoke
+        // tests don't clobber the user's real workspace presets.
+        setenv("V06C_WORKSPACE_DIR", "/tmp/v06c_test_workspaces", 1);
+
         if (extraArg.empty()) {
             execl(binary.c_str(), binary.c_str(), nullptr);
         } else {

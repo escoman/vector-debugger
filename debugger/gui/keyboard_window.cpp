@@ -2,6 +2,7 @@
 
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "SDL.h"
 
 #include <cstdio>
 #include <cstring>
@@ -160,11 +161,53 @@ KeyboardWindow::KeyboardWindow()
 }
 
 // ---------------------------------------------------------------------------
+// SDL event forwarding (physical keyboard → emulator)
+// ---------------------------------------------------------------------------
+
+bool KeyboardWindow::handleSdlEvent(const SDL_Event &event, IDebugBackend &backend)
+{
+    if (!keyboardLock_) return false;
+
+    if (event.type == SDL_KEYDOWN && !event.key.repeat) {
+        int sc = event.key.keysym.scancode;
+        if (activeKeys_.insert(sc).second) {
+            backend.pressKey(sc);
+        }
+        return true;
+    }
+    if (event.type == SDL_KEYUP) {
+        int sc = event.key.keysym.scancode;
+        auto it = activeKeys_.find(sc);
+        if (it != activeKeys_.end()) {
+            activeKeys_.erase(it);
+            backend.releaseKey(sc);
+        }
+        return true;
+    }
+    return false;
+}
+
+void KeyboardWindow::releaseAllKeys(IDebugBackend &backend)
+{
+    for (int sc : activeKeys_) {
+        backend.releaseKey(sc);
+    }
+    activeKeys_.clear();
+}
+
+// ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
 
 void KeyboardWindow::render(IDebugBackend &backend)
 {
+    // Release physical keys when window becomes hidden
+    static bool wasVisible = visible_;
+    if (!visible_ && wasVisible) {
+        releaseAllKeys(backend);
+    }
+    wasVisible = visible_;
+
     if (!visible_) return;
 
     const auto &keys = getKeyLayout();
@@ -177,6 +220,12 @@ void KeyboardWindow::render(IDebugBackend &backend)
     if (!ImGui::Begin("Keyboard", &visible_)) {
         ImGui::End();
         return;
+    }
+
+    // Lock checkbox — forward physical keyboard to emulator
+    ImGui::Checkbox("Lock", &keyboardLock_);
+    if (!keyboardLock_ && !activeKeys_.empty()) {
+        releaseAllKeys(backend);
     }
 
     ImDrawList *drawList = ImGui::GetWindowDrawList();
@@ -265,7 +314,8 @@ void KeyboardWindow::render(IDebugBackend &backend)
         ImVec2 pMax(cursorScreenPos.x + kx + kw, cursorScreenPos.y + ky + kh);
 
         bool isPressed = (k.scancode == pressedScancode_) ||
-                         (stickyKeys_.count(k.scancode) > 0);
+                         (stickyKeys_.count(k.scancode) > 0) ||
+                         (activeKeys_.count(k.scancode) > 0);
         bool isSelected = (k.scancode == selectedScancode_) &&
                           (selectionTimer_ > 0.0f);
 

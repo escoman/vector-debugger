@@ -88,7 +88,7 @@ int main(int argc, char *argv[])
 
     // --- Main loop ---
     while (!gui.shouldQuit()) {
-        gui.beginFrame();
+        gui.beginFrame(backend);
         gui.render(backend);  // DebugBackend& implicitly converts to IDebugBackend&
         gui.endFrame();
 

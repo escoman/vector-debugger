@@ -94,11 +94,9 @@ void WorkspaceManager::applyPendingWorkspace()
     pendingVisibilityRefs_.clear();
     pendingVisibilityRefsSet_ = false;
 
-    // Generate built-in preset files (uses temp ImGui context — safe here
-    // because this is called between frames, not within a frame)
-    for (const auto &name : builtInNames_) {
-        writeBuiltinIfMissing(name);
-    }
+    // Don't auto-generate any workspace files on startup.
+    // Default.ini is tracked in the repo and managed by the user.
+    // Other built-in presets are generated lazily in switchWorkspace().
 
     // Load the current workspace (last used, or Default)
     if (!loadFromFile(currentName_)) {
@@ -120,6 +118,12 @@ void WorkspaceManager::switchWorkspace(const std::string &name)
     // Save current if dirty
     if (dirty_) {
         saveCurrentWorkspace();
+    }
+
+    // Generate built-in preset on demand (only when the user actually
+    // switches to it, not on every startup)
+    if (isBuiltIn(name)) {
+        writeBuiltinIfMissing(name);
     }
 
     // Load target

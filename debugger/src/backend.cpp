@@ -8,6 +8,7 @@
 #include <cstring>
 #include <climits>
 #include <memory>
+#include <thread>
 
 
 // ---------------------------------------------------------------------------
@@ -1001,6 +1002,12 @@ void DebugBackend::executeFramesTarget_()
         stepInstruction();
     }
 
+    // Reset frame pacing timer — avoids a huge delta after pause/resume
+    bool paceFrames = target_->framePacingEnabled();
+    if (paceFrames) {
+        lastFrameTime_ = Clock::now();
+    }
+
     while (running_.load(std::memory_order_acquire)) {
         if (quitRequested_) {
             target_->debuggerBreak();
@@ -1012,6 +1019,16 @@ void DebugBackend::executeFramesTarget_()
         uint16_t pcBeforeFrame = target_->getCpuState().pc;
         target_->executeFrame();
         uint16_t pcAfterFrame = target_->getCpuState().pc;
+
+        // -- Frame pacing: sleep to maintain 50 Hz (20 ms per frame) --------
+        if (paceFrames) {
+            auto now = Clock::now();
+            auto elapsed = now - lastFrameTime_;
+            if (elapsed < kFrameDuration) {
+                std::this_thread::sleep_for(kFrameDuration - elapsed);
+            }
+            lastFrameTime_ = Clock::now();
+        }
 
         // If PC didn't change, target stopped (breakpoint or debugger_interrupt)
         if (pcAfterFrame == pcBeforeFrame) {

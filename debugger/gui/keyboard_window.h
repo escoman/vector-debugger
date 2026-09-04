@@ -5,12 +5,17 @@
 #include <set>
 #include "idebug_backend.h"
 
+union SDL_Event;
+
 // ---------------------------------------------------------------------------
 // KeyboardWindow — Virtual Vector-06C keyboard (ImGui/ImDrawList).
 //
 // Renders the same 5-row layout as the PSP port's vkbd.
 // Mouse click sends key press/release through IDebugBackend.
 // Modifier keys (SS/US) toggle sticky; other keys are momentary.
+//
+// "Lock" mode: when enabled, physical keyboard events are forwarded to
+// the emulator as if the user clicked the virtual keys.
 // ---------------------------------------------------------------------------
 
 class KeyboardWindow
@@ -20,7 +25,16 @@ public:
 
     void render(IDebugBackend &backend);
 
+    //! Forward an SDL event to the emulator when keyboard lock is active.
+    //! Returns true if the event was consumed (sent to emulator).
+    bool handleSdlEvent(const SDL_Event &event, IDebugBackend &backend);
+
+    //! Release all physically-held keys (called when lock is disabled or
+    //! window is hidden to prevent stuck keys in the emulator).
+    void releaseAllKeys(IDebugBackend &backend);
+
     bool &getVisibleRef() { return visible_; }
+    bool isLocked() const { return keyboardLock_; }
     void requestRefresh() {}
 
 private:
@@ -40,6 +54,7 @@ private:
     };
 
     bool visible_ = true;
+    bool keyboardLock_ = false;            // "Lock" mode — forward physical keys
 
     // Key geometry
     static constexpr float kKeyW = 32.0f;
@@ -51,6 +66,9 @@ private:
     std::set<int> stickyKeys_;         // toggled modifiers (SS/US)
     int selectedScancode_ = 0;         // last clicked (for visual feedback)
     float selectionTimer_ = 0.0f;
+
+    // Physical keyboard passthrough state
+    std::set<int> activeKeys_;         // scancodes currently held on host keyboard
 
     // Layout
     static const std::vector<KeyDef> &getKeyLayout();

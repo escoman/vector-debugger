@@ -45,7 +45,8 @@ public:
     void shutdown();
 
     // Begin a new ImGui frame (processes pending SDL events internally).
-    void beginFrame();
+    // When keyboard lock is active, forwards key events to the emulator.
+    void beginFrame(IDebugBackend &backend);
 
     // Render all debugger panels.  Called between beginFrame/endFrame.
     void render(IDebugBackend &backend);

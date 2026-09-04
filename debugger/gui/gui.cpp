@@ -124,7 +124,14 @@ bool DebuggerGui::initialize(int width, int height)
 
     // Workspace Manager (Stage 5.1) — directory setup only;
     // visibility refs and actual loading happen after windows are created
-    workspaceManager_.initialize("workspaces");
+    //
+    // Allow override via environment variable so that GUI smoke tests
+    // don't clobber the user's real workspace presets.
+    std::string wsDir = "workspaces";
+    if (const char *env = std::getenv("V06C_WORKSPACE_DIR")) {
+        wsDir = env;
+    }
+    workspaceManager_.initialize(wsDir);
 
     return true;
 }
@@ -152,10 +159,22 @@ void DebuggerGui::shutdown()
 // Frame management
 // ---------------------------------------------------------------------------
 
-void DebuggerGui::beginFrame()
+void DebuggerGui::beginFrame(IDebugBackend &backend)
 {
+    const bool kbdLocked = keyboardWindow_.isLocked();
+
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
+        // When keyboard lock is active, forward key events to the emulator
+        // and block them from ImGui — the user's keyboard is "captured" by
+        // the emulated Vector-06C.
+        if (kbdLocked && (event.type == SDL_KEYDOWN ||
+                          event.type == SDL_KEYUP ||
+                          event.type == SDL_TEXTINPUT)) {
+            keyboardWindow_.handleSdlEvent(event, backend);
+            continue;  // do NOT pass to ImGui
+        }
+
         ImGui_ImplSDL2_ProcessEvent(&event);
         if (event.type == SDL_QUIT) {
             quit_ = true;

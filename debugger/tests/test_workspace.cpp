@@ -291,8 +291,11 @@ static void test_cannotDeleteBuiltInWorkspace()
     bool vis = true;
     setRefsAndApply(wm, {{"Win", &vis}});
 
+    // Explicitly create Default.ini (no longer auto-generated on startup)
+    wm.saveCurrentWorkspace();
+
     wm.deleteWorkspace("Default");
-    // Default should still exist
+    // Default should still exist (deleteWorkspace refuses built-in names)
     CHECK(fileExists(std::string(kTestDir) + "/Default.ini"), "Default.ini should still exist");
 
     destroyTestContext(ctx);
@@ -475,6 +478,8 @@ static void test_listWorkspacesReturnsAll()
     bool vis = true;
     setRefsAndApply(wm, {{"Win", &vis}});
 
+    // Explicitly create Default.ini (no longer auto-generated on startup)
+    wm.saveCurrentWorkspace();
     wm.saveWorkspaceAs("Custom1");
     wm.saveWorkspaceAs("Custom2");
 

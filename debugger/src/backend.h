@@ -8,6 +8,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <atomic>
+#include <chrono>
 #include <memory>
 
 #include "idebug_backend.h"
@@ -204,6 +205,16 @@ private:
 
     void executeFramesTarget_();
     void executeFramesNoTarget_();
+
+    // -- Frame pacing (50 Hz, matching real Vector-06C refresh rate) --------
+
+    using Clock = std::chrono::steady_clock;
+    using TimePoint = std::chrono::time_point<Clock>;
+
+    TimePoint lastFrameTime_{};
+
+    static constexpr int kTargetFps = 50;
+    static constexpr auto kFrameDuration = std::chrono::microseconds(1000000 / kTargetFps);  // 20 ms
 
     // -- Stage 3.1: thread-safe command protocol ------------------------------
 

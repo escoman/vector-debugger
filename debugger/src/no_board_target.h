@@ -47,6 +47,8 @@ public:
     bool loadRom(const std::string &path, uint32_t org) override;
     void initCpu(uint16_t pc, uint16_t sp) override;
 
+    bool framePacingEnabled() const override { return false; }
+
 private:
     Memory &memory_;
     bool    cpuInitialized_ = false;
