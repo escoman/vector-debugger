@@ -22,7 +22,8 @@ public:
     // -- Memory access ------------------------------------------------------
 
     virtual uint8_t readMemory(uint16_t addr) = 0;
-    virtual uint8_t peekMemory(uint16_t addr) = 0;  // read without callbacks
+    virtual uint8_t peekMemory(uint16_t addr) = 0;  // read without callbacks (paused only)
+    virtual uint8_t readMemoryRaw(uint16_t addr) = 0;  // read without callbacks (thread-safe)
     virtual void    writeMemory(uint16_t addr, uint8_t val) = 0;
 
     // Memory instrumentation callbacks.

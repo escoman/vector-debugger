@@ -30,6 +30,7 @@ public:
     uint32_t bigram_select(uint32_t addr, bool stackrq);
     uint32_t tobank(uint32_t a);
     uint8_t read(uint32_t addr, bool stackrq);
+    uint8_t peek(uint32_t addr, bool stackrq = false) const;  // read without callback
     void write(uint32_t addr, uint8_t w8, bool stackrq);
     void init_from_vector(const std::vector<uint8_t> & from, uint32_t start_addr);
     void attach_boot(std::vector<uint8_t> boot);

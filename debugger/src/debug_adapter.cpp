@@ -181,6 +181,11 @@ uint8_t DebugAdapter::peekMemory(uint16_t addr)
     return DebugMemoryAccess::peek(memory, addr);
 }
 
+uint8_t DebugAdapter::readMemoryRaw(uint16_t addr)
+{
+    return memory.peek(addr, false);
+}
+
 void DebugAdapter::writeMemory(uint16_t addr, uint8_t val)
 {
     memory.write(addr, val, false);

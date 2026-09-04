@@ -117,6 +117,7 @@ public:
 
     uint8_t readMemory(uint16_t addr) override { return memory_.read(addr, false); }
     uint8_t peekMemory(uint16_t addr) override { return DebugMemoryAccess::peek(memory_, addr); }
+    uint8_t readMemoryRaw(uint16_t addr) override { return memory_.peek(addr, false); }
     void writeMemory(uint16_t addr, uint8_t val) override { memory_.write(addr, val, false); }
 
     CpuState getCpuState() override {

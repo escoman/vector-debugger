@@ -150,7 +150,7 @@ MemorySnapshot DebugBackend::readMemorySnapshot(uint16_t start, size_t size)
 
     for (size_t i = 0; i < size; ++i) {
         uint16_t addr = static_cast<uint16_t>((start + i) & 0xFFFF);
-        snapshot.data.push_back(target_->readMemory(addr));
+        snapshot.data.push_back(target_->readMemoryRaw(addr));
     }
 
     return snapshot;

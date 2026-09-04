@@ -36,6 +36,11 @@ uint8_t NoBoardTarget::peekMemory(uint16_t addr)
     return DebugMemoryAccess::peek(memory_, addr);
 }
 
+uint8_t NoBoardTarget::readMemoryRaw(uint16_t addr)
+{
+    return memory_.peek(addr, false);
+}
+
 void NoBoardTarget::writeMemory(uint16_t addr, uint8_t val)
 {
     memory_.write(addr, val, false);

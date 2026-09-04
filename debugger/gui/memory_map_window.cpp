@@ -139,7 +139,7 @@ int MemoryMapWindow::hitTest(float localX, float localY) const
     int row = static_cast<int>(localY) / stride;
     if (row < 0 || row >= ROWS) return -1;
 
-    return row * COLUMNS + foundCol;
+    return foundCol * ROWS + row;
 }
 
 // ---------------------------------------------------------------------------
@@ -198,8 +198,8 @@ void MemoryMapWindow::render(IDebugBackend &backend)
     auto *drawList = ImGui::GetWindowDrawList();
 
     // Reserve space for the canvas (label area above grid for group addresses)
-    float labelAreaH = 14.0f;  // base pixels for address labels
-    float gap = 4.0f;          // gap between labels and grid
+    float labelAreaH = 4.0f;  // base pixels for address labels
+    float gap = 6.0f;          // gap between labels and grid
     float scale = 4.0f;
     float gridH = static_cast<float>(canvasHeight());
     ImVec2 scaledSize(static_cast<float>(canvasWidth()) * scale,
@@ -213,7 +213,7 @@ void MemoryMapWindow::render(IDebugBackend &backend)
     float gridTopY = canvasMin.y + labelAreaH * scale;
 
     // Draw full background (labels area + grid area)
-    drawList->AddRectFilled(canvasMin, canvasMax, IM_COL32(32, 32, 32, 255));
+    //drawList->AddRectFilled(canvasMin, canvasMax, IM_COL32(32, 32, 32, 255));
 
     // Draw group address labels above the grid
     {
@@ -281,7 +281,7 @@ void MemoryMapWindow::render(IDebugBackend &backend)
     auto now = std::chrono::steady_clock::now();
     for (int row = 0; row < ROWS; ++row) {
         for (int col = 0; col < COLUMNS; ++col) {
-            int blockIdx = row * COLUMNS + col;
+            int blockIdx = col * ROWS + row;
 
             LiveBlockColor color;
             if (live_) {

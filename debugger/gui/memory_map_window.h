@@ -34,11 +34,13 @@ LiveBlockColor computeBlockColor(
     std::chrono::milliseconds duration);
 
 // Convert block index (0..255) to base address
-// Layout: 32 columns × 8 rows. Block N → col = N % 32, row = N / 32
+// Layout: 32 columns × 8 rows.
+// Column = group of 8 KB (4 columns of 256-byte blocks per row).
+// Block N → col = N / 8, row = N % 8
 // Address = col * 0x800 + row * 0x100
 inline uint16_t blockToAddress(int block) {
-    int col = block % 32;
-    int row = block / 32;
+    int col = block / 8;
+    int row = block % 8;
     return static_cast<uint16_t>((col * 0x800 + row * 0x100) & 0xFFFF);
 }
 

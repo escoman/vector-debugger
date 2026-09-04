@@ -60,6 +60,16 @@ uint8_t Memory::read(uint32_t addr, bool stackrq)
     return value;
 }
 
+uint8_t Memory::peek(uint32_t addr, bool stackrq) const
+{
+    uint32_t bigaddr = const_cast<Memory*>(this)->bigram_select(addr & 0xffff, stackrq);
+    if (this->bootbytes.size() && bigaddr < this->bootbytes.size()) {
+        return this->bootbytes[bigaddr];
+    }
+    uint32_t phys = const_cast<Memory*>(this)->tobank(bigaddr);
+    return this->bytes[phys];
+}
+
 void Memory::write(uint32_t addr, uint8_t w8, bool stackrq)
 {
     uint32_t phys = this->tobank(this->bigram_select(addr & 0xffff, stackrq));

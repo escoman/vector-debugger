@@ -63,62 +63,63 @@ static void test_block0_address()
 
 static void test_block1_address()
 {
-    TEST("block 1 \xe2\x86\x92 address 0x0800 (col 1, row 0)");
-    // New layout: block 1 = col 1, row 0 → addr = 1*0x800 + 0*0x100 = 0x0800
-    CHECK(blockToAddress(1) == 0x0800, "block 1 should map to 0x0800");
+    TEST("block 1 \xe2\x86\x92 address 0x0100 (col 0, row 1)");
+    // block 1 = col 0, row 1 → addr = 0*0x800 + 1*0x100 = 0x0100
+    CHECK(blockToAddress(1) == 0x0100, "block 1 should map to 0x0100");
     PASS();
 }
 
 static void test_block4_address()
 {
-    TEST("block 4 \xe2\x86\x92 address 0x2000 (col 4, row 0)");
-    // block 4 = col 4, row 0 → addr = 4*0x800 = 0x2000
-    CHECK(blockToAddress(4) == 0x2000, "block 4 should map to 0x2000");
+    TEST("block 4 \xe2\x86\x92 address 0x0400 (col 0, row 4)");
+    // block 4 = col 0, row 4 → addr = 0*0x800 + 4*0x100 = 0x0400
+    CHECK(blockToAddress(4) == 0x0400, "block 4 should map to 0x0400");
     PASS();
 }
 
 static void test_block31_address()
 {
-    TEST("block 31 \xe2\x86\x92 address 0xF800 (col 31, row 0)");
-    // block 31 = col 31, row 0 → addr = 31*0x800 = 0xF800
-    CHECK(blockToAddress(31) == 0xF800, "block 31 should map to 0xF800");
+    TEST("block 31 \xe2\x86\x92 address 0x1F00 (col 3, row 7)");
+    // block 31 = col 3, row 7 → addr = 3*0x800 + 7*0x100 = 0x1F00
+    CHECK(blockToAddress(31) == 0x1F00, "block 31 should map to 0x1F00");
     PASS();
 }
 
 static void test_block32_address()
 {
-    TEST("block 32 \xe2\x86\x92 address 0x0100 (col 0, row 1)");
-    // block 32 = col 0, row 1 → addr = 0*0x800 + 1*0x100 = 0x0100
-    CHECK(blockToAddress(32) == 0x0100, "block 32 should map to 0x0100");
+    TEST("block 32 \xe2\x86\x92 address 0x2000 (col 4, row 0)");
+    // block 32 = col 4, row 0 → addr = 4*0x800 = 0x2000
+    CHECK(blockToAddress(32) == 0x2000, "block 32 should map to 0x2000");
     PASS();
 }
 
 static void test_block128_address()
 {
-    TEST("block 128 \xe2\x86\x92 address 0x0400 (col 0, row 4)");
-    // block 128 = col 0, row 4 → addr = 0*0x800 + 4*0x100 = 0x0400
-    CHECK(blockToAddress(128) == 0x0400, "block 128 should map to 0x0400");
+    TEST("block 128 \xe2\x86\x92 address 0x8000 (col 16, row 0)");
+    // block 128 = col 16, row 0 → addr = 16*0x800 = 0x8000
+    CHECK(blockToAddress(128) == 0x8000, "block 128 should map to 0x8000");
     PASS();
 }
 
 static void test_block255_address()
 {
-    TEST("block 255 → address 0xFF00");
+    TEST("block 255 \xe2\x86\x92 address 0xFF00 (col 31, row 7)");
+    // block 255 = col 31, row 7 → addr = 31*0x800 + 7*0x100 = 0xFF00
     CHECK(blockToAddress(255) == 0xFF00, "block 255 should map to 0xFF00");
     PASS();
 }
 
 static void test_address_to_block_inverse()
 {
-    TEST("address \xe2\x86\x92 block inverse: 0x1234 \xe2\x86\x92 block 66");
-    // In new layout: 0x1234 → col = 0x1234/0x800 = 2, row = (0x1234%0x800)/0x100 = 2
-    // block = row * 32 + col = 2*32 + 2 = 66
+    TEST("address \xe2\x86\x92 block inverse: 0x1234 \xe2\x86\x92 block 18");
+    // 0x1234 → col = 0x1234/0x800 = 2, row = (0x1234%0x800)/0x100 = 2
+    // block = col * 8 + row = 2*8 + 2 = 18
     int col = 0x1234 / 0x800;
     int row = (0x1234 % 0x800) / 0x100;
-    int block = row * 32 + col;
-    CHECK(block == 66, "0x1234 should be in block 66");
-    // Verify roundtrip: blockToAddress(66) = col=2, row=2 → 0x1200
-    CHECK(blockToAddress(block) == 0x1200, "block 66 should start at 0x1200");
+    int block = col * 8 + row;
+    CHECK(block == 18, "0x1234 should be in block 18");
+    // Verify roundtrip: blockToAddress(18) = col=2, row=2 → 0x1200
+    CHECK(blockToAddress(block) == 0x1200, "block 18 should start at 0x1200");
     PASS();
 }
 
