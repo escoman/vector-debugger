@@ -248,69 +248,25 @@ void VectorScreenWindow::renderCoordinateInfo(IDebugBackend &backend)
 {
     auto video = backend.videoModeSnapshot();
 
-    // Display is always 512x256 physical pixels regardless of mode.
-    const int displayVisW = 512;
-    const int displayVisH = 256;
-    const int displayBorderL = (video.screenWidth  - displayVisW) / 2;
-    const int displayBorderT = (video.screenHeight - displayVisH) / 2;
-
-    // For VRAM mapping: in 256-mode each VRAM byte covers 16 display pixels
-    // (8 logical × 2 horizontal doubling).  In 512-mode it's 8 display pixels.
-    int displayPPB = video.pixelsPerByte * displayVisW / video.visibleWidth;
-
-    VramMapping::VideoInfo vi = VramMapping::fromVideoMode(
-        video.mode512, video.screenWidth, video.screenHeight,
-        displayVisW, displayVisH,
-        displayBorderL, displayBorderT,
-        video.scrollValue, video.vramBase, displayPPB);
+    // Content width depends on hardware mode
+    const int contentW = video.visibleWidth;  // 256 or 512
+    const int contentH = 256;
 
     if (hoverScreenX_ >= 0 && hoverScreenY_ >= 0) {
-        ImGui::Text("Screen: %dx%d  X: %d  Y: %d",
-                    displayVisW, displayVisH,
-                    hoverScreenX_, hoverScreenY_);
-
-        // VRAM mapping
-        int bufX = hoverBufX_;
-        int bufY = hoverBufY_;
-        auto vramResult = VramMapping::screenToVram(bufX, bufY, vi);
-
-        if (vramResult.count > 0) {
-            ImGui::SameLine();
-            ImGui::Text("VRAM: %04X", vramResult.addresses[0]);
-
-            // Show write info if in debug mode
-            if (vramDebugMode_ && showLastWrite_) {
-                uint16_t vramAddr = vramResult.addresses[0];
-                if (vramAddr >= 0xC000 && vramAddr < 0xC100) {
-                    auto vramSnap = backend.vramWriteSnapshot();
-                    int idx = vramAddr - 0xC000;
-                    auto &info = vramSnap.lastWrite[idx];
-                    if (info.sequence > 0) {
-                        ImGui::SameLine();
-                        ImGui::Text("Val: %02X  LastWrite: PC=%04X",
-                                    info.value, info.pc);
-                    }
-                }
-            }
-
-            // Show write count
-            if (vramDebugMode_ && showWriteCount_) {
-                uint16_t vramAddr = vramResult.addresses[0];
-                auto activity = backend.activitySnapshot();
-                uint64_t wc = activity.writeCount[vramAddr];
-                ImGui::SameLine();
-                ImGui::Text("Writes: %llu", (unsigned long long)wc);
-            }
-        } else {
-            ImGui::SameLine();
-            ImGui::TextDisabled("VRAM: N/A (border)");
-        }
+        // Convert framebuffer X to content X (divide by 2 in 256-mode due to pixel doubling)
+        int contentX = video.mode512 ? hoverScreenX_ : (hoverScreenX_ / 2);
+        const char *modeStr = video.mode512 ? "512" : "256";
+        ImGui::Text("Screen: %s %dx%d  X: %d  Y: %d",
+                    modeStr, contentW, contentH,
+                    contentX, hoverScreenY_);
     } else if (hoverBorder_) {
-        ImGui::Text("Screen: %dx%d  (border area)",
-                    displayVisW, displayVisH);
+        const char *modeStr = video.mode512 ? "512" : "256";
+        ImGui::Text("Screen: %s %dx%d  (border area)",
+                    modeStr, contentW, contentH);
     } else {
-        ImGui::Text("Screen: %dx%d  (hover for coordinates)",
-                    displayVisW, displayVisH);
+        const char *modeStr = video.mode512 ? "512" : "256";
+        ImGui::Text("Screen: %s %dx%d  (hover for coordinates)",
+                    modeStr, contentW, contentH);
     }
 }
 
@@ -324,17 +280,17 @@ void VectorScreenWindow::renderContextMenu(IDebugBackend &backend)
 
     auto video = backend.videoModeSnapshot();
 
-    // Display is always 512x256 physical pixels.
-    const int displayVisW = 512;
-    const int displayVisH = 256;
-    const int displayBorderL = (video.screenWidth  - displayVisW) / 2;
-    const int displayBorderT = (video.screenHeight - displayVisH) / 2;
-    int displayPPB = video.pixelsPerByte * displayVisW / video.visibleWidth;
+    // Framebuffer layout: 576x288 with 512-pixel visible area
+    const int fbVisW = 512;
+    const int fbVisH = 256;
+    const int fbBorderL = (video.screenWidth  - fbVisW) / 2;
+    const int fbBorderT = (video.screenHeight - fbVisH) / 2;
+    int displayPPB = video.pixelsPerByte * fbVisW / video.visibleWidth;
 
     VramMapping::VideoInfo vi = VramMapping::fromVideoMode(
         video.mode512, video.screenWidth, video.screenHeight,
-        displayVisW, displayVisH,
-        displayBorderL, displayBorderT,
+        fbVisW, fbVisH,
+        fbBorderL, fbBorderT,
         video.scrollValue, video.vramBase, displayPPB);
 
     uint16_t vramAddr = 0;
@@ -387,17 +343,17 @@ void VectorScreenWindow::renderVramDebugOverlay(IDebugBackend &backend)
 
     auto video = backend.videoModeSnapshot();
 
-    // Display is always 512x256 physical pixels.
-    const int displayVisW = 512;
-    const int displayVisH = 256;
-    const int displayBorderL = (video.screenWidth  - displayVisW) / 2;
-    const int displayBorderT = (video.screenHeight - displayVisH) / 2;
-    int displayPPB = video.pixelsPerByte * displayVisW / video.visibleWidth;
+    // Framebuffer layout: 576x288 with 512-pixel visible area
+    const int fbVisW = 512;
+    const int fbVisH = 256;
+    const int fbBorderL = (video.screenWidth  - fbVisW) / 2;
+    const int fbBorderT = (video.screenHeight - fbVisH) / 2;
+    int displayPPB = video.pixelsPerByte * fbVisW / video.visibleWidth;
 
     VramMapping::VideoInfo vi = VramMapping::fromVideoMode(
         video.mode512, video.screenWidth, video.screenHeight,
-        displayVisW, displayVisH,
-        displayBorderL, displayBorderT,
+        fbVisW, fbVisH,
+        fbBorderL, fbBorderT,
         video.scrollValue, video.vramBase, displayPPB);
 
     int zoom = currentZoom();
@@ -410,9 +366,9 @@ void VectorScreenWindow::renderVramDebugOverlay(IDebugBackend &backend)
     ImDrawList *drawList = ImGui::GetWindowDrawList();
 
     // The image now includes borders.  The visible screen area starts at
-    // (displayBorderL, displayBorderT) within the image.
-    int visW = displayVisW;
-    int visH = displayVisH;
+    // (fbBorderL, fbBorderT) within the image.
+    int visW = fbVisW;
+    int visH = fbVisH;
     int ppb  = displayPPB;
 
     // Bytes per row in visible area
@@ -434,8 +390,8 @@ void VectorScreenWindow::renderVramDebugOverlay(IDebugBackend &backend)
     }
 
     // Offset to the start of the visible screen area within the image
-    float borderOffsetX = static_cast<float>(displayBorderL * zoom);
-    float borderOffsetY = static_cast<float>(displayBorderT * zoom);
+    float borderOffsetX = static_cast<float>(fbBorderL * zoom);
+    float borderOffsetY = static_cast<float>(fbBorderT * zoom);
 
     // The visible area rect in screen coordinates
     float visMinX = imgMin.x + borderOffsetX;
@@ -594,7 +550,7 @@ void VectorScreenWindow::renderScreen(IDebugBackend &backend)
     // Handle zoom input (Ctrl+wheel)
     handleZoomInput();
 
-    // Handle pan input (middle mouse drag)
+    // Handle pan input (left mouse drag)
     handlePanInput(fullW, fullH, zoom, childSize.x, childSize.y);
 
     // Clamp pan
@@ -681,7 +637,7 @@ void VectorScreenWindow::handleZoomInput()
 }
 
 // ---------------------------------------------------------------------------
-// Pan input (middle mouse drag)
+// Pan input (left mouse drag)
 // ---------------------------------------------------------------------------
 
 void VectorScreenWindow::handlePanInput(int visibleW, int visibleH, int zoomFactor,
@@ -691,8 +647,8 @@ void VectorScreenWindow::handlePanInput(int visibleW, int visibleH, int zoomFact
 
     ImGuiIO &io = ImGui::GetIO();
 
-    // Middle mouse button for panning
-    if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
+    // Left mouse button for panning
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         isPanning_ = true;
         panStartMouseX_ = io.MousePos.x;
         panStartMouseY_ = io.MousePos.y;
@@ -700,7 +656,7 @@ void VectorScreenWindow::handlePanInput(int visibleW, int visibleH, int zoomFact
         panStartY_ = panY_;
     }
 
-    if (ImGui::IsMouseReleased(ImGuiMouseButton_Middle)) {
+    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
         isPanning_ = false;
     }
 

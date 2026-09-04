@@ -928,6 +928,7 @@ void DebugBackend::requestReset()
         std::lock_guard<std::mutex> lock(commandMutex_);
         pendingCommand_ = PendingCommand::Reset;
         stepCompleted_  = false;
+        pauseRequested_ = true;  // Signal running loop to exit
     }
     commandCv_.notify_one();
 

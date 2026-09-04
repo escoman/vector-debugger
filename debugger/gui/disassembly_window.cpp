@@ -101,10 +101,12 @@ void DisassemblyWindow::renderToolbar(IDebugBackend &backend)
     // Step button
     ImGui::SameLine();
     bool paused = backend.isPaused();
-    if (ImGui::Button("Step") && paused) {
+    if (!paused) ImGui::BeginDisabled();
+    if (ImGui::Button("\xe2\x96\xba Step")) {  // ► Step
         backend.stepInstruction();
         needsRefresh_ = true;
     }
+    if (!paused) ImGui::EndDisabled();
 }
 
 // ---------------------------------------------------------------------------

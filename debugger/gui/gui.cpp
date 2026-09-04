@@ -86,6 +86,10 @@ bool DebuggerGui::initialize(int width, int height)
     // Style
     ImGui::StyleColorsDark();
 
+    // Load font with Unicode support for button icons
+    io.Fonts->AddFontFromFileTTF(
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 15.0f);
+
     // Backend init
     ImGui_ImplSDL2_InitForOpenGL(window_, glContext_);
     ImGui_ImplOpenGL2_Init();
@@ -212,15 +216,17 @@ void DebuggerGui::render(IDebugBackend &backend)
     // --- Main menu bar (rendered first, on top of everything) ---
     renderToolbar(backend);
 
-    // --- Adjust work area below the main menu bar ---
-    float menuBarHeight = ImGui::GetFrameHeight();
-    viewport->WorkPos.y += menuBarHeight;
-    viewport->WorkSize.y -= menuBarHeight;
+    // --- Calculate work area (between menu bar and status bar) ---
+    // viewport->WorkPos already starts below the main menu bar.
+    float statusBarHeight = ImGui::GetFrameHeightWithSpacing();
+    ImVec2 workPos = viewport->WorkPos;
+    ImVec2 workSize = viewport->WorkSize;
+    workSize.y -= statusBarHeight;
 
     // --- DockSpace (Stage 5.0/5.1) ---
-    // Fills the adjusted work area — windows cannot overlap the menu bar.
-    ImGui::SetNextWindowPos(viewport->WorkPos);
-    ImGui::SetNextWindowSize(viewport->WorkSize);
+    // Fills the work area between menu bar and status bar.
+    ImGui::SetNextWindowPos(workPos);
+    ImGui::SetNextWindowSize(workSize);
     ImGui::SetNextWindowViewport(viewport->ID);
 
     ImGuiWindowFlags hostFlags = 0;
@@ -440,9 +446,8 @@ void DebuggerGui::render(IDebugBackend &backend)
 
     // --- Status bar (fixed overlay at bottom) ---
     {
-        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x,
-                                        viewport->WorkPos.y + viewport->WorkSize.y - ImGui::GetFrameHeightWithSpacing()));
-        ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, ImGui::GetFrameHeightWithSpacing()));
+        ImGui::SetNextWindowPos(ImVec2(workPos.x, workPos.y + workSize.y));
+        ImGui::SetNextWindowSize(ImVec2(workSize.x, statusBarHeight));
         ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNavFocus |
@@ -739,53 +744,56 @@ void DebuggerGui::renderToolbar(IDebugBackend &backend)
 void DebuggerGui::renderControls(IDebugBackend &backend)
 {
     DebuggerState state = backend.getState();
-
-    // Step button: always available when paused.
     bool paused = (state == DebuggerState::Paused);
-    if (paused) {
-        if (ImGui::Button("Step")) {
-            backend.requestStep();
-            // Refresh all windows after step
-            memoryInspector_.requestRefresh();
-            stackView_.requestRefresh();
-            disassemblyView_.requestRefresh();
-            executionTrace_.requestRefresh();
-            ioInspector_.requestRefresh();
-            vectorScreen_.requestRefresh();
-            functionsWindow_.requestRefresh();
-            xrefsWindow_.requestRefresh();
-            callGraphWindow_.requestRefresh();
-            histNeedsRefresh_ = true;
-        }
-        ImGui::SameLine();
-    }
+    bool running = (state == DebuggerState::Running);
 
-    // Run / Pause toggle.
-    if (state == DebuggerState::Running) {
-        if (ImGui::Button("Pause")) {
-            backend.requestPause();
-            // Refresh all windows after pause
-            memoryInspector_.requestRefresh();
-            stackView_.requestRefresh();
-            disassemblyView_.requestRefresh();
-            executionTrace_.requestRefresh();
-            ioInspector_.requestRefresh();
-            vectorScreen_.requestRefresh();
-            functionsWindow_.requestRefresh();
-            xrefsWindow_.requestRefresh();
-            callGraphWindow_.requestRefresh();
-            histNeedsRefresh_ = true;
-        }
-    } else {
-        if (ImGui::Button("Run")) {
-            backend.requestRun();
-        }
+    // Step: enabled only when paused
+    if (!paused) ImGui::BeginDisabled();
+    if (ImGui::Button("\xe2\x96\xba Step")) {  // ► Step
+        backend.requestStep();
+        memoryInspector_.requestRefresh();
+        stackView_.requestRefresh();
+        disassemblyView_.requestRefresh();
+        executionTrace_.requestRefresh();
+        ioInspector_.requestRefresh();
+        vectorScreen_.requestRefresh();
+        functionsWindow_.requestRefresh();
+        xrefsWindow_.requestRefresh();
+        callGraphWindow_.requestRefresh();
+        histNeedsRefresh_ = true;
     }
-
+    if (!paused) ImGui::EndDisabled();
     ImGui::SameLine();
-    if (ImGui::Button("Reset")) {
+
+    // Run: enabled only when paused
+    if (!paused) ImGui::BeginDisabled();
+    if (ImGui::Button("\xe2\x96\xb6 Run")) {  // ▶ Run
+        backend.requestRun();
+    }
+    if (!paused) ImGui::EndDisabled();
+    ImGui::SameLine();
+
+    // Pause: enabled only when running
+    if (!running) ImGui::BeginDisabled();
+    if (ImGui::Button("\xe2\x80\x96 Pause")) {  // ‖ Pause
+        backend.requestPause();
+        memoryInspector_.requestRefresh();
+        stackView_.requestRefresh();
+        disassemblyView_.requestRefresh();
+        executionTrace_.requestRefresh();
+        ioInspector_.requestRefresh();
+        vectorScreen_.requestRefresh();
+        functionsWindow_.requestRefresh();
+        xrefsWindow_.requestRefresh();
+        callGraphWindow_.requestRefresh();
+        histNeedsRefresh_ = true;
+    }
+    if (!running) ImGui::EndDisabled();
+    ImGui::SameLine();
+
+    // Reset: always enabled
+    if (ImGui::Button("\xe2\x86\xbb Reset")) {  // ↻ Reset
         backend.requestReset();
-        // Refresh all windows after reset
         memoryInspector_.requestRefresh();
         stackView_.requestRefresh();
         disassemblyView_.requestRefresh();
