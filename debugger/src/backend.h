@@ -121,6 +121,10 @@ public:
     ActivitySnapshot activitySnapshot() const override;
     void clearActivityCounters() override;
 
+    // -- IDebugBackend: live activity (Stage 5.2) ----------------------------
+
+    LiveActivitySnapshot liveActivitySnapshot() const override;
+
     // -- IDebugBackend: symbols ---------------------------------------------
 
     SymbolDatabase       &symbolDatabase() override;

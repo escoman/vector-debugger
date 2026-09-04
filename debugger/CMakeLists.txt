@@ -250,6 +250,32 @@ target_link_libraries(debugger_adapter
 # Find OpenGL
 find_package(OpenGL REQUIRED)
 
+# ---------------------------------------------------------------------------
+# Live Memory Map test executable (Stage 5.2)
+# ---------------------------------------------------------------------------
+
+add_executable(test_live_map
+    ${DBG_TST_DIR}/test_live_map.cpp
+    ${DBG_GUI_DIR}/memory_map_window.cpp
+    ${DBG_SRC_DIR}/symbol_database.cpp
+    ${IMGUI_SOURCES}
+)
+
+target_include_directories(test_live_map PRIVATE
+    ${IMGUI_DIR}
+    ${IMGUI_DIR}/backends
+    ${DBG_GUI_DIR}
+    ${DBG_SRC_DIR}
+    ${SRC_DIR}
+)
+
+target_link_libraries(test_live_map
+    ${SDL2_LIBRARY}
+    ${OPENGL_LIBRARIES}
+    ${Boost_LIBRARIES}
+    pthread
+)
+
 include_directories(${SDL2_INCLUDE_DIR})
 include_directories(${IMGUI_DIR})
 include_directories(${IMGUI_DIR}/backends)

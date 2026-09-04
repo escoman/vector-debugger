@@ -39,11 +39,14 @@ struct DebugBackend::Impl
 
     void clearStats()
     {
+        using TimePoint = MemoryStats::TimePoint;
         for (int i = 0; i < 65536; ++i) {
             memStats[i].reads = 0;
             memStats[i].writes = 0;
             memStats[i].lastReadSequence = UINT64_MAX;
             memStats[i].lastWriteSequence = UINT64_MAX;
+            memStats[i].lastReadTime = TimePoint::min();
+            memStats[i].lastWriteTime = TimePoint::min();
         }
     }
 };
@@ -539,6 +542,7 @@ void DebugBackend::onMemoryRead(uint32_t virt, uint32_t phys,
     uint16_t addr = ev.virt;
     impl_->memStats[addr].reads++;
     impl_->memStats[addr].lastReadSequence = instructionSequence_;
+    impl_->memStats[addr].lastReadTime = MemoryStats::Clock::now();
 }
 
 void DebugBackend::onMemoryWrite(uint32_t virt, uint32_t phys,
@@ -559,6 +563,7 @@ void DebugBackend::onMemoryWrite(uint32_t virt, uint32_t phys,
     uint16_t addr = ev.virt;
     impl_->memStats[addr].writes++;
     impl_->memStats[addr].lastWriteSequence = instructionSequence_;
+    impl_->memStats[addr].lastWriteTime = MemoryStats::Clock::now();
 
     // Enhanced Vector Screen: track VRAM writes (0xC000..0xC0FF)
     if (addr >= 0xC000 && addr < 0xC100) {
@@ -744,6 +749,37 @@ void DebugBackend::clearActivityCounters()
         ioPA_ = 0xFF;
         ioPB_ = 0xFF;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Stage 5.2: Live Activity snapshot (for Memory Map)
+// ---------------------------------------------------------------------------
+
+DebugBackend::LiveActivitySnapshot DebugBackend::liveActivitySnapshot() const
+{
+    LiveActivitySnapshot snap;
+
+    using TimePoint = std::chrono::steady_clock::time_point;
+    TimePoint minTime = TimePoint::min();
+
+    for (int i = 0; i < 256; ++i) {
+        snap.blocks[i].lastReadTime  = minTime;
+        snap.blocks[i].lastWriteTime = minTime;
+    }
+
+    for (int addr = 0; addr < 65536; ++addr) {
+        int block = addr >> 8;  // addr / 256
+
+        TimePoint rt = impl_->memStats[addr].lastReadTime;
+        TimePoint wt = impl_->memStats[addr].lastWriteTime;
+
+        if (rt > snap.blocks[block].lastReadTime)
+            snap.blocks[block].lastReadTime = rt;
+        if (wt > snap.blocks[block].lastWriteTime)
+            snap.blocks[block].lastWriteTime = wt;
+    }
+
+    return snap;
 }
 
 // ---------------------------------------------------------------------------

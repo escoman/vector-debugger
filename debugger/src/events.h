@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <chrono>
 #include "backend.h"  // CpuState
 
 // ---------------------------------------------------------------------------
@@ -84,4 +85,11 @@ struct MemoryStats
 
     uint64_t lastReadSequence;
     uint64_t lastWriteSequence;
+
+    // Wall-clock timestamps for Live Map (Stage 5.2)
+    using Clock = std::chrono::steady_clock;
+    using TimePoint = std::chrono::steady_clock::time_point;
+
+    TimePoint lastReadTime;
+    TimePoint lastWriteTime;
 };

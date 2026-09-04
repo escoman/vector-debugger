@@ -3,6 +3,7 @@
 #include "debugger_types.h"
 #include "symbol_database.h"
 
+#include <chrono>
 #include <cstdint>
 #include <cstddef>
 #include <functional>
@@ -130,6 +131,21 @@ public:
 
     virtual ActivitySnapshot activitySnapshot() const = 0;
     virtual void clearActivityCounters() = 0;
+
+    // -- Live Activity (Stage 5.2 — Memory Map) -----------------------------
+
+    struct LiveBlockState
+    {
+        std::chrono::steady_clock::time_point lastReadTime;
+        std::chrono::steady_clock::time_point lastWriteTime;
+    };
+
+    struct LiveActivitySnapshot
+    {
+        LiveBlockState blocks[256];  // 256 blocks of 256 bytes each
+    };
+
+    virtual LiveActivitySnapshot liveActivitySnapshot() const = 0;
 
     // -- Symbols ------------------------------------------------------------
 

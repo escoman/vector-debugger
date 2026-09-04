@@ -737,7 +737,6 @@ void DebuggerGui::renderControls(IDebugBackend &backend)
             executionTrace_.requestRefresh();
             ioInspector_.requestRefresh();
             vectorScreen_.requestRefresh();
-            memoryMap_.requestRefresh();
             functionsWindow_.requestRefresh();
             xrefsWindow_.requestRefresh();
             callGraphWindow_.requestRefresh();
@@ -757,7 +756,6 @@ void DebuggerGui::renderControls(IDebugBackend &backend)
             executionTrace_.requestRefresh();
             ioInspector_.requestRefresh();
             vectorScreen_.requestRefresh();
-            memoryMap_.requestRefresh();
             functionsWindow_.requestRefresh();
             xrefsWindow_.requestRefresh();
             callGraphWindow_.requestRefresh();
