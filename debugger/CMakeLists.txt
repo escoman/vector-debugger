@@ -25,6 +25,7 @@ include_directories(${DBG_SRC_DIR})
 include_directories(${Boost_INCLUDE_DIRS})
 include_directories(${ROOT_DIR}/fast-filters/sources)  # coredsp for resampler
 include_directories(${ROOT_DIR}/coreutil/sources)       # coreutil for coredsp
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/thirdparty)  # stb_image.h
 
 # ---------------------------------------------------------------------------
 # Find Boost (required for Board sources)
@@ -47,6 +48,7 @@ set(CORE_SOURCES
 
 # Board sources for full emulator integration (Stage 3.2)
 # NOTE: hal.cpp is deliberately excluded — each target provides its own HAL.
+# NOTE: icon.cpp is replaced with debugger's own version (uses stb_image for PNG)
 set(BOARD_SOURCES
     ${SRC_DIR}/board.cpp
     ${SRC_DIR}/cadence.cpp
@@ -56,7 +58,7 @@ set(BOARD_SOURCES
     ${SRC_DIR}/options.cpp
     ${SRC_DIR}/util.cpp
     ${SRC_DIR}/resampler.cpp
-    ${SRC_DIR}/icon.cpp
+    ${DBG_SRC_DIR}/icon.cpp
 )
 
 set(DBG_SOURCES
@@ -298,25 +300,25 @@ add_custom_command(
     DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/boots.bin
 )
 
-# Copy icon64.rgba to build directory and convert to object file
+# Copy icon64.png to build directory and convert to object file
 add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/icon64.rgba
-    COMMAND ${CMAKE_COMMAND} -E copy ${ROOT_DIR}/res/icon64.rgba ${CMAKE_CURRENT_BINARY_DIR}/icon64.rgba
-    DEPENDS ${ROOT_DIR}/res/icon64.rgba
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/icon64.png
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/res/icon64.png ${CMAKE_CURRENT_BINARY_DIR}/icon64.png
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/res/icon64.png
 )
 
 add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/icon64.rgba.o
-    COMMAND ${OBJCOPY} -I binary ${DBG_OBJCOPY_FMT} icon64.rgba icon64.rgba.o
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/icon64.png.o
+    COMMAND ${OBJCOPY} -I binary ${DBG_OBJCOPY_FMT} icon64.png icon64.png.o
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-    DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/icon64.rgba
+    DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/icon64.png
 )
 
 add_executable(v06c-debugger
     ${GUI_SOURCES}
     ${IMGUI_SOURCES}
     ${CMAKE_CURRENT_BINARY_DIR}/boots.bin.o
-    ${CMAKE_CURRENT_BINARY_DIR}/icon64.rgba.o
+    ${CMAKE_CURRENT_BINARY_DIR}/icon64.png.o
 )
 
 target_link_libraries(v06c-debugger

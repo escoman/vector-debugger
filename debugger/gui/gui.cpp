@@ -14,6 +14,7 @@
 #include "backend.h"
 #include "events.h"
 #include "disassembler.h"
+#include "icon.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -88,6 +89,9 @@ bool DebuggerGui::initialize(int width, int height)
     // Maximize after creation — ImGui viewport init may override the
     // SDL_WINDOW_MAXIMIZED create flag, so we maximize explicitly.
     SDL_MaximizeWindow(window_);
+
+    // Set window icon from embedded resource
+    icon_set(window_);
 
     glContext_ = SDL_GL_CreateContext(window_);
     if (!glContext_) {

@@ -8,7 +8,7 @@ extern "C" {
     unsigned int _binary_boots_bin_size = 0;
     
     // Icon dummy data (empty for tests)
-    unsigned char _binary_icon64_rgba_start[1] = {0};
-    unsigned char _binary_icon64_rgba_end[1] = {0};
-    unsigned int _binary_icon64_rgba_size = 0;
+    unsigned char _binary_icon64_png_start[1] = {0};
+    unsigned char _binary_icon64_png_end[1] = {0};
+    unsigned int _binary_icon64_png_size = 0;
 }
