@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Vector-06C Debugger
+Comment=Debugger for Vector-06C emulator
+Exec=@CMAKE_CURRENT_BINARY_DIR@/v06c-debugger
+Icon=@CMAKE_CURRENT_SOURCE_DIR@/res/icon64.png
+Type=Application
+StartupNotify=false
+StartupWMClass=v06c-debugger
+Categories=Development;Debugger;

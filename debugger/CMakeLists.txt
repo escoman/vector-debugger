@@ -48,7 +48,7 @@ set(CORE_SOURCES
 
 # Board sources for full emulator integration (Stage 3.2)
 # NOTE: hal.cpp is deliberately excluded — each target provides its own HAL.
-# NOTE: icon.cpp is replaced with debugger's own version (uses stb_image for PNG)
+# NOTE: icon.cpp uses a debugger-specific stub (no-op; icon comes from .desktop file)
 set(BOARD_SOURCES
     ${SRC_DIR}/board.cpp
     ${SRC_DIR}/cadence.cpp
@@ -303,23 +303,8 @@ add_custom_command(
     DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/boots.bin
 )
 
-# Copy icon64.png to build directory and convert to object file
-add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/icon64.png
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/res/icon64.png ${CMAKE_CURRENT_BINARY_DIR}/icon64.png
-    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/res/icon64.png
-)
-
-add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/icon64.png.o
-    COMMAND ${OBJCOPY} -I binary ${DBG_OBJCOPY_FMT} icon64.png icon64.png.o
-    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-    DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/icon64.png
-)
-
 set(BINARY_RESOURCES
     ${CMAKE_CURRENT_BINARY_DIR}/boots.bin.o
-    ${CMAKE_CURRENT_BINARY_DIR}/icon64.png.o
 )
 
 # ---------------------------------------------------------------------------
@@ -486,4 +471,22 @@ target_link_libraries(v06c-debugger
 set_target_properties(v06c-debugger PROPERTIES
     LINK_FLAGS "-no-pie"
     POSITION_INDEPENDENT_CODE OFF
+)
+
+# ---------------------------------------------------------------------------
+# Desktop integration — generate .desktop file with absolute paths
+# ---------------------------------------------------------------------------
+
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/res/v06c-debugger.desktop.in
+    ${CMAKE_CURRENT_BINARY_DIR}/v06c-debugger.desktop
+    @ONLY
+)
+
+# make install-desktop — copy .desktop to ~/.local/share/applications/
+add_custom_target(install-desktop
+    COMMAND ${CMAKE_COMMAND} -E copy
+        ${CMAKE_CURRENT_BINARY_DIR}/v06c-debugger.desktop
+        $ENV{HOME}/.local/share/applications/v06c-debugger.desktop
+    COMMENT "Installing v06c-debugger.desktop to ~/.local/share/applications/"
 )
