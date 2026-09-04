@@ -107,6 +107,7 @@ bool DebugBackend::loadRom(const std::string &path, uint32_t org)
     // Set state to Paused
     state_ = DebuggerState::Paused;
     pauseRequested_ = false;
+    pauseRequestedAtomic_.store(false, std::memory_order_release);
 
     return true;
 }
@@ -238,6 +239,7 @@ void DebugBackend::reset()
 
     state_ = DebuggerState::Paused;
     pauseRequested_ = false;
+    pauseRequestedAtomic_.store(false, std::memory_order_release);
     stopReason_ = StopReason::Reset;
 
     instructionSequence_ = 0;
@@ -645,20 +647,6 @@ std::vector<MemoryStats> DebugBackend::memoryStatsSnapshot() const
 }
 
 // ---------------------------------------------------------------------------
-// Stage 4.2: Symbol database
-// ---------------------------------------------------------------------------
-
-SymbolDatabase &DebugBackend::symbolDatabase()
-{
-    return symbols_;
-}
-
-const SymbolDatabase &DebugBackend::symbolDatabase() const
-{
-    return symbols_;
-}
-
-// ---------------------------------------------------------------------------
 // Stage 5.3.2: Symbol commands (through Command Queue)
 // ---------------------------------------------------------------------------
 
@@ -786,10 +774,16 @@ CommandResult DebugBackend::submitAndWait(std::unique_ptr<Command> cmd)
 
     // Enqueue for emulation thread and wait for result
     auto future = cmd->promise.get_future();
+
+    // Keep a raw pointer to mark cancellation on timeout
+    Command *rawCmd = cmd.get();
     commandQueue_.enqueue(std::move(cmd));
 
     auto status = future.wait_for(std::chrono::seconds(5));
     if (status == std::future_status::timeout) {
+        // Stage 5.3.3: Mark command as cancelled.
+        // The emulation thread will check cancelled before executing.
+        rawCmd->cancelled.store(true, std::memory_order_release);
         CommandResult r;
         r.success = false;
         r.error = "command timed out";
@@ -806,6 +800,15 @@ void DebugBackend::executeCommand(Command &cmd)
     CommandResult result;
     result.success = true;
     result.status = CommandResult::Completed;
+
+    // Stage 5.3.3: Check cancellation before state-changing operations
+    if (cmd.cancelled.load(std::memory_order_acquire)) {
+        result.success = false;
+        result.error = "cancelled";
+        result.status = CommandResult::Cancelled;
+        cmd.promise.set_value(result);
+        return;
+    }
 
     switch (cmd.type) {
     case CommandType::AddBreakpoint: {
@@ -926,26 +929,12 @@ void DebugBackend::executeCommand(Command &cmd)
             result.success = false;
             result.error = "trace busy";
             result.status = CommandResult::Failed;
-            // Deliver empty trace result via pending promise
-            std::shared_ptr<std::promise<TraceExecutionResult>> tp;
-            {
-                std::lock_guard<std::mutex> lock(commandMutex_);
-                tp = pendingTracePromise_;
-                pendingTracePromise_ = nullptr;
-            }
-            if (tp) tp->set_value(TraceExecutionResult{});
+            if (cmd.tracePromise) cmd.tracePromise->set_value(TraceExecutionResult{});
         } else {
             auto traceResult = executeTraceInternal(cmd.traceParams);
             result.success = true;
             traceBusy_.store(false);
-            // Deliver trace result via pending promise
-            std::shared_ptr<std::promise<TraceExecutionResult>> tp;
-            {
-                std::lock_guard<std::mutex> lock(commandMutex_);
-                tp = pendingTracePromise_;
-                pendingTracePromise_ = nullptr;
-            }
-            if (tp) tp->set_value(std::move(traceResult));
+            if (cmd.tracePromise) cmd.tracePromise->set_value(std::move(traceResult));
         }
         break;
     }
@@ -976,34 +965,29 @@ DebugBackend::requestExecuteTrace(const TraceExecutionParams &params)
     auto tracePromise = std::make_shared<std::promise<TraceExecutionResult>>();
     auto traceResultFuture = tracePromise->get_future();
 
-    // Store the promise so executeCommand can fulfill it
-    {
-        std::lock_guard<std::mutex> lock(commandMutex_);
-        pendingTracePromise_ = tracePromise;
-    }
+    // Stage 5.3.3: trace promise is owned by the Command, not stored globally
+    auto cmd = std::make_unique<Command>();
+    cmd->type = CommandType::ExecuteTrace;
+    cmd->traceParams = params;
+    cmd->tracePromise = tracePromise;
 
     if (!emulationLoopRunning_) {
         // Direct execution — no emulation thread (test scenario)
         if (traceBusy_.exchange(true)) {
             tracePromise->set_value(TraceExecutionResult{});
-            // Caller should check exitReason == Unknown
         } else {
             auto traceResult = executeTraceInternal(params);
             traceBusy_.store(false);
-            tracePromise->set_value(traceResult);
+            tracePromise->set_value(std::move(traceResult));
         }
-        std::lock_guard<std::mutex> lock(commandMutex_);
-        pendingTracePromise_ = nullptr;
+        cmd->promise.set_value(CommandResult{true, "", CommandResult::Completed});
     } else {
         // Enqueue for emulation thread
-        auto cmd = std::make_unique<Command>();
-        cmd->type = CommandType::ExecuteTrace;
-        cmd->traceParams = params;
         auto cmdFuture = cmd->promise.get_future();
         commandQueue_.enqueue(std::move(cmd));
 
         // Wait for command completion (the trace result is delivered
-        // via pendingTracePromise_ inside executeCommand)
+        // via cmd->tracePromise inside executeCommand)
         cmdFuture.wait();
     }
 
@@ -1025,6 +1009,16 @@ DebugBackend::executeTraceInternal(const TraceExecutionParams &params)
     result.exitReason = ExitReason::Unknown;
 
     for (uint32_t i = 0; i < params.maxInstructions; ++i) {
+        // Stage 5.3.3: Check for break/quit requests during trace
+        if (breakRequested_.load(std::memory_order_acquire) ||
+            quitRequested_.load(std::memory_order_acquire)) {
+            if (result.exitReason == ExitReason::Unknown) {
+                result.exitReason = ExitReason::Timeout;
+                result.exitPc = target_->getCpuState().pc;
+            }
+            break;
+        }
+
         uint16_t pc = target_->getCpuState().pc;
         uint8_t opcode = target_->peekMemory(pc);
 
@@ -1244,12 +1238,8 @@ void DebugBackend::formatTraceLine(char *buf, size_t bufsize,
 
 void DebugBackend::requestStep()
 {
-    if (!emulationLoopRunning_) {
-        // Test scenario — execute directly
-        stepInstruction();
-        return;
-    }
-    // Enqueue Step command for emulation thread
+    // Stage 5.3.3: Always go through command queue / executeCommand.
+    // No direct stepInstruction() from calling thread.
     auto cmd = std::make_unique<Command>();
     cmd->type = CommandType::Step;
     submitAndWait(std::move(cmd));
@@ -1257,23 +1247,23 @@ void DebugBackend::requestStep()
 
 void DebugBackend::requestRun()
 {
-    skipBreakpoint_ = checkBreakpoint();
-
-    {
-        std::lock_guard<std::mutex> lock(commandMutex_);
-        state_ = DebuggerState::Running;
-        pauseRequested_ = false;
-    }
-    running_.store(true, std::memory_order_release);
+    // Stage 5.3.3: No CPU/Board access from calling thread.
+    // skipBreakpoint_ is computed by emulation thread in executeFramesTarget_().
 
     if (!emulationLoopRunning_) {
         // Test scenario — no emulation thread.
-        // Flags are set; actual execution happens via stepInstruction()
+        // Set flags directly; execution happens via stepInstruction()
         // or when runUntilPause() is started in a separate thread.
+        {
+            std::lock_guard<std::mutex> lock(commandMutex_);
+            state_ = DebuggerState::Running;
+            pauseRequested_ = false;
+        }
+        running_.store(true, std::memory_order_release);
         return;
     }
 
-    // Emulation loop is running — enqueue Run command to wake processOneCommand
+    // Emulation loop is running — enqueue Run command
     auto cmd = std::make_unique<Command>();
     cmd->type = CommandType::Run;
     commandQueue_.enqueue(std::move(cmd));
@@ -1283,6 +1273,7 @@ void DebugBackend::requestPause()
 {
     running_.store(false, std::memory_order_release);
     breakRequested_.store(true, std::memory_order_release);
+    pauseRequestedAtomic_.store(true, std::memory_order_release);  // Stage 5.3.3: atomic fast-path
     {
         std::lock_guard<std::mutex> lock(commandMutex_);
         pauseRequested_ = true;
@@ -1313,10 +1304,7 @@ void DebugBackend::waitForCompletion()
 
 void DebugBackend::requestQuit()
 {
-    {
-        std::lock_guard<std::mutex> lock(commandMutex_);
-        quitRequested_ = true;
-    }
+    quitRequested_.store(true, std::memory_order_release);
 
     if (emulationLoopRunning_) {
         // Enqueue Quit to wake up processOneCommand
@@ -1328,8 +1316,7 @@ void DebugBackend::requestQuit()
 
 bool DebugBackend::isQuitRequested() const
 {
-    std::lock_guard<std::mutex> lock(commandMutex_);
-    return quitRequested_;
+    return quitRequested_.load(std::memory_order_acquire);
 }
 
 void DebugBackend::processOneCommand()
@@ -1343,7 +1330,17 @@ void DebugBackend::processOneCommand()
     // Wait for a command from the queue (blocks until available)
     auto cmd = commandQueue_.waitAndDequeue();
 
-    if (quitRequested_) return;
+    // Stage 5.3.3: Every command must receive a result, even on quit.
+    if (quitRequested_.load(std::memory_order_acquire)) {
+        cmd->promise.set_value(CommandResult{false, "quit requested", CommandResult::Cancelled});
+        return;
+    }
+
+    // Check cancellation (Stage 5.3.3)
+    if (cmd->cancelled.load(std::memory_order_acquire)) {
+        cmd->promise.set_value(CommandResult{false, "cancelled", CommandResult::Cancelled});
+        return;
+    }
 
     // Pause before trace execution — trace needs CPU in Paused state
     if (cmd->type == CommandType::ExecuteTrace) {
@@ -1378,7 +1375,7 @@ void DebugBackend::executeFramesTarget_()
     }
 
     while (running_.load(std::memory_order_acquire)) {
-        if (quitRequested_) {
+        if (quitRequested_.load(std::memory_order_acquire)) {
             target_->debuggerBreak();
             target_->debuggerDetached();
             return;
@@ -1402,11 +1399,13 @@ void DebugBackend::executeFramesTarget_()
         // Process any commands queued during frame execution
         while (auto cmd = commandQueue_.tryDequeue()) {
             if (cmd->type == CommandType::Quit) {
-                quitRequested_ = true;
+                quitRequested_.store(true, std::memory_order_release);
                 running_.store(false, std::memory_order_release);
                 break;
             }
             if (cmd->type == CommandType::Run) {
+                // Stage 5.3.3: compute skipBreakpoint_ on emulation thread
+                skipBreakpoint_ = checkBreakpoint();
                 // Already running — just fulfill the promise
                 cmd->promise.set_value(CommandResult{true, "", CommandResult::Completed});
                 continue;
@@ -1421,7 +1420,7 @@ void DebugBackend::executeFramesTarget_()
         }
 
         // If PC didn't change, target stopped (breakpoint or debugger_interrupt)
-        if (pcAfterFrame == pcBeforeFrame && !quitRequested_) {
+        if (pcAfterFrame == pcBeforeFrame && !quitRequested_.load(std::memory_order_acquire)) {
             if (checkBreakpoint()) {
                 stopReason_ = StopReason::Breakpoint;
                 running_.store(false, std::memory_order_release);
@@ -1455,10 +1454,7 @@ void DebugBackend::executeFramesTarget_()
 void DebugBackend::executeFramesNoTarget_()
 {
     while (running_.load(std::memory_order_acquire)) {
-        {
-            std::lock_guard<std::mutex> lk(commandMutex_);
-            if (quitRequested_) return;
-        }
+        if (quitRequested_.load(std::memory_order_acquire)) return;
         if (checkBreakpoint()) {
             if (skipBreakpoint_) {
                 skipBreakpoint_ = false;
@@ -1495,7 +1491,7 @@ void DebugBackend::runUntilPause()
 
     // Set up poll_debugger callback — checks flags set by other threads
     target_->setPollCallback([this]() {
-        if (quitRequested_) {
+        if (quitRequested_.load(std::memory_order_acquire)) {
             target_->debuggerBreak();
             return;
         }
@@ -1506,7 +1502,8 @@ void DebugBackend::runUntilPause()
             return;
         }
 
-        if (pauseRequested_ || !running_.load(std::memory_order_relaxed)) {
+        if (pauseRequestedAtomic_.load(std::memory_order_acquire) || !running_.load(std::memory_order_relaxed)) {
+            pauseRequestedAtomic_.store(true, std::memory_order_release);
             pauseRequested_ = true;
             target_->debuggerBreak();
             return;
@@ -1520,7 +1517,12 @@ void DebugBackend::runUntilPause()
     while (true) {
         processOneCommand();
 
-        if (quitRequested_) {
+        if (quitRequested_.load(std::memory_order_acquire)) {
+            // Stage 5.3.3: Drain remaining commands — fulfill all promises
+            while (auto pending = commandQueue_.tryDequeue()) {
+                pending->promise.set_value(
+                    CommandResult{false, "quit", CommandResult::Cancelled});
+            }
             {
                 std::lock_guard<std::mutex> lk(commandMutex_);
                 state_ = DebuggerState::Paused;

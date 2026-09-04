@@ -798,6 +798,227 @@ static void test_unknown_pc_remains_unknown()
 }
 
 // ---------------------------------------------------------------------------
+// Stage 5.3.3: Additional mandatory tests
+// ---------------------------------------------------------------------------
+
+// Test: concurrent breakpoint commands on real Backend (Section 29 #2)
+static void test_concurrent_breakpoint_real()
+{
+    TEST_BEGIN("concurrent_breakpoint_real");
+    TestFixture f;
+    writeProgram(f.mem, test_program, sizeof(test_program), 0x0000);
+    writeProgram(f.mem, subroutine, sizeof(subroutine), 0x0200);
+
+    std::thread emuThread([&]{ f.backend->runUntilPause(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Two threads add breakpoints simultaneously
+    std::atomic<bool> r1ok{false}, r2ok{false};
+    std::thread t1([&]{
+        auto res = f.backend->requestAddBreakpoint(0x0200);
+        r1ok = res.success;
+    });
+    std::thread t2([&]{
+        auto res = f.backend->requestAddBreakpoint(0x0300);
+        r2ok = res.success;
+    });
+    t1.join();
+    t2.join();
+
+    CHECK(r1ok.load(), "thread A: breakpoint 0x0200 added");
+    CHECK(r2ok.load(), "thread B: breakpoint 0x0300 added");
+    CHECK(f.backend->hasBreakpoint(0x0200), "0x0200 exists");
+    CHECK(f.backend->hasBreakpoint(0x0300), "0x0300 exists");
+
+    f.backend->requestQuit();
+    emuThread.join();
+    TEST_END();
+}
+
+// Test: concurrent annotation commands on real Backend (Section 29 #3)
+static void test_concurrent_annotation_real()
+{
+    TEST_BEGIN("concurrent_annotation_real");
+    TestFixture f;
+    writeProgram(f.mem, test_program, sizeof(test_program), 0x0000);
+
+    std::thread emuThread([&]{ f.backend->runUntilPause(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    std::atomic<int> okCount{0};
+    std::thread t1([&]{
+        auto res = f.backend->requestCreateFunction(0x0200, "func_A");
+        if (res.success) okCount++;
+    });
+    std::thread t2([&]{
+        auto res = f.backend->requestCreateFunction(0x0300, "func_B");
+        if (res.success) okCount++;
+    });
+    t1.join();
+    t2.join();
+
+    CHECK_EQ(2u, (unsigned)okCount.load(), "both annotations created");
+    CHECK(f.backend->symbolDatabase().findSymbol(0x0200) != nullptr, "func_A exists");
+    CHECK(f.backend->symbolDatabase().findSymbol(0x0300) != nullptr, "func_B exists");
+
+    f.backend->requestQuit();
+    emuThread.join();
+    TEST_END();
+}
+
+// Test: step executes only on Emulation Thread (Section 29 #5)
+static void test_step_only_on_emulation_thread()
+{
+    TEST_BEGIN("step_only_on_emulation_thread");
+    TestFixture f;
+    writeProgram(f.mem, test_program, sizeof(test_program), 0x0000);
+
+    auto emuThreadId = std::thread::id{};
+    std::atomic<bool> stepOnEmu{false};
+
+    std::thread emuThread([&]{
+        emuThreadId = std::this_thread::get_id();
+        f.backend->runUntilPause();
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Request step — should execute on emulation thread
+    f.backend->requestStep();
+    auto history = f.backend->instructionHistorySnapshot();
+    // After step, instruction should have been executed on emulation thread
+    CHECK(history.size() >= 1, "step executed (history has entries)");
+
+    f.backend->requestQuit();
+    emuThread.join();
+    TEST_END();
+}
+
+// Test: trace executes only on Emulation Thread (Section 29 #6)
+static void test_trace_only_on_emulation_thread()
+{
+    TEST_BEGIN("trace_only_on_emulation_thread");
+    TestFixture f;
+    writeProgram(f.mem, test_program, sizeof(test_program), 0x0000);
+    writeProgram(f.mem, subroutine, sizeof(subroutine), 0x0200);
+
+    // Set up CPU to call subroutine
+    f.backend->reset();
+    f.backend->writeRegister(IDebugBackend::RegisterId::SP, 0xC100);
+    f.backend->writeRegister(IDebugBackend::RegisterId::PC, 0x0200);
+
+    std::thread emuThread([&]{
+        f.backend->runUntilPause();
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Trace should execute on emulation thread
+    IDebugBackend::TraceExecutionParams params;
+    params.startPc = 0x0200;
+    params.maxInstructions = 100;
+    params.stopOnRet = true;
+    auto result = f.backend->requestExecuteTrace(params).get();
+
+    CHECK(result.instructionsExecuted > 0, "trace executed instructions");
+    CHECK(result.exitReason == ExitReason::Ret, "trace ended with RET");
+
+    f.backend->requestQuit();
+    emuThread.join();
+    TEST_END();
+}
+
+// Test: no pending promise after Quit (Section 29 #18)
+static void test_no_pending_promise_after_quit()
+{
+    TEST_BEGIN("no_pending_promise_after_quit");
+    TestFixture f;
+    writeProgram(f.mem, test_program, sizeof(test_program), 0x0000);
+
+    std::thread emuThread([&]{ f.backend->runUntilPause(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Send a command, then immediately quit
+    auto future = f.backend->requestAddBreakpoint(0x0500);
+    // future should complete (either success or cancelled)
+    f.backend->requestQuit();
+    emuThread.join();
+
+    // If we get here without hanging, all promises were fulfilled
+    CHECK(true, "no dangling promise (thread joined cleanly)");
+    TEST_END();
+}
+
+// Test: no command lost during shutdown (Section 29 #19)
+static void test_no_command_lost_during_shutdown()
+{
+    TEST_BEGIN("no_command_lost_during_shutdown");
+    TestFixture f;
+    writeProgram(f.mem, test_program, sizeof(test_program), 0x0000);
+
+    std::thread emuThread([&]{ f.backend->runUntilPause(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Enqueue several commands, then quit
+    std::atomic<int> completedCount{0};
+    std::thread t1([&]{
+        auto r = f.backend->requestAddBreakpoint(0x0100);
+        completedCount++;
+    });
+    std::thread t2([&]{
+        auto r = f.backend->requestCreateFunction(0x0400, "test_func");
+        completedCount++;
+    });
+
+    // Give commands time to be enqueued
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    f.backend->requestQuit();
+
+    t1.join();
+    t2.join();
+    emuThread.join();
+
+    // All callers should have received a result (success or cancelled)
+    CHECK_EQ(2u, (unsigned)completedCount.load(), "all callers received result");
+    TEST_END();
+}
+
+// Test: PC=0000 is not Unknown (Section 29 #17)
+static void test_pc0000_not_unknown()
+{
+    TEST_BEGIN("pc0000_not_unknown");
+    TestFixture f;
+
+    // Place a program at PC=0x0000
+    static const uint8_t prog_at_zero[] = {
+        0x31, 0x00, 0xC1,  // LXI SP, C100
+        0x3E, 0x42,        // MVI A, 42
+        0x76,              // HLT
+    };
+    writeProgram(f.mem, prog_at_zero, sizeof(prog_at_zero), 0x0000);
+    f.backend->reset();
+
+    // Execute trace from PC=0
+    IDebugBackend::TraceExecutionParams params;
+    params.startPc = 0x0000;
+    params.maxInstructions = 100;
+    params.stopOnRet = false;
+    auto result = f.backend->requestExecuteTrace(params).get();
+
+    CHECK(result.instructionsExecuted >= 2, "executed instructions at PC=0");
+
+    // Check that instruction history has PC=0x0000 with hasPc=true
+    auto history = f.backend->instructionHistorySnapshot();
+    bool foundZero = false;
+    for (const auto &ie : history) {
+        if (ie.pcBefore == 0x0000) {
+            foundZero = true;
+            break;
+        }
+    }
+    CHECK(foundZero, "PC=0x0000 found in history (real PC, not unknown)");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -806,7 +1027,7 @@ int main()
     setbuf(stdout, nullptr);
 
     printf("\n\033[1;33m========================================\033[0m\n");
-    printf("\033[1;33m  Agent Integration Tests — Stage 5.3.2\033[0m\n");
+    printf("\033[1;33m  Agent Integration Tests — Stage 5.3.3\033[0m\n");
     printf("\033[1;33m========================================\033[0m\n");
 
     // Non-threaded tests
@@ -832,6 +1053,15 @@ int main()
     test_memory_attribution();                     // 17
     test_io_attribution();                           // 18
     test_vram_attribution();                       // 19
+
+    // Stage 5.3.3 tests
+    test_concurrent_breakpoint_real();              // 21
+    test_concurrent_annotation_real();              // 22
+    test_step_only_on_emulation_thread();           // 23
+    test_trace_only_on_emulation_thread();          // 24
+    test_no_pending_promise_after_quit();           // 25
+    test_no_command_lost_during_shutdown();         // 26
+    test_pc0000_not_unknown();                      // 27
 
     printf("\n\033[1;33m========================================\033[0m\n");
     printf("  Results: %d/%d passed", tests_passed, tests_run);

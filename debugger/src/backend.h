@@ -150,8 +150,8 @@ public:
 
     // -- IDebugBackend: symbols ---------------------------------------------
 
-    SymbolDatabase       &symbolDatabase() override;
-    const SymbolDatabase &symbolDatabase() const override;
+    SymbolDatabase       &symbolDatabase() override { return symbols_; }
+    const SymbolDatabase &symbolDatabase() const override { return symbols_; }
 
     // -- IDebugBackend: symbol commands (Stage 5.3.1) -----------------------
 
@@ -217,6 +217,9 @@ public:
         uint16_t regValue = 0;
         // Trace
         TraceExecutionParams traceParams;
+        std::shared_ptr<std::promise<TraceExecutionResult>> tracePromise;
+        // Cancellation (Stage 5.3.3)
+        std::atomic<bool> cancelled{false};
         // Result delivery
         std::promise<CommandResult> promise;
     };
@@ -254,6 +257,7 @@ private:
     int nextId_;
 
     bool pauseRequested_;
+    std::atomic<bool> pauseRequestedAtomic_{false};  // Stage 5.3.3: atomic fast-path
 
     StopReason stopReason_ = StopReason::None;
     bool       skipBreakpoint_ = false;
@@ -295,7 +299,7 @@ private:
 
     mutable std::mutex      commandMutex_;
     std::condition_variable commandCv_;
-    bool                    quitRequested_  = false;
+    std::atomic<bool>       quitRequested_{false};   // Stage 5.3.3: atomic
     mutable std::mutex      stateMutex_;
 
     std::atomic<bool>       running_{false};
@@ -334,9 +338,6 @@ private:
     std::atomic<bool> emulationLoopRunning_{false};
     CommandQueue commandQueue_;
     std::atomic<bool> traceBusy_{false};
-
-    // Pending trace result promise (set by requestExecuteTrace, fulfilled by executeCommand)
-    std::shared_ptr<std::promise<TraceExecutionResult>> pendingTracePromise_;
 
     void executeCommand(Command &cmd);
     TraceExecutionResult executeTraceInternal(const TraceExecutionParams &params);

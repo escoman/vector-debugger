@@ -299,6 +299,7 @@ public:
     LiveActivitySnapshot liveActivitySnapshot() const override { return {}; }
 
     // -- Symbols (read-only) ------------------------------------------------
+    // -- Symbols (read-only) ------------------------------------------------
     SymbolDatabase &symbolDatabase() override { return symbols_; }
     const SymbolDatabase &symbolDatabase() const override { return symbols_; }
 

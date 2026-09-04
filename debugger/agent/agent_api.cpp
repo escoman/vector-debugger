@@ -694,21 +694,25 @@ TraceResult AgentApi::traceFunction(uint16_t address)
             ev.instructionSequence >= traceExec.endSequence)
             continue;
 
+        // Stage 5.3.3: proper hasPc tracking — PC=0000 is not Unknown
+        bool hasPc = false;
         uint16_t pc = 0;
         auto it = seqToPc.find(ev.instructionSequence);
-        if (it != seqToPc.end()) pc = it->second;
+        if (it != seqToPc.end()) { pc = it->second; hasPc = true; }
 
         if (ev.type == MemoryAccessType::Write) {
             if (ev.virt >= 0xC000 && ev.virt < 0xC100) {
                 // VRAM write
                 TraceVramWrite vw;
                 vw.pc = pc;
+                vw.hasPc = hasPc;
                 vw.address = ev.virt;
                 vw.value = ev.value;
                 result.vramWrites.push_back(vw);
             } else {
                 TraceMemoryAccess ma;
                 ma.pc = pc;
+                ma.hasPc = hasPc;
                 ma.address = ev.virt;
                 ma.type = TraceMemoryAccess::Write;
                 ma.value = ev.value;
@@ -717,6 +721,7 @@ TraceResult AgentApi::traceFunction(uint16_t address)
         } else if (ev.type == MemoryAccessType::Read) {
             TraceMemoryAccess ma;
             ma.pc = pc;
+            ma.hasPc = hasPc;
             ma.address = ev.virt;
             ma.type = TraceMemoryAccess::Read;
             ma.value = ev.value;
@@ -730,12 +735,15 @@ TraceResult AgentApi::traceFunction(uint16_t address)
             ev.instructionSequence >= traceExec.endSequence)
             continue;
 
+        // Stage 5.3.3: proper hasPc tracking
+        bool hasPc = false;
         uint16_t pc = 0;
         auto it = seqToPc.find(ev.instructionSequence);
-        if (it != seqToPc.end()) pc = it->second;
+        if (it != seqToPc.end()) { pc = it->second; hasPc = true; }
 
         TraceIoAccess io;
         io.pc = pc;
+        io.hasPc = hasPc;
         io.port = ev.port;
         io.isOutput = (ev.type == IoAccessType::Out);
         io.value = ev.value;

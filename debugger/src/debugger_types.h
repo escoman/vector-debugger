@@ -140,7 +140,7 @@ struct CommandResult
     bool success = false;
     std::string error;
 
-    enum Status { Completed, Failed, Timeout };
+    enum Status { Completed, Failed, Timeout, Cancelled };
     Status status = Completed;
 };
 

@@ -161,7 +161,9 @@ public:
 
     virtual LiveActivitySnapshot liveActivitySnapshot() const = 0;
 
-    // -- Symbols (read-only access for analysis) ----------------------------
+    // -- Symbols ------------------------------------------------------------
+    // Stage 5.3.3: Agent mutations go through Command Queue (request*Symbol methods).
+    // GUI may still use mutable reference for direct operations (temporary).
 
     virtual SymbolDatabase       &symbolDatabase() = 0;
     virtual const SymbolDatabase &symbolDatabase() const = 0;

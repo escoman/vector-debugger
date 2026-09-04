@@ -29,6 +29,7 @@
 struct TraceMemoryAccess
 {
     uint16_t pc = 0;
+    bool hasPc = true;         // Stage 5.3.3: distinguishes PC=0000 from Unknown
     uint16_t address = 0;
     enum Type { Read, Write, Fetch };
     Type type = Read;
@@ -38,6 +39,7 @@ struct TraceMemoryAccess
 struct TraceIoAccess
 {
     uint16_t pc = 0;
+    bool hasPc = true;         // Stage 5.3.3: distinguishes PC=0000 from Unknown
     uint8_t port = 0;
     bool isOutput = false;
     uint8_t value = 0;
@@ -46,6 +48,7 @@ struct TraceIoAccess
 struct TraceVramWrite
 {
     uint16_t pc = 0;
+    bool hasPc = true;         // Stage 5.3.3: distinguishes PC=0000 from Unknown
     uint16_t address = 0;
     uint8_t value = 0;
 };
