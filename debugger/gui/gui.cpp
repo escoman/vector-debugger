@@ -122,6 +122,9 @@ void DebuggerGui::shutdown()
 {
     if (!window_) return;
 
+    // Save recent ROMs list before saving config
+    saveRecentRoms();
+
     // Save config (Recent ROMs, etc.) on exit
     configManager_.shutdown();
 
