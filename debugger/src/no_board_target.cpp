@@ -3,6 +3,7 @@
 #include "i8080.h"
 #include "i8080_hal.h"
 #include "debug_memory.h"
+#include "rom_load_address.h"
 
 #include <cstdio>
 #include <fstream>
@@ -167,11 +168,17 @@ bool NoBoardTarget::loadRom(const std::string &path, uint32_t org)
     std::vector<uint8_t> rom_data(size);
     file.read(reinterpret_cast<char*>(rom_data.data()), size);
 
+    // Auto-detect load address from file extension if org not explicitly given
+    if (org == 0 && path.find('.') != std::string::npos) {
+        org = getRomLoadAddress(path);
+    }
+
     printf("NoBoardTarget::loadRom(): loaded %s (%zu bytes) at %04x\n",
            path.c_str(), rom_data.size(), org);
 
     memory_.init_from_vector(rom_data, org);
-    i8080_jump(org);
+    // After BLK+СБР the CPU always starts at PC=0000, NOT at the ROM load
+    // address. i8080_init() resets PC to 0 and clears flags.
     i8080_setreg_sp(0xc300);
     i8080_init();
 

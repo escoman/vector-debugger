@@ -273,19 +273,9 @@ void DebuggerGui::render(IDebugBackend &backend)
                 workspaceManager_.setSetting("LastRomDirectory",
                     path.substr(0, lastSlash));
             }
+            // Let the adapter auto-detect load address from file extension.
+            // GUI must not know about ROM extensions or compute addresses.
             uint32_t org = 0;
-            // Auto-detect load address based on extension
-            size_t dot = path.rfind('.');
-            if (dot != std::string::npos) {
-                std::string ext = path.substr(dot);
-                // Convert to lowercase for comparison
-                std::string extLower;
-                for (char c : ext) {
-                    extLower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                }
-                if (extLower == ".rom") org = 0x0100;
-                else if (extLower == ".r0m") org = 0x0000;
-            }
             backend.requestPause();
             if (backend.loadRom(path, org)) {
                 memoryInspector_.requestRefresh();

@@ -143,6 +143,39 @@ target_link_libraries(test_board_smoke
 )
 
 # ---------------------------------------------------------------------------
+# ROM load address unit test (Stage: Pipeline — correct ROM loading)
+# ---------------------------------------------------------------------------
+
+add_executable(test_rom_load_address
+    ${DBG_TST_DIR}/test_rom_load_address.cpp
+)
+
+target_include_directories(test_rom_load_address PRIVATE
+    ${DBG_SRC_DIR}
+)
+
+# ---------------------------------------------------------------------------
+# ROM load + reset integration test (Stage: Pipeline — correct ROM loading)
+# ---------------------------------------------------------------------------
+
+add_executable(test_rom_loading
+    ${DBG_TST_DIR}/test_rom_loading.cpp
+    ${DBG_SOURCES}
+    ${CORE_SOURCES}
+    ${SRC_DIR}/options.cpp
+)
+
+target_include_directories(test_rom_loading PRIVATE
+    ${DBG_SRC_DIR}
+    ${SRC_DIR}
+)
+
+target_link_libraries(test_rom_loading
+    ${Boost_LIBRARIES}
+    pthread
+)
+
+# ---------------------------------------------------------------------------
 # Workspace Manager test executable (Stage 5.1)
 # ---------------------------------------------------------------------------
 

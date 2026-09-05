@@ -1,6 +1,7 @@
 #include "debug_adapter.h"
 #include "backend.h"       // for DebuggerBreakpoint
 #include "debug_memory.h"
+#include "rom_load_address.h"
 #include "i8080.h"
 #include "i8080_hal.h"
 #include "options.h"
@@ -292,7 +293,11 @@ void DebugAdapter::reset(bool loadRom)
     if (loadRom) {
         board.reset(Board::ResetMode::LOADROM);
     } else {
+        // BLK+СБР: detach boot ROM, reset CPU to hardware start state.
+        // PC=0 is set by i8080_init() inside Board::reset().
         board.reset(Board::ResetMode::BLKSBR);
+        // Set SP to a known value (matches LOADROM behavior).
+        i8080_setreg_sp(0xc300);
     }
 }
 
@@ -421,13 +426,22 @@ bool DebugAdapter::loadRom(const std::string &path, uint32_t org)
         return false;
     }
 
+    // Auto-detect load address from file extension if org not explicitly given
+    if (org == 0 && path.find('.') != std::string::npos) {
+        org = getRomLoadAddress(path);
+    }
+
     printf("DebugAdapter::loadRom(): loaded %s (%zu bytes) at %04x\n",
            path.c_str(), rom_data.size(), org);
 
     memory.init_from_vector(rom_data, org);
 
-    Options.pc = org;
+    // Reset CPU: boot ROM detached, PC=0, SP=0xc300 (BLK+СБР semantics).
+    // We must NOT set PC to the ROM load address — after BLK+СБР the CPU
+    // always starts at PC=0000 and the program is reached via vector table.
+    Options.pc = 0;
     board.reset(Board::ResetMode::LOADROM);
+    // LOADROM sets SP=0xc300 and i8080_init() sets PC=0.
 
     return true;
 }

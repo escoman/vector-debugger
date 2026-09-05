@@ -103,7 +103,10 @@ bool DebugBackend::loadRom(const std::string &path, uint32_t org)
     clearHistory();
     instructionSequence_ = 0;
 
-    // Set state to Paused
+    // Set state to Paused — regardless of previous running state.
+    // running_ must be cleared so the emulation thread stops executing
+    // frames and blocks on the command queue until the user presses RUN.
+    running_.store(false, std::memory_order_release);
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
         state_ = DebuggerState::Paused;

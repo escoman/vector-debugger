@@ -55,18 +55,10 @@ int main(int argc, char *argv[])
         std::string rom_path = argv[1];
         uint32_t org = 0;
 
+        // If user explicitly provides an origin address, use it.
+        // Otherwise pass 0 and let the adapter auto-detect from extension.
         if (argc > 2) {
             org = std::strtoul(argv[2], nullptr, 0);
-        } else {
-            size_t dot_pos = rom_path.rfind('.');
-            if (dot_pos != std::string::npos) {
-                std::string ext = rom_path.substr(dot_pos);
-                if (ext == ".rom") {
-                    org = 0x0100;
-                } else if (ext == ".r0m") {
-                    org = 0x0000;
-                }
-            }
         }
 
         if (!backend.loadRom(rom_path, org)) {
