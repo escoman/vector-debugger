@@ -177,8 +177,8 @@ bool NoBoardTarget::loadRom(const std::string &path, uint32_t org)
            path.c_str(), rom_data.size(), org);
 
     memory_.init_from_vector(rom_data, org);
-    // After BLK+СБР the CPU always starts at PC=0000, NOT at the ROM load
-    // address. i8080_init() resets PC to 0 and clears flags.
+    // LOADROM convention: set SP=0xc300 (standard Vector-06C stack pointer).
+    // i8080_init() resets PC to 0 and clears flags (F=0x02).
     i8080_setreg_sp(0xc300);
     i8080_init();
 

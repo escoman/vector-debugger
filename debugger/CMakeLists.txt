@@ -176,6 +176,27 @@ target_link_libraries(test_rom_loading
 )
 
 # ---------------------------------------------------------------------------
+# Reset CPU state regression test (Stage: Pipeline — BLK+СБР exact behavior)
+# ---------------------------------------------------------------------------
+
+add_executable(test_reset_cpu_state
+    ${DBG_TST_DIR}/test_reset_cpu_state.cpp
+    ${DBG_SOURCES}
+    ${CORE_SOURCES}
+    ${SRC_DIR}/options.cpp
+)
+
+target_include_directories(test_reset_cpu_state PRIVATE
+    ${DBG_SRC_DIR}
+    ${SRC_DIR}
+)
+
+target_link_libraries(test_reset_cpu_state
+    ${Boost_LIBRARIES}
+    pthread
+)
+
+# ---------------------------------------------------------------------------
 # Workspace Manager test executable (Stage 5.1)
 # ---------------------------------------------------------------------------
 

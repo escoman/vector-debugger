@@ -293,11 +293,12 @@ void DebugAdapter::reset(bool loadRom)
     if (loadRom) {
         board.reset(Board::ResetMode::LOADROM);
     } else {
-        // BLK+СБР: detach boot ROM, reset CPU to hardware start state.
-        // PC=0 is set by i8080_init() inside Board::reset().
+        // BLK+СБР: detach boot ROM, reset CPU.
+        // Matches original vector06sdl: board.reset(BLKSBR) which calls
+        // memory.detach_boot() + i8080_init().
+        // i8080_init() sets PC=0, clears flags (F=0x02), but does NOT
+        // modify A, B, C, D, E, H, L, SP, or IFF — they are preserved.
         board.reset(Board::ResetMode::BLKSBR);
-        // Set SP to a known value (matches LOADROM behavior).
-        i8080_setreg_sp(0xc300);
     }
 }
 
