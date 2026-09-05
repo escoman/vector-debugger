@@ -136,6 +136,15 @@ public:
         runStepCount_ = 0;
     }
     void requestQuit() override { state_ = DebuggerState::Stopped; }
+    void requestRestart() override {
+        cpu_.pc = 0x0100;
+        cpu_.sp = 0xF800;
+        cpu_.a = 0x42;
+        cpu_.flags = 0x00;
+        state_ = DebuggerState::Paused;
+        halted_ = false;
+        runStepCount_ = 0;
+    }
 
     void stepInstruction() override {
         simulateStep();
@@ -418,6 +427,9 @@ public:
     // -- Keyboard -----------------------------------------------------------
     void pressKey(int) override {}
     void releaseKey(int) override {}
+
+    // -- Ruslat -------------------------------------------------------------
+    bool isRuslatMode() const override { return false; }
 
     // -- Test data setters --------------------------------------------------
 

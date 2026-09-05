@@ -298,6 +298,7 @@ void DebugAdapter::reset(bool attachBoot)
     if (attachBoot) {
         // Reset (полный сброс): attach boot ROM, PC=0, execute bootloader.
         board.reset(Board::ResetMode::BLKVVOD);
+        board.interrupt(false);  // сброс INTE + IRQ
     } else {
         // Restart (горячий сброс): detach boot ROM, PC=0, execute from RAM.
         board.reset(Board::ResetMode::BLKSBR);
