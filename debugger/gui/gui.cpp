@@ -1042,15 +1042,20 @@ void DebuggerGui::renderStatusBar(IDebugBackend &backend)
 
 void DebuggerGui::loadRomFile(const std::string &path, IDebugBackend &backend)
 {
+    // Make a local copy: 'path' may be a reference into configManager_'s
+    // recentRoms_ vector (when called from the Recent ROMs menu), and
+    // addRecentRom() below can reallocate that vector, invalidating it.
+    std::string romPath = path;
+
     uint32_t org = 0;
     backend.requestPause();
-    if (backend.loadRom(path, org)) {
+    if (backend.loadRom(romPath, org)) {
         // Extract filename from path
-        size_t lastSlash = path.rfind('/');
+        size_t lastSlash = romPath.rfind('/');
         currentRomName_ = (lastSlash != std::string::npos)
-            ? path.substr(lastSlash + 1) : path;
+            ? romPath.substr(lastSlash + 1) : romPath;
         // Add to recent ROMs list (ConfigManager handles persistence)
-        configManager_.addRecentRom(path);
+        configManager_.addRecentRom(romPath);
         memoryInspector_.requestRefresh();
         disassemblyView_.requestRefresh();
         stackView_.requestRefresh();
@@ -1058,6 +1063,6 @@ void DebuggerGui::loadRomFile(const std::string &path, IDebugBackend &backend)
         histNeedsRefresh_ = true;
     } else {
         snprintf(romErrorBuffer_, sizeof(romErrorBuffer_),
-                 "Failed to load: %s", path.c_str());
+                 "Failed to load: %s", romPath.c_str());
     }
 }

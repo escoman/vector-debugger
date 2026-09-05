@@ -221,6 +221,30 @@ target_link_libraries(test_workspace
 )
 
 # ---------------------------------------------------------------------------
+# Config Manager test executable
+# ---------------------------------------------------------------------------
+
+add_executable(test_config_manager
+    ${DBG_TST_DIR}/test_config_manager.cpp
+    ${DBG_GUI_DIR}/config_manager.cpp
+    ${IMGUI_DIR}/imgui.cpp
+    ${IMGUI_DIR}/imgui_draw.cpp
+    ${IMGUI_DIR}/imgui_tables.cpp
+    ${IMGUI_DIR}/imgui_widgets.cpp
+    ${IMGUI_DIR}/imgui_demo.cpp
+)
+
+target_include_directories(test_config_manager PRIVATE
+    ${IMGUI_DIR}
+    ${IMGUI_DIR}/backends
+    ${DBG_GUI_DIR}
+)
+
+target_link_libraries(test_config_manager
+    ${Boost_LIBRARIES}
+)
+
+# ---------------------------------------------------------------------------
 # GUI Smoke Test (Stage 5.1)
 # ---------------------------------------------------------------------------
 # Standalone test that spawns v06c-debugger and checks it doesn't crash.

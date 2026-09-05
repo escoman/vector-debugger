@@ -73,11 +73,10 @@ void ConfigManager::addRecentRom(const std::string &path)
 {
     if (path.empty()) return;
 
-    // Remove duplicate if already in list
-    auto it = std::find(recentRoms_.begin(), recentRoms_.end(), path);
-    if (it != recentRoms_.end()) {
-        recentRoms_.erase(it);
-    }
+    // Remove ALL occurrences if already in list (not just the first one)
+    recentRoms_.erase(
+        std::remove(recentRoms_.begin(), recentRoms_.end(), path),
+        recentRoms_.end());
 
     // Insert at front
     recentRoms_.insert(recentRoms_.begin(), path);
@@ -134,7 +133,11 @@ bool ConfigManager::loadFromFile()
                 if (!entry.empty() && entry.size() < 4096 && entry[0] == '/') {
                     struct stat st;
                     if (stat(entry.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
-                        recentRoms_.push_back(entry);
+                        // Deduplicate: skip if already in list
+                        if (std::find(recentRoms_.begin(), recentRoms_.end(), entry)
+                                == recentRoms_.end()) {
+                            recentRoms_.push_back(entry);
+                        }
                     }
                 }
                 start = pos + 1;

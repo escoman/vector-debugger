@@ -9,6 +9,8 @@
 #include <cstring>
 #include <algorithm>
 #include <cctype>
+#include <unistd.h>
+#include <climits>
 
 // ---------------------------------------------------------------------------
 // Public interface
@@ -17,7 +19,20 @@
 void RomFileDialog::show(const std::string &startDir)
 {
     if (startDir.empty()) {
-        currentPath_ = ".";
+        char cwd[PATH_MAX];
+        if (getcwd(cwd, sizeof(cwd))) {
+            currentPath_ = cwd;
+        } else {
+            currentPath_ = "/";
+        }
+    } else if (startDir[0] != '/') {
+        // Resolve relative path to absolute
+        char resolved[PATH_MAX];
+        if (realpath(startDir.c_str(), resolved)) {
+            currentPath_ = resolved;
+        } else {
+            currentPath_ = startDir;
+        }
     } else {
         currentPath_ = startDir;
     }
