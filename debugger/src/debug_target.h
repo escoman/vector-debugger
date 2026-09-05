@@ -81,6 +81,7 @@ public:
     // -- ROM / init ---------------------------------------------------------
 
     virtual bool loadRom(const std::string &path, uint32_t org) = 0;
+    virtual bool loadWav(const std::string &path) = 0;
     virtual void initCpu(uint16_t pc, uint16_t sp) = 0;
 
     // -- Frame pacing -------------------------------------------------------

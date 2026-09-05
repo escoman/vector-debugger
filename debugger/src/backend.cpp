@@ -116,6 +116,32 @@ bool DebugBackend::loadRom(const std::string &path, uint32_t org)
     return true;
 }
 
+bool DebugBackend::loadWav(const std::string &path)
+{
+    if (!target_) return false;
+
+    // Pause emulation before loading (same as loadRom)
+    running_.store(false, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        state_ = DebuggerState::Paused;
+    }
+    pauseRequestedAtomic_.store(false, std::memory_order_release);
+
+    if (!target_->loadWav(path)) {
+        printf("DebugBackend::loadWav(): failed to load %s\n", path.c_str());
+        return false;
+    }
+
+    printf("DebugBackend::loadWav(): loaded %s\n", path.c_str());
+
+    // Clear debug history
+    clearHistory();
+    instructionSequence_ = 0;
+
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // Keyboard injection
 // ---------------------------------------------------------------------------

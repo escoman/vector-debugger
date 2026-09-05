@@ -424,6 +424,9 @@ public:
     // -- ROM ----------------------------------------------------------------
     bool loadRom(const std::string &, uint32_t) override { return true; }
 
+    // -- WAV (tape input) ---------------------------------------------------
+    bool loadWav(const std::string &) override { return true; }
+
     // -- Keyboard -----------------------------------------------------------
     void pressKey(int) override {}
     void releaseKey(int) override {}

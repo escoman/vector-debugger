@@ -219,6 +219,10 @@ public:
 
     virtual bool loadRom(const std::string &path, uint32_t org = 0) = 0;
 
+    // -- WAV (tape input) ---------------------------------------------------
+
+    virtual bool loadWav(const std::string &path) = 0;
+
     // -- Keyboard injection -------------------------------------------------
 
     virtual void pressKey(int scancode) = 0;

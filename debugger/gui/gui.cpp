@@ -21,6 +21,8 @@
 #include <cctype>
 #include <string>
 #include <algorithm>
+#include <chrono>
+#include <thread>
 
 // ---------------------------------------------------------------------------
 // Lifecycle
@@ -292,6 +294,22 @@ void DebuggerGui::render(IDebugBackend &backend)
         };
         romFileDialog_.show(lastDir);
     }
+
+    // --- Open WAV dialog (custom, non-blocking) ---
+    if (showOpenWavDialog_) {
+        showOpenWavDialog_ = false;
+        std::string lastDir = configManager_.get("LastRomDirectory");
+        romFileDialog_.onFileSelected = [this, &backend](const std::string &path) {
+            // Save the directory of the selected WAV
+            size_t lastSlash = path.rfind('/');
+            if (lastSlash != std::string::npos) {
+                configManager_.set("LastRomDirectory",
+                    path.substr(0, lastSlash));
+            }
+            loadWavFile(path, backend);
+        };
+        romFileDialog_.show(lastDir, "Open WAV File", {".wav"});
+    }
     
     // Render the ROM file dialog if open
     romFileDialog_.render();
@@ -302,6 +320,17 @@ void DebuggerGui::render(IDebugBackend &backend)
         ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", romErrorBuffer_);
         if (ImGui::Button("OK")) {
             romErrorBuffer_[0] = '\0';
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    if (wavErrorBuffer_[0]) {
+        ImGui::OpenPopup("WAV Error");
+    }
+    if (ImGui::BeginPopupModal("WAV Error", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", wavErrorBuffer_);
+        if (ImGui::Button("OK")) {
+            wavErrorBuffer_[0] = '\0';
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -658,6 +687,10 @@ void DebuggerGui::renderToolbar(IDebugBackend &backend)
             if (ImGui::MenuItem("Open ROM...")) {
                 showOpenRomDialog_ = true;
                 romErrorBuffer_[0] = '\0';
+            }
+            if (ImGui::MenuItem("Open WAV...")) {
+                showOpenWavDialog_ = true;
+                wavErrorBuffer_[0] = '\0';
             }
             // Recent ROMs submenu
             const auto &recentRoms = configManager_.getRecentRoms();
@@ -1064,5 +1097,26 @@ void DebuggerGui::loadRomFile(const std::string &path, IDebugBackend &backend)
     } else {
         snprintf(romErrorBuffer_, sizeof(romErrorBuffer_),
                  "Failed to load: %s", romPath.c_str());
+    }
+}
+
+void DebuggerGui::loadWavFile(const std::string &path, IDebugBackend &backend)
+{
+    if (backend.loadWav(path)) {
+        // Extract filename from path
+        size_t lastSlash = path.rfind('/');
+        currentRomName_ = (lastSlash != std::string::npos)
+            ? path.substr(lastSlash + 1) : path;
+
+        // Reset with boot ROM and start emulation
+        // Press F1 to switch bootloader to tape mode
+        backend.requestReset();
+        backend.requestRun();
+        backend.pressKey(SDL_SCANCODE_F1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        backend.releaseKey(SDL_SCANCODE_F1);
+    } else {
+        snprintf(wavErrorBuffer_, sizeof(wavErrorBuffer_),
+                 "Failed to load: %s", path.c_str());
     }
 }

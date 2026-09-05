@@ -45,6 +45,7 @@ public:
     void releaseKey(int) override {}
 
     bool loadRom(const std::string &path, uint32_t org) override;
+    bool loadWav(const std::string &path) override { return false; }
     void initCpu(uint16_t pc, uint16_t sp) override;
 
     bool framePacingEnabled() const override { return false; }

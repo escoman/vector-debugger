@@ -60,6 +60,10 @@ public:
 
     bool loadRom(const std::string &path, uint32_t org = 0) override;
 
+    // -- IDebugBackend: WAV (tape input) ------------------------------------
+
+    bool loadWav(const std::string &path) override;
+
     // -- IDebugBackend: keyboard injection ----------------------------------
 
     void pressKey(int scancode) override;

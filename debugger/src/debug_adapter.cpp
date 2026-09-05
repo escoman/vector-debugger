@@ -450,6 +450,25 @@ bool DebugAdapter::loadRom(const std::string &path, uint32_t org)
     return true;
 }
 
+bool DebugAdapter::loadWav(const std::string &path)
+{
+    std::vector<uint8_t> data = util::load_binfile(path);
+    if (data.empty()) {
+        printf("DebugAdapter::loadWav(): failed to load %s\n", path.c_str());
+        return false;
+    }
+
+    if (!wav.set_bytes(data)) {
+        printf("DebugAdapter::loadWav(): invalid WAV format: %s\n", path.c_str());
+        return false;
+    }
+
+    printf("DebugAdapter::loadWav(): loaded %s (%zu bytes)\n",
+           path.c_str(), data.size());
+
+    return true;
+}
+
 void DebugAdapter::initCpu(uint16_t pc, uint16_t sp)
 {
     i8080_jump(pc);

@@ -144,8 +144,13 @@ private:
     char romErrorBuffer_[256] = "";
     std::string currentRomName_ = "BOOT";  // filename only, shown in toolbar
 
+    // Open WAV dialog state
+    bool showOpenWavDialog_ = false;
+    char wavErrorBuffer_[256] = "";
+
     // Recent ROMs — managed by ConfigManager
     void loadRomFile(const std::string &path, IDebugBackend &backend);
+    void loadWavFile(const std::string &path, IDebugBackend &backend);
 
     // CPU register editing state (Stage 3.6)
     bool editingRegister_ = false;

@@ -181,6 +181,7 @@ public:
     void pressKey(int) override {}
     void releaseKey(int) override {}
     bool loadRom(const std::string&, uint32_t) override { return false; }
+    bool loadWav(const std::string&) override { return false; }
     void initCpu(uint16_t pc, uint16_t sp) override {
         i8080_jump(pc); i8080_setreg_sp(sp); i8080_init();
     }

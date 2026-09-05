@@ -16,8 +16,12 @@
 // Public interface
 // ---------------------------------------------------------------------------
 
-void RomFileDialog::show(const std::string &startDir)
+void RomFileDialog::show(const std::string &startDir,
+                         const std::string &title,
+                         const std::vector<std::string> &extensions)
 {
+    title_ = title;
+    extensions_ = extensions;
     if (startDir.empty()) {
         char cwd[PATH_MAX];
         if (getcwd(cwd, sizeof(cwd))) {
@@ -48,12 +52,12 @@ bool RomFileDialog::render()
     if (!open_) return false;
 
     // Center the dialog
-    ImGui::OpenPopup("Open ROM File");
+    ImGui::OpenPopup(title_.c_str());
     ImGui::SetNextWindowSize(ImVec2(500, 400), ImGuiCond_FirstUseEver);
 
     bool fileSelected = false;
 
-    if (ImGui::BeginPopupModal("Open ROM File", &open_, ImGuiWindowFlags_NoScrollbar)) {
+    if (ImGui::BeginPopupModal(title_.c_str(), &open_, ImGuiWindowFlags_NoScrollbar)) {
         // Refresh entries if needed
         if (needsRefresh_) {
             refreshEntries();
@@ -175,7 +179,7 @@ bool RomFileDialog::render()
 // Private helpers
 // ---------------------------------------------------------------------------
 
-bool RomFileDialog::hasRomExtension(const std::string &name)
+bool RomFileDialog::matchesExtensions(const std::string &name) const
 {
     // Find last dot
     size_t dotPos = name.rfind('.');
@@ -190,7 +194,15 @@ bool RomFileDialog::hasRomExtension(const std::string &name)
         extLower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     }
 
-    return (extLower == ".rom" || extLower == ".r0m");
+    for (const auto &e : extensions_) {
+        std::string eLower;
+        eLower.reserve(e.size());
+        for (char c : e) {
+            eLower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
+        if (extLower == eLower) return true;
+    }
+    return false;
 }
 
 void RomFileDialog::refreshEntries()
@@ -232,7 +244,7 @@ void RomFileDialog::refreshEntries()
 
         if (fe.isDir) {
             dirs.push_back(fe);
-        } else if (hasRomExtension(name)) {
+        } else if (matchesExtensions(name)) {
             files.push_back(fe);
         }
     }

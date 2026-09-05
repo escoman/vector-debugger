@@ -68,6 +68,7 @@ public:
     bool isRuslatMode() const override { return ruslatState_; }
 
     bool loadRom(const std::string &path, uint32_t org) override;
+    bool loadWav(const std::string &path) override;
     void initCpu(uint16_t pc, uint16_t sp) override;
 
     // -- HAL binding --------------------------------------------------------

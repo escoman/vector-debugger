@@ -8,9 +8,9 @@
 class IDebugBackend;
 
 // ---------------------------------------------------------------------------
-// ROM File Dialog
+// File Dialog
 //
-// Custom file browser for selecting ROM files (.ROM, .R0M).
+// Custom file browser for selecting files with configurable extensions.
 // Replaces the blocking zenity-based native dialog with a non-blocking
 // ImGui-based file browser.
 // ---------------------------------------------------------------------------
@@ -21,7 +21,10 @@ public:
     RomFileDialog() {}
 
     // Show the dialog (call once to open)
-    void show(const std::string &startDir = "");
+    // extensions: list of accepted extensions, e.g. {".rom", ".r0m"} or {".wav"}
+    void show(const std::string &startDir = "",
+              const std::string &title = "Open ROM File",
+              const std::vector<std::string> &extensions = {".rom", ".r0m"});
 
     // Render the dialog (call every frame). Returns true if a file was selected.
     // The callback is invoked with the selected file path.
@@ -54,12 +57,15 @@ private:
     // Refresh the file list for current directory
     void refreshEntries();
 
-    // Check if filename has ROM extension (.rom or .r0m, case-insensitive)
-    static bool hasRomExtension(const std::string &name);
+    // Check if filename matches the configured extensions
+    bool matchesExtensions(const std::string &name) const;
 
     // Navigate to a directory
     void navigateTo(const std::string &path);
 
     // Go up one directory level
     void goUp();
+
+    std::string title_;
+    std::vector<std::string> extensions_;
 };
