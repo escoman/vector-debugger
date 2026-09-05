@@ -68,6 +68,7 @@ private:
     std::set<int> stickyKeys_;         // toggled modifiers (SS/US)
     int selectedScancode_ = 0;         // last clicked (for visual feedback)
     float selectionTimer_ = 0.0f;
+    float ruslatHoldTimer_ = 0.0f;     // hold F6 for several frames so ROM detects it
 
     // Physical keyboard passthrough state
     std::set<int> activeKeys_;         // scancodes currently held on host keyboard

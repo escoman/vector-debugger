@@ -297,10 +297,13 @@ void KeyboardWindow::render(IDebugBackend &backend)
                 backend.pressKey(hoveredScancode);
             }
         } else if (isRuslat) {
-            // РУС/LAT: toggle — send momentary F6 pulse to the emulator.
-            // The ROM detects the edge and toggles its internal mode + LED.
-            backend.pressKey(SC_F6);
-            backend.releaseKey(SC_F6);
+            // РУС/LAT: hold F6 for several frames so the ROM can detect it.
+            // The ROM scans keyboard periodically; a single-frame pulse
+            // may be missed between scans.
+            if (ruslatHoldTimer_ <= 0.0f) {
+                backend.pressKey(SC_F6);
+                ruslatHoldTimer_ = 0.15f; // ~8 frames at 50 Hz
+            }
         } else {
             // Release previous momentary key
             if (pressedScancode_ != 0) {
@@ -317,6 +320,15 @@ void KeyboardWindow::render(IDebugBackend &backend)
     if (selectionTimer_ > 0.0f) {
         selectionTimer_ -= ImGui::GetIO().DeltaTime;
         if (selectionTimer_ < 0.0f) selectionTimer_ = 0.0f;
+    }
+
+    // Release РУС/LAT (F6) after hold timer expires
+    if (ruslatHoldTimer_ > 0.0f) {
+        ruslatHoldTimer_ -= ImGui::GetIO().DeltaTime;
+        if (ruslatHoldTimer_ <= 0.0f) {
+            ruslatHoldTimer_ = 0.0f;
+            backend.releaseKey(SC_F6);
+        }
     }
 
     // --- Draw keys ---
@@ -430,11 +442,11 @@ void KeyboardWindow::render(IDebugBackend &backend)
 
     // РУС/LAT LED indicator
     {
-        float ledX = cursorScreenPos.x + pad + 0.5f * kKeyW;
+        float ledX = cursorScreenPos.x + pad + 0.25f * kKeyW;
         float ledY = cursorScreenPos.y + pad + 4.0f * kKeyH + kKeyH * 0.7f;
         float ledR = 4.0f;
         bool ruslatOn = backend.isRuslatMode();
-        ImU32 ledColor = ruslatOn
+        ImU32 ledColor = !ruslatOn
             ? IM_COL32(0xFF, 0x20, 0x20, 255)   // bright red — ON
             : IM_COL32(0x40, 0x10, 0x10, 255);   // dim — OFF
         drawList->AddCircleFilled(ImVec2(ledX, ledY), ledR, ledColor);
