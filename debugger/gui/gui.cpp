@@ -361,6 +361,7 @@ void DebuggerGui::render(IDebugBackend &backend)
     searchWindow_.render(backend);
     keyboardWindow_.render(backend);
     soundWindow_.render(backend);
+    planeScreen_.render(backend);
 
     // Register visibility refs on first frame (triggers workspace loading)
     static bool visRegsRegistered = false;
@@ -382,6 +383,7 @@ void DebuggerGui::render(IDebugBackend &backend)
             {"Search", &searchWindow_.getVisibleRef()},
             {"Keyboard", &keyboardWindow_.getVisibleRef()},
             {"Sound", &soundWindow_.getVisibleRef()},
+            {"VRAM Planes", &planeScreen_.getVisibleRef()},
         });
         visRegsRegistered = true;
     }
@@ -682,6 +684,7 @@ void DebuggerGui::renderToolbar(IDebugBackend &backend)
             ImGui::MenuItem("Search", nullptr, &searchWindow_.getVisibleRef());
             ImGui::MenuItem("Keyboard", nullptr, &keyboardWindow_.getVisibleRef());
             ImGui::MenuItem("Sound", nullptr, &soundWindow_.getVisibleRef());
+            ImGui::MenuItem("VRAM Planes", nullptr, &planeScreen_.getVisibleRef());
             ImGui::Separator();
             if (ImGui::MenuItem("Cascade")) {
                 layoutCascade();
@@ -819,6 +822,7 @@ void DebuggerGui::layoutCascade()
         {"Search", &searchWindow_.getVisibleRef()},
         {"Keyboard", &keyboardWindow_.getVisibleRef()},
         {"Sound", &soundWindow_.getVisibleRef()},
+        {"VRAM Planes", &planeScreen_.getVisibleRef()},
     };
 
     ImGuiViewport *vp = ImGui::GetMainViewport();
@@ -856,6 +860,7 @@ void DebuggerGui::applyCascade()
         {"Search", &searchWindow_.getVisibleRef()},
         {"Keyboard", &keyboardWindow_.getVisibleRef()},
         {"Sound", &soundWindow_.getVisibleRef()},
+        {"VRAM Planes", &planeScreen_.getVisibleRef()},
     };
 
     for (auto &w : wins) {
@@ -897,6 +902,8 @@ void DebuggerGui::layoutTile()
         {"Call Graph", &callGraphWindow_.getVisibleRef()},
         {"Search", &searchWindow_.getVisibleRef()},
         {"Keyboard", &keyboardWindow_.getVisibleRef()},
+        {"Sound", &soundWindow_.getVisibleRef()},
+        {"VRAM Planes", &planeScreen_.getVisibleRef()},
     };
     for (auto &w : all) {
         if (w.visible && *w.visible) visible.push_back(w);

@@ -16,6 +16,7 @@
 #include "keyboard_window.h"
 #include "rom_file_dialog.h"
 #include "sound_window.h"
+#include "plane_screen_window.h"
 #include "workspace_manager.h"
 #include "idebug_backend.h"
 #include "events.h"
@@ -127,6 +128,9 @@ private:
     
     // Sound window
     SoundWindow soundWindow_;
+    
+    // VRAM Plane Screen window
+    PlaneScreenWindow planeScreen_;
     
     // Instruction History cache (Stage 3.12 — avoid per-frame snapshot)
     std::vector<InstructionEvent> cachedHistEntries_;
