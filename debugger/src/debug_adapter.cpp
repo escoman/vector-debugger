@@ -157,6 +157,11 @@ void DebugAdapter::init()
                 Board::ResetMode::BLKVVOD : Board::ResetMode::BLKSBR);
     };
 
+    // Track РУС/LAT LED state — the ROM toggles this via port C bit 3
+    io.onruslat = [this](bool rus) {
+        ruslatState_ = rus;
+    };
+
     board.reset(Board::ResetMode::BLKVVOD);
 
     initialized_ = true;

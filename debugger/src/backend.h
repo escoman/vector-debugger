@@ -64,6 +64,7 @@ public:
 
     void pressKey(int scancode) override;
     void releaseKey(int scancode) override;
+    bool isRuslatMode() const override;
 
     // -- IDebugBackend: memory access ---------------------------------------
 

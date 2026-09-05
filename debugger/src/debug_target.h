@@ -76,6 +76,7 @@ public:
 
     virtual void pressKey(int scancode) {}
     virtual void releaseKey(int scancode) {}
+    virtual bool isRuslatMode() const { return false; }
 
     // -- ROM / init ---------------------------------------------------------
 

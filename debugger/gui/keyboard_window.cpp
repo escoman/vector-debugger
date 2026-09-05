@@ -57,100 +57,112 @@ const std::vector<KeyboardWindow::KeyDef> &KeyboardWindow::getKeyLayout()
 {
     static const std::vector<KeyDef> layout = {
         // Row 0: ; 1 2 3 4 5 6 7 8 9 0 - /
-        {0.0f, 0, 1, 1, SC_SEMICOLON, ";",  KC_ALPHA},
-        {1.0f, 0, 1, 1, SC_1,           "1",  KC_ALPHA},
-        {2.0f, 0, 1, 1, SC_2,           "2",  KC_ALPHA},
-        {3.0f, 0, 1, 1, SC_3,           "3",  KC_ALPHA},
-        {4.0f, 0, 1, 1, SC_4,           "4",  KC_ALPHA},
-        {5.0f, 0, 1, 1, SC_5,           "5",  KC_ALPHA},
-        {6.0f, 0, 1, 1, SC_6,           "6",  KC_ALPHA},
-        {7.0f, 0, 1, 1, SC_7,           "7",  KC_ALPHA},
-        {8.0f, 0, 1, 1, SC_8,           "8",  KC_ALPHA},
-        {9.0f, 0, 1, 1, SC_9,           "9",  KC_ALPHA},
-        {10.0f,0, 1, 1, SC_0,           "0",  KC_ALPHA},
-        {11.0f,0, 1, 1, SC_EQUALS,      "=",  KC_ALPHA},
-        {12.0f,0, 1, 1, SC_SLASH,       "/",  KC_ALPHA},
+        //   RU: ; 1 2 3 4 5 6 7 8 9 0 - /
+        //   EN: + ! @ # $ % ^ & * ( ) _ ?
+        {0.0f, 0, 1, 1, SC_SEMICOLON, "+",  ";",  KC_ALPHA},
+        {1.0f, 0, 1, 1, SC_1,           "!",  "1",  KC_ALPHA},
+        {2.0f, 0, 1, 1, SC_2,           "@",  "2",  KC_ALPHA},
+        {3.0f, 0, 1, 1, SC_3,           "#",  "3",  KC_ALPHA},
+        {4.0f, 0, 1, 1, SC_4,           "$",  "4",  KC_ALPHA},
+        {5.0f, 0, 1, 1, SC_5,           "%",  "5",  KC_ALPHA},
+        {6.0f, 0, 1, 1, SC_6,           "^",  "6",  KC_ALPHA},
+        {7.0f, 0, 1, 1, SC_7,           "&",  "7",  KC_ALPHA},
+        {8.0f, 0, 1, 1, SC_8,           "*",  "8",  KC_ALPHA},
+        {9.0f, 0, 1, 1, SC_9,           "(",  "9",  KC_ALPHA},
+        {10.0f,0, 1, 1, SC_0,           ")",  "0",  KC_ALPHA},
+        {11.0f,0, 1, 1, SC_EQUALS,      "_",  "-",  KC_ALPHA},
+        {12.0f,0, 1, 1, SC_SLASH,       "?",  "/",  KC_ALPHA},
 
         // Row 1 (indented 0.5u): J C U K E N G [ ] Z H '
-        {0.5f, 1, 1, 1, SC_J,           "J",  KC_ALPHA},
-        {1.5f, 1, 1, 1, SC_C,           "C",  KC_ALPHA},
-        {2.5f, 1, 1, 1, SC_U,           "U",  KC_ALPHA},
-        {3.5f, 1, 1, 1, SC_K,           "K",  KC_ALPHA},
-        {4.5f, 1, 1, 1, SC_E,           "E",  KC_ALPHA},
-        {5.5f, 1, 1, 1, SC_N,           "N",  KC_ALPHA},
-        {6.5f, 1, 1, 1, SC_G,           "G",  KC_ALPHA},
-        {7.5f, 1, 1, 1, SC_LBRACKET,    "[",  KC_ALPHA},
-        {8.5f, 1, 1, 1, SC_RBRACKET,    "]",  KC_ALPHA},
-        {9.5f, 1, 1, 1, SC_Z,           "Z",  KC_ALPHA},
-        {10.5f,1, 1, 1, SC_H,           "H",  KC_ALPHA},
-        {11.5f,1, 1, 1, SC_APOSTROPHE,  "'",  KC_ALPHA},
+        //   RU: Й Ц У К Е Н Г Ш Щ З Х :
+        {0.5f, 1, 1, 1, SC_J,           "J",  "\xd0\xb9", KC_ALPHA},  // й
+        {1.5f, 1, 1, 1, SC_C,           "C",  "\xd1\x86", KC_ALPHA},  // ц
+        {2.5f, 1, 1, 1, SC_U,           "U",  "\xd1\x83", KC_ALPHA},  // у
+        {3.5f, 1, 1, 1, SC_K,           "K",  "\xd0\xba", KC_ALPHA},  // к
+        {4.5f, 1, 1, 1, SC_E,           "E",  "\xd0\xb5", KC_ALPHA},  // е
+        {5.5f, 1, 1, 1, SC_N,           "N",  "\xd0\xbd", KC_ALPHA},  // н
+        {6.5f, 1, 1, 1, SC_G,           "G",  "\xd0\xb3", KC_ALPHA},  // г
+        {7.5f, 1, 1, 1, SC_LBRACKET,    "[",  "\xd1\x88", KC_ALPHA},  // ш
+        {8.5f, 1, 1, 1, SC_RBRACKET,    "]",  "\xd1\x89", KC_ALPHA},  // щ
+        {9.5f, 1, 1, 1, SC_Z,           "Z",  "\xd0\xb7", KC_ALPHA},  // з
+        {10.5f,1, 1, 1, SC_H,           "H",  "\xd1\x85", KC_ALPHA},  // х
+        {11.5f,1, 1, 1, SC_APOSTROPHE,  "'",  ":",      KC_ALPHA},
 
         // Row 2: US F Y W A P R O L D V \ .
-        {0.0f, 2, 1, 1, SC_LCTRL,       "US", KC_GREEN},
-        {1.0f, 2, 1, 1, SC_F,           "F",  KC_ALPHA},
-        {2.0f, 2, 1, 1, SC_Y,           "Y",  KC_ALPHA},
-        {3.0f, 2, 1, 1, SC_W,           "W",  KC_ALPHA},
-        {4.0f, 2, 1, 1, SC_A,           "A",  KC_ALPHA},
-        {5.0f, 2, 1, 1, SC_P,           "P",  KC_ALPHA},
-        {6.0f, 2, 1, 1, SC_R,           "R",  KC_ALPHA},
-        {7.0f, 2, 1, 1, SC_O,           "O",  KC_ALPHA},
-        {8.0f, 2, 1, 1, SC_L,           "L",  KC_ALPHA},
-        {9.0f, 2, 1, 1, SC_D,           "D",  KC_ALPHA},
-        {10.0f,2, 1, 1, SC_V,           "V",  KC_ALPHA},
-        {11.0f,2, 1, 1, SC_BACKSLASH,   "\\", KC_BROWN},
-        {12.0f,2, 1, 1, SC_PERIOD,      ".",  KC_ALPHA},
+        //   RU: УС Ф Ы В А П Р О Л Д Ж Э .
+        {0.0f, 2, 1, 1, SC_LCTRL,       "", "\xd0\xa3\xd0\xa1", KC_GREEN},  // УС
+        {1.0f, 2, 1, 1, SC_F,           "F",  "\xd1\x84", KC_ALPHA},  // ф
+        {2.0f, 2, 1, 1, SC_Y,           "Y",  "\xd1\x8b", KC_ALPHA},  // ы
+        {3.0f, 2, 1, 1, SC_W,           "W",  "\xd0\xb2", KC_ALPHA},  // в
+        {4.0f, 2, 1, 1, SC_A,           "A",  "\xd0\xb0", KC_ALPHA},  // а
+        {5.0f, 2, 1, 1, SC_P,           "P",  "\xd0\xbf", KC_ALPHA},  // п
+        {6.0f, 2, 1, 1, SC_R,           "R",  "\xd1\x80", KC_ALPHA},  // р
+        {7.0f, 2, 1, 1, SC_O,           "O",  "\xd0\xbe", KC_ALPHA},  // о
+        {8.0f, 2, 1, 1, SC_L,           "L",  "\xd0\xbb", KC_ALPHA},  // л
+        {9.0f, 2, 1, 1, SC_D,           "D",  "\xd0\xb4", KC_ALPHA},  // д
+        {10.0f,2, 1, 1, SC_V,           "V",  "\xd0\xb6", KC_ALPHA},  // ж
+        {11.0f,2, 1, 1, SC_BACKSLASH,   "\\", "\xd1\x8d", KC_BROWN},  // э
+        {12.0f,2, 1, 1, SC_PERIOD,      ".",  ">",      KC_ALPHA},
 
         // Row 3: SS Q ^ S M I T X B - , VK
-        {0.0f, 3, 1, 1, SC_LSHIFT,      "SS", KC_BROWN},
-        {1.0f, 3, 1, 1, SC_Q,           "Q",  KC_ALPHA},
-        {2.0f, 3, 1, 1, SC_GRAVE,       "^",  KC_ALPHA},
-        {3.0f, 3, 1, 1, SC_S,           "S",  KC_ALPHA},
-        {4.0f, 3, 1, 1, SC_M,           "M",  KC_ALPHA},
-        {5.0f, 3, 1, 1, SC_I,           "I",  KC_ALPHA},
-        {6.0f, 3, 1, 1, SC_T,           "T",  KC_ALPHA},
-        {7.0f, 3, 1, 1, SC_X,           "X",  KC_ALPHA},
-        {8.0f, 3, 1, 1, SC_B,           "B",  KC_ALPHA},
-        {9.0f, 3, 1, 1, SC_MINUS,       "-",  KC_ALPHA},
-        {10.0f,3, 1, 1, SC_COMMA,       ",",  KC_ALPHA},
-        {11.0f,3, 1, 1, SC_RETURN,      "VK", KC_GREEN},
+        //   RU: СС Й ^ С М И Т Ь Б - , ВК
+        {0.0f, 3, 1, 1, SC_LSHIFT,      "", "\xd0\xa1\xd0\xa1", KC_BROWN},  // СС
+        {1.0f, 3, 1, 1, SC_Q,           "Q",  "\xd0\xb9", KC_ALPHA},  // й
+        {2.0f, 3, 1, 1, SC_GRAVE,       "^",  "^",      KC_ALPHA},
+        {3.0f, 3, 1, 1, SC_S,           "S",  "\xd1\x81", KC_ALPHA},  // с
+        {4.0f, 3, 1, 1, SC_M,           "M",  "\xd0\xbc", KC_ALPHA},  // м
+        {5.0f, 3, 1, 1, SC_I,           "I",  "\xd0\xb8", KC_ALPHA},  // и
+        {6.0f, 3, 1, 1, SC_T,           "T",  "\xd1\x82", KC_ALPHA},  // т
+        {7.0f, 3, 1, 1, SC_X,           "X",  "\xd1\x8c", KC_ALPHA},  // ь
+        {8.0f, 3, 1, 1, SC_B,           "B",  "\xd0\xb1", KC_ALPHA},  // б
+        {9.0f, 3, 1, 1, SC_MINUS,       "-",  "@",      KC_ALPHA},
+        {10.0f,3, 1, 1, SC_COMMA,       ",",  "<",      KC_ALPHA},
+        {11.0f,3, 1, 1, SC_RETURN,      "", "\xd0\x92\xd0\x9a", KC_GREEN},  // ВК
 
         // Row 4: RUS TAB PS ZB
-        {0.0f, 4, 1.5f, 1, SC_F6,       "RUS",KC_FN},
-        {1.5f, 4, 1.5f, 1, SC_TAB,      "TAB",KC_FN},
-        {3.0f, 4, 5.0f, 1, SC_SPACE,    "",   KC_GREEN},
-        {8.0f, 4, 1.5f, 1, SC_LALT,     "PS", KC_GREEN},
-        {9.5f, 4, 1.5f, 1, SC_BACKSPACE,"BS", KC_ALPHA},
+        //   RU: РУС ТАБ ПС ЗБ
+        {0.0f, 4, 1.5f, 1, SC_F6,       "RUS","\xd0\xa0\xd0\xa3\xd0\xa1",KC_FN},  // РУС
+        {1.5f, 4, 1.5f, 1, SC_TAB,      "","\xd0\xa2\xd0\x90\xd0\x91",KC_FN},  // ТАБ
+        {3.0f, 4, 5.0f, 1, SC_SPACE,    "",   nullptr, KC_GREEN},
+        {8.0f, 4, 1.5f, 1, SC_LALT,     "", "\xd0\x9f\xd0\xa1", KC_GREEN},  // ПС
+        {9.5f, 4, 1.5f, 1, SC_BACKSPACE,"", "\xd0\x97\xd0\x91", KC_ALPHA},  // ЗБ
 
         // --- Numpad (3 columns, offset 14.5u) ---
-        // Matches PSP vkbd: VVOD=END(CTP), BLK=F7, SBR=HOME(^\)
+        // Single centered label (label_ru = nullptr)
 
         // Row 0: VVOD BLK SBR
-        {14.5f, 0, 1, 1, SC_END,        "VVOD",KC_BROWN},
-        {15.5f, 0, 1, 1, SC_F7,         "BLK", KC_BROWN},
-        {16.5f, 0, 1, 1, SC_HOME,       "SBR", KC_BROWN},
+        {14.5f, 0, 1, 1, SC_END,        "\xd0\x92\xd0\x92\xd0\x9e\xd0\x94", nullptr, KC_BROWN},  // ВВОД
+        {15.5f, 0, 1, 1, SC_F7,         "\xd0\x91\xd0\x9b\xd0\x9a", nullptr, KC_BROWN},  // БЛК
+        {16.5f, 0, 1, 1, SC_HOME,       "\xd0\xa1\xd0\x91\xd0\xa0", nullptr, KC_BROWN},  // СБР
 
         // Row 1: F1 F2 F3
-        {14.5f, 1, 1, 1, SC_F1,        "F1",  KC_FN},
-        {15.5f, 1, 1, 1, SC_F2,        "F2",  KC_FN},
-        {16.5f, 1, 1, 1, SC_F3,        "F3",  KC_FN},
+        {14.5f, 1, 1, 1, SC_F1,        "F1",  nullptr, KC_FN},
+        {15.5f, 1, 1, 1, SC_F2,        "F2",  nullptr, KC_FN},
+        {16.5f, 1, 1, 1, SC_F3,        "F3",  nullptr, KC_FN},
 
         // Row 2: F4 F5 AR2
-        {14.5f, 2, 1, 1, SC_F4,        "F4",  KC_FN},
-        {15.5f, 2, 1, 1, SC_F5,        "F5",  KC_FN},
-        {16.5f, 2, 1, 1, SC_ESCAPE,    "AR2", KC_BROWN},
+        {14.5f, 2, 1, 1, SC_F4,        "F4",  nullptr, KC_FN},
+        {15.5f, 2, 1, 1, SC_F5,        "F5",  nullptr, KC_FN},
+        {16.5f, 2, 1, 1, SC_ESCAPE,    "\xd0\x90\xd0\xa0\x32", nullptr, KC_BROWN},  // АР2
 
-        // Row 3: Home Up End
-        {14.5f, 3, 1, 1, SC_HOME,      "HM",  KC_ALPHA},
-        {15.5f, 3, 1, 1, SC_UP,        "UP",  KC_ALPHA},
-        {16.5f, 3, 1, 1, SC_END,       "END", KC_ALPHA},
+        // Row 3: ↖ ↑ СТР
+        {14.5f, 3, 1, 1, SC_HOME,      "\xe2\x86\x96", nullptr, KC_ALPHA},  // ↖
+        {15.5f, 3, 1, 1, SC_UP,        "\xe2\x96\xb2", nullptr, KC_ALPHA},  // ▲
+        {16.5f, 3, 1, 1, SC_END,       "\xd0\xa1\xd0\xa2\xd0\xa0", nullptr, KC_ALPHA},  // СТР
 
-        // Row 4: Left Down Right
-        {14.5f, 4, 1, 1, SC_LEFT,      "LT",  KC_ALPHA},
-        {15.5f, 4, 1, 1, SC_DOWN,      "DN",  KC_ALPHA},
-        {16.5f, 4, 1, 1, SC_RIGHT,     "RT",  KC_ALPHA},
+        // Row 4: ← ↓ →
+        {14.5f, 4, 1, 1, SC_LEFT,      "\xe2\x97\x80", nullptr, KC_ALPHA},  // ◀
+        {15.5f, 4, 1, 1, SC_DOWN,      "\xe2\x96\xbc", nullptr, KC_ALPHA},  // ▼
+        {16.5f, 4, 1, 1, SC_RIGHT,     "\xe2\x96\xb6", nullptr, KC_ALPHA},  // ▶
     };
     return layout;
 }
+
+// ---------------------------------------------------------------------------
+// Static members
+// ---------------------------------------------------------------------------
+
+ImFont *KeyboardWindow::sSmallFont = nullptr;
 
 // ---------------------------------------------------------------------------
 // Construction
@@ -274,6 +286,7 @@ void KeyboardWindow::render(IDebugBackend &backend)
     if (mouseClicked && hoveredScancode != 0) {
         bool isSticky = (hoveredScancode == SC_LSHIFT ||
                          hoveredScancode == SC_LCTRL);
+        bool isRuslat = (hoveredScancode == SC_F6);
         if (isSticky) {
             auto it = stickyKeys_.find(hoveredScancode);
             if (it != stickyKeys_.end()) {
@@ -283,6 +296,11 @@ void KeyboardWindow::render(IDebugBackend &backend)
                 stickyKeys_.insert(hoveredScancode);
                 backend.pressKey(hoveredScancode);
             }
+        } else if (isRuslat) {
+            // РУС/LAT: toggle — send momentary F6 pulse to the emulator.
+            // The ROM detects the edge and toggles its internal mode + LED.
+            backend.pressKey(SC_F6);
+            backend.releaseKey(SC_F6);
         } else {
             // Release previous momentary key
             if (pressedScancode_ != 0) {
@@ -345,15 +363,68 @@ void KeyboardWindow::render(IDebugBackend &backend)
                                        : IM_COL32(0x40, 0x40, 0x40, 255);
         drawList->AddRect(pMin, pMax, borderColor, 2.0f);
 
-        // Label
-        if (k.label[0] != '\0') {
+        // --- Labels ---
+        ImU32 textColor = (k.color == KC_BROWN)
+            ? IM_COL32(0x80, 0x80, 0x80, 255)
+            : IM_COL32(0x00, 0x00, 0x00, 255);
+
+        bool isNumpad = (k.col >= 14.0f);
+        bool hasRu = (k.label_ru != nullptr && k.label_ru[0] != '\0');
+        bool hasEn = (k.label[0] != '\0');
+
+        if (isNumpad) {
+            // Numpad: single centered label
+            if (hasEn) {
+                ImVec2 textSize = ImGui::CalcTextSize(k.label);
+                // Use small font for long labels on narrow keys
+                bool useSmall = (textSize.x > kw - 4.0f) && sSmallFont;
+                if (useSmall) {
+                    ImGui::PushFont(sSmallFont);
+                    textSize = ImGui::CalcTextSize(k.label);
+                }
+                ImVec2 textPos(pMin.x + (kw - textSize.x) * 0.5f,
+                               pMin.y + (kh - textSize.y) * 0.5f);
+                drawList->AddText(textPos, textColor, k.label);
+                if (useSmall) ImGui::PopFont();
+            }
+        } else if (hasRu && hasEn) {
+            // Diagonal layout: Russian top-left, English bottom-right
+            const float mx = 2.0f, my = 1.0f;
+
+            // Russian label — top-left
+            {
+                bool useSmall = sSmallFont &&
+                    (ImGui::CalcTextSize(k.label_ru).x > kw - 2.0f * mx);
+                if (useSmall) ImGui::PushFont(sSmallFont);
+                drawList->AddText(
+                    ImVec2(pMin.x + mx, pMin.y + my),
+                    textColor, k.label_ru);
+                if (useSmall) ImGui::PopFont();
+            }
+
+            // English label — bottom-right
+            {
+                ImVec2 enSize = ImGui::CalcTextSize(k.label);
+                drawList->AddText(
+                    ImVec2(pMax.x - mx - enSize.x, pMax.y - my - enSize.y),
+                    textColor, k.label);
+            }
+        } else if (hasEn) {
+            // Single label centered (no Russian legend)
             ImVec2 textSize = ImGui::CalcTextSize(k.label);
             ImVec2 textPos(pMin.x + (kw - textSize.x) * 0.5f,
                            pMin.y + (kh - textSize.y) * 0.5f);
-            ImU32 textColor = (k.color == KC_BROWN)
-                ? IM_COL32(0x80, 0x80, 0x80, 255)
-                : IM_COL32(0x00, 0x00, 0x00, 255);
             drawList->AddText(textPos, textColor, k.label);
+        } else if (hasRu) {
+            // Russian-only label centered (modifier keys)
+            bool useSmall = sSmallFont &&
+                (ImGui::CalcTextSize(k.label_ru).x > kw - 4.0f);
+            if (useSmall) ImGui::PushFont(sSmallFont);
+            ImVec2 textSize = ImGui::CalcTextSize(k.label_ru);
+            ImVec2 textPos(pMin.x + (kw - textSize.x) * 0.5f,
+                           pMin.y + (kh - textSize.y) * 0.5f);
+            drawList->AddText(textPos, textColor, k.label_ru);
+            if (useSmall) ImGui::PopFont();
         }
     }
 
@@ -362,9 +433,11 @@ void KeyboardWindow::render(IDebugBackend &backend)
         float ledX = cursorScreenPos.x + pad + 0.5f * kKeyW;
         float ledY = cursorScreenPos.y + pad + 4.0f * kKeyH + kKeyH * 0.7f;
         float ledR = 4.0f;
-        // The LED is off by default (no way to query ruslat from backend yet)
-        drawList->AddCircleFilled(ImVec2(ledX, ledY), ledR,
-            IM_COL32(0x40, 0x10, 0x10, 255));
+        bool ruslatOn = backend.isRuslatMode();
+        ImU32 ledColor = ruslatOn
+            ? IM_COL32(0xFF, 0x20, 0x20, 255)   // bright red — ON
+            : IM_COL32(0x40, 0x10, 0x10, 255);   // dim — OFF
+        drawList->AddCircleFilled(ImVec2(ledX, ledY), ledR, ledColor);
     }
 
     ImGui::End();

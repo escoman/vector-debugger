@@ -6,6 +6,7 @@
 #include "idebug_backend.h"
 
 union SDL_Event;
+struct ImFont;
 
 // ---------------------------------------------------------------------------
 // KeyboardWindow — Virtual Vector-06C keyboard (ImGui/ImDrawList).
@@ -49,7 +50,8 @@ private:
         float col, row;      // grid position (col may be fractional for offsets)
         float w, h;          // grid units
         int scancode;        // SDL_Scancode value (0 = spacer)
-        const char *label;   // Latin legend
+        const char *label;   // Latin legend (bottom-right)
+        const char *label_ru;// Russian legend (top-left), nullptr = none
         KeyColor color;
     };
 
@@ -72,4 +74,10 @@ private:
 
     // Layout
     static const std::vector<KeyDef> &getKeyLayout();
+
+public:
+    // Small font for long labels on narrow keys (set by DebuggerGui::init)
+    static ImFont *sSmallFont;
+
+private:
 };

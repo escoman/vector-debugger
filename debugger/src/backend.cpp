@@ -130,6 +130,12 @@ void DebugBackend::releaseKey(int scancode)
     if (target_) target_->releaseKey(scancode);
 }
 
+bool DebugBackend::isRuslatMode() const
+{
+    if (target_) return target_->isRuslatMode();
+    return false;
+}
+
 // ---------------------------------------------------------------------------
 // Memory callback installation (with chaining)
 // ---------------------------------------------------------------------------

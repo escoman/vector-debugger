@@ -222,4 +222,5 @@ public:
 
     virtual void pressKey(int scancode) = 0;
     virtual void releaseKey(int scancode) = 0;
+    virtual bool isRuslatMode() const = 0;
 };

@@ -82,9 +82,13 @@ bool DebuggerGui::initialize(int width, int height)
     // Style
     ImGui::StyleColorsDark();
 
-    // Load font with Unicode support for button icons
+    // Load monospaced font with Unicode support for button icons
     io.Fonts->AddFontFromFileTTF(
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 15.0f);
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 15.0f);
+
+    // Small monospaced font for long keyboard legends (ВВОД, БЛК, etc.)
+    KeyboardWindow::sSmallFont = io.Fonts->AddFontFromFileTTF(
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 11.0f);
 
     // Backend init
     ImGui_ImplSDL2_InitForOpenGL(window_, glContext_);
