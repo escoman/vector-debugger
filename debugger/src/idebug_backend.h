@@ -91,6 +91,7 @@ public:
     virtual void requestPause()  = 0;
     virtual void requestStep()   = 0;
     virtual void requestReset()  = 0;
+    virtual void requestRestart() = 0;  // BLK+ВВОД: attach boot ROM, PC=0
     virtual void requestQuit()   = 0;
     virtual void stepInstruction() = 0;
 

@@ -60,9 +60,8 @@ void WorkspaceManager::initialize(const std::string &workspacesDir)
 
 void WorkspaceManager::shutdown()
 {
-    if (dirty_) {
-        saveCurrentWorkspace();
-    }
+    // Do NOT auto-save workspace on exit.
+    // Workspace is only saved by explicit user action (Save in menu).
 
     // Remember last used workspace
     std::string currentFile = workspacesDir_ + "/current.txt";
@@ -280,6 +279,8 @@ std::string WorkspaceManager::getSetting(const std::string &key,
 
 void WorkspaceManager::setSetting(const std::string &key, const std::string &value)
 {
+    auto it = settings_.find(key);
+    if (it != settings_.end() && it->second == value) return;
     settings_[key] = value;
     markDirty();
 }
@@ -298,30 +299,54 @@ bool WorkspaceManager::saveToFile(const std::string &name)
     ensureDirectory();
 
     std::string path = workspaceFilePath(name);
-    std::ofstream file(path);
-    if (!file.good()) return false;
 
     // Save ImGui layout
     const char *ini = ImGui::SaveIniSettingsToMemory();
     std::string iniStr = ini ? ini : "";
 
-    // Write ImGui section
-    file << "[ImGui]\n";
-    file << iniStr;
+    // Strip LastUsed lines — they change every frame and cause unnecessary
+    // rewrites (and can corrupt the file with constant disk writes).
+    {
+        std::string cleaned;
+        std::istringstream ss(iniStr);
+        std::string line;
+        while (std::getline(ss, line)) {
+            if (line.find("LastUsed=") != std::string::npos) continue;
+            cleaned += line;
+            cleaned += '\n';
+        }
+        iniStr = cleaned;
+    }
+
+    // Build full file content
+    std::string content;
+    content += "[ImGui]\n";
+    content += iniStr;
     if (!iniStr.empty() && iniStr.back() != '\n') {
-        file << "\n";
+        content += "\n";
     }
-
-    // Write visibility section
-    file << "\n[Visibility]\n";
-    file << serializeVisibility();
-
-    // Write settings section
-    file << "\n[Settings]\n";
+    content += "\n[Visibility]\n";
+    content += serializeVisibility();
+    content += "\n[Settings]\n";
     for (const auto &pair : settings_) {
-        file << pair.first << "=" << pair.second << "\n";
+        content += pair.first + "=" + pair.second + "\n";
     }
 
+    // Skip write if file content hasn't changed
+    {
+        std::ifstream existing(path);
+        if (existing.good()) {
+            std::string oldContent((std::istreambuf_iterator<char>(existing)),
+                                    std::istreambuf_iterator<char>());
+            if (oldContent == content) {
+                return true;  // nothing to write
+            }
+        }
+    }
+
+    std::ofstream file(path);
+    if (!file.good()) return false;
+    file << content;
     return true;
 }
 

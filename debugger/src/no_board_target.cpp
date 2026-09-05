@@ -145,7 +145,7 @@ void NoBoardTarget::executeFrame()
     stepInstruction();
 }
 
-void NoBoardTarget::reset(bool loadRom)
+void NoBoardTarget::reset(bool attachBoot)
 {
     i8080_init();
     cpuInitialized_ = true;

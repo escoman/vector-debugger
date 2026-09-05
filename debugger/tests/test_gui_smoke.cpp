@@ -132,6 +132,8 @@ static ProcessResult spawnDebugger(const std::string &binary,
         // Redirect workspace writes to a temp directory so that smoke
         // tests don't clobber the user's real workspace presets.
         setenv("V06C_WORKSPACE_DIR", "/tmp/v06c_test_workspaces", 1);
+        // Redirect config.ini to temp directory as well
+        setenv("V06C_CONFIG_DIR", "/tmp/v06c_test_workspaces", 1);
 
         if (extraArg.empty()) {
             execl(binary.c_str(), binary.c_str(), nullptr);

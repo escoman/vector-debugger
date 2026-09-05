@@ -91,6 +91,7 @@ public:
     void requestPause()    override;
     void requestStep()     override;
     void requestReset()    override;
+    void requestRestart()  override;  // BLK+ВВОД: attach boot ROM, PC=0
     void requestQuit()     override;
     void stepInstruction() override;  // IDebugBackend: execute 1 instruction (void)
 
@@ -198,7 +199,7 @@ public:
 
     enum class CommandType {
         // Execution state
-        Run, Pause, Step, Reset, Quit,
+        Run, Pause, Step, Reset, Restart, Quit,
         // Memory/Register
         MemoryWrite, RegisterWrite,
         // Breakpoints
@@ -266,6 +267,7 @@ public:
     void run();
     void pause();
     void reset();
+    void restart();  // BLK+ВВОД: attach boot ROM, PC=0
 
     // Helper: dual-mode command submission.
     // If emulation loop is running — enqueue and wait for result.

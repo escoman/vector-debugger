@@ -104,6 +104,7 @@ public:
     void requestRun() { mockState_ = DebuggerState::Running; }
     void requestPause() { mockState_ = DebuggerState::Paused; }
     void requestReset() {}
+    void requestRestart() {}
     void requestQuit() {}
     bool isQuitRequested() const { return false; }
 

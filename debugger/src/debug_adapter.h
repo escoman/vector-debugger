@@ -48,7 +48,7 @@ public:
 
     void stepInstruction() override;
     void executeFrame() override;
-    void reset(bool loadRom) override;
+    void reset(bool attachBoot) override;
 
     void debuggerBreak() override;
     void debuggerContinue() override;

@@ -481,6 +481,7 @@ set(GUI_SOURCES
     ${DBG_GUI_DIR}/main.cpp
     ${DBG_GUI_DIR}/gui.cpp
     ${DBG_GUI_DIR}/workspace_manager.cpp
+    ${DBG_GUI_DIR}/config_manager.cpp
     ${DBG_GUI_DIR}/memory_inspector_window.cpp
     ${DBG_GUI_DIR}/stack_view_window.cpp
     ${DBG_GUI_DIR}/breakpoints_window.cpp

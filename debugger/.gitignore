@@ -21,3 +21,6 @@ Thumbs.db
 
 # Workspace runtime files (auto-generated, machine-specific)
 build/workspaces/current.txt
+
+# App config (auto-generated, machine-specific)
+build/config.ini

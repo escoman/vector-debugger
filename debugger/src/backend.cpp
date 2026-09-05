@@ -247,7 +247,26 @@ bool DebugBackend::isPaused() const
 
 void DebugBackend::reset()
 {
-    target_->reset(false);
+    target_->reset(true);  // Reset: attach boot ROM, PC=0
+
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        state_ = DebuggerState::Paused;
+    }
+    pauseRequestedAtomic_.store(false, std::memory_order_release);
+    stopReason_ = StopReason::Reset;
+
+    instructionSequence_ = 0;
+    impl_->instrHistory.clear();
+    impl_->memHistory.clear();
+    impl_->ioHistory.clear();
+    impl_->clearStats();
+    clearActivityCounters();
+}
+
+void DebugBackend::restart()
+{
+    target_->reset(false);  // Restart: detach boot ROM, PC=0, execute from RAM
 
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
@@ -949,6 +968,11 @@ void DebugBackend::executeCommand(Command &cmd)
         reset();
         break;
     }
+    case CommandType::Restart: {
+        running_.store(false, std::memory_order_release);
+        restart();
+        break;
+    }
     case CommandType::MemoryWrite: {
         std::lock_guard<std::mutex> lock(stateMutex_);
         if (state_ == DebuggerState::Paused) {
@@ -1359,6 +1383,14 @@ void DebugBackend::requestReset()
     // Emulation Thread performs the actual state transition.
     auto cmd = std::make_unique<Command>();
     cmd->type = CommandType::Reset;
+    submitAndWait(std::move(cmd));
+}
+
+void DebugBackend::requestRestart()
+{
+    // BLK+ВВОД: attach boot ROM, reset CPU, pause.
+    auto cmd = std::make_unique<Command>();
+    cmd->type = CommandType::Restart;
     submitAndWait(std::move(cmd));
 }
 

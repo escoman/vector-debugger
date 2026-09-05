@@ -20,6 +20,8 @@
 #include <cstring>
 #include <cctype>
 #include <string>
+#include <algorithm>
+#include <sys/stat.h>
 
 // ---------------------------------------------------------------------------
 // Lifecycle
@@ -105,6 +107,14 @@ bool DebuggerGui::initialize(int width, int height)
     }
     workspaceManager_.initialize(wsDir);
 
+    // ConfigManager — app-level settings (config.ini next to executable)
+    // Uses current directory (where the executable lives), not workspaces/.
+    std::string configDir = ".";
+    if (const char *env = std::getenv("V06C_CONFIG_DIR")) {
+        configDir = env;
+    }
+    configManager_.initialize(configDir);
+
     return true;
 }
 
@@ -112,8 +122,10 @@ void DebuggerGui::shutdown()
 {
     if (!window_) return;
 
-    // Save workspace before tearing down ImGui context
-    workspaceManager_.shutdown();
+    // Save config (Recent ROMs, etc.) on exit
+    configManager_.shutdown();
+
+    // Do NOT auto-save workspace on exit — only explicit Save action.
 
     ImGui_ImplOpenGL2_Shutdown();
     ImGui_ImplSDL2_Shutdown();
@@ -181,6 +193,12 @@ void DebuggerGui::applyPendingWorkspace()
 {
     workspaceManager_.applyPendingWorkspace();
     workspaceManager_.processDeferredOps();
+
+    // Load recent ROMs from config.ini (independent of workspace)
+    if (!recentRomsLoaded_) {
+        loadRecentRoms();
+        recentRomsLoaded_ = true;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -269,28 +287,15 @@ void DebuggerGui::render(IDebugBackend &backend)
     // --- Open ROM dialog (custom, non-blocking) ---
     if (showOpenRomDialog_) {
         showOpenRomDialog_ = false;
-        std::string lastDir = workspaceManager_.getSetting("LastRomDirectory");
+        std::string lastDir = configManager_.get("LastRomDirectory");
         romFileDialog_.onFileSelected = [this, &backend](const std::string &path) {
             // Save the directory of the selected ROM
             size_t lastSlash = path.rfind('/');
             if (lastSlash != std::string::npos) {
-                workspaceManager_.setSetting("LastRomDirectory",
+                configManager_.set("LastRomDirectory",
                     path.substr(0, lastSlash));
             }
-            // Let the adapter auto-detect load address from file extension.
-            // GUI must not know about ROM extensions or compute addresses.
-            uint32_t org = 0;
-            backend.requestPause();
-            if (backend.loadRom(path, org)) {
-                memoryInspector_.requestRefresh();
-                disassemblyView_.requestRefresh();
-                stackView_.requestRefresh();
-                vectorScreen_.requestRefresh();
-                histNeedsRefresh_ = true;
-            } else {
-                snprintf(romErrorBuffer_, sizeof(romErrorBuffer_),
-                         "Failed to load: %s", path.c_str());
-            }
+            loadRomFile(path, backend);
         };
         romFileDialog_.show(lastDir);
     }
@@ -390,6 +395,9 @@ void DebuggerGui::render(IDebugBackend &backend)
 
     // Autosave workspace if layout changed
     workspaceManager_.autosave();
+
+    // Autosave config (Recent ROMs, etc.)
+    configManager_.autosave();
 
     // --- Save As dialog ---
     if (showSaveAsDialog_) {
@@ -658,6 +666,24 @@ void DebuggerGui::renderToolbar(IDebugBackend &backend)
                 showOpenRomDialog_ = true;
                 romErrorBuffer_[0] = '\0';
             }
+            // Recent ROMs submenu
+            if (!recentRoms_.empty()) {
+                ImGui::Separator();
+                for (size_t i = 0; i < recentRoms_.size(); ++i) {
+                    // Extract filename from full path
+                    std::string displayName = recentRoms_[i];
+                    size_t lastSlash = displayName.rfind('/');
+                    if (lastSlash != std::string::npos) {
+                        displayName = displayName.substr(lastSlash + 1);
+                    }
+                    char label[512];
+                    snprintf(label, sizeof(label), "%d. %s", (int)(i + 1),
+                             displayName.c_str());
+                    if (ImGui::MenuItem(label)) {
+                        loadRomFile(recentRoms_[i], backend);
+                    }
+                }
+            }
             ImGui::Separator();
             if (ImGui::MenuItem("Exit")) {
                 quit_ = true;
@@ -723,7 +749,10 @@ void DebuggerGui::renderToolbar(IDebugBackend &backend)
         }
 
         // Debug controls on the right side
-        ImGui::SameLine(ImGui::GetContentRegionAvail().x - 200);
+        float romLabelWidth = currentRomName_.empty() ? 0.0f :
+            ImGui::CalcTextSize(currentRomName_.c_str()).x + ImGui::GetStyle().ItemSpacing.x;
+        float controlsWidth = 280.0f + romLabelWidth;
+        ImGui::SameLine(ImGui::GetContentRegionAvail().x - controlsWidth);
         renderControls(backend);
 
         ImGui::EndMainMenuBar();
@@ -736,6 +765,12 @@ void DebuggerGui::renderToolbar(IDebugBackend &backend)
 
 void DebuggerGui::renderControls(IDebugBackend &backend)
 {
+    // Show currently loaded ROM name
+    if (!currentRomName_.empty()) {
+        ImGui::TextDisabled("%s", currentRomName_.c_str());
+        ImGui::SameLine();
+    }
+
     DebuggerState state = backend.getState();
     bool paused = (state == DebuggerState::Paused);
     bool running = (state == DebuggerState::Running);
@@ -784,9 +819,24 @@ void DebuggerGui::renderControls(IDebugBackend &backend)
     if (!running) ImGui::EndDisabled();
     ImGui::SameLine();
 
-    // Reset: always enabled
-    if (ImGui::Button("\xe2\x86\xbb Reset")) {  // ↻ Reset
+    // Restart (БЛК+ВВОД): always enabled — attaches boot ROM, resets CPU
+    if (ImGui::Button("\xe2\x86\xbb Restart")) {  // ↻ Restart
+        backend.requestRestart();
+        currentRomName_ = "BOOT";
+        memoryInspector_.requestRefresh();
+        stackView_.requestRefresh();
+        disassemblyView_.requestRefresh();
+        executionTrace_.requestRefresh();
+        ioInspector_.requestRefresh();
+        vectorScreen_.requestRefresh();
+        histNeedsRefresh_ = true;
+    }
+    ImGui::SameLine();
+
+    // Reset: attach boot ROM, reset CPU to PC=0 (bootloader entry)
+    if (ImGui::Button("Reset")) {
         backend.requestReset();
+        currentRomName_ = "BOOT";
         memoryInspector_.requestRefresh();
         stackView_.requestRefresh();
         disassemblyView_.requestRefresh();
@@ -993,5 +1043,78 @@ void DebuggerGui::renderStatusBar(IDebugBackend &backend)
     } else if (vectorScreen_.isHoveringBorder()) {
         ImGui::SameLine();
         ImGui::Text("Screen: 512x256  (border)");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Recent ROMs
+// ---------------------------------------------------------------------------
+
+void DebuggerGui::loadRecentRoms()
+{
+    recentRoms_.clear();
+    std::string raw = configManager_.get("RecentRoms");
+    if (raw.empty()) return;
+
+    size_t start = 0;
+    while (start < raw.size()) {
+        size_t pos = raw.find('|', start);
+        if (pos == std::string::npos) pos = raw.size();
+        std::string entry = raw.substr(start, pos - start);
+        // Validate: must be a non-empty path to an existing file
+        if (!entry.empty() && entry.size() < 4096 && entry[0] == '/') {
+            struct stat st;
+            if (stat(entry.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
+                recentRoms_.push_back(entry);
+            }
+        }
+        start = pos + 1;
+    }
+}
+
+void DebuggerGui::saveRecentRoms()
+{
+    std::string raw;
+    for (size_t i = 0; i < recentRoms_.size(); ++i) {
+        if (i > 0) raw += '|';
+        raw += recentRoms_[i];
+    }
+    configManager_.set("RecentRoms", raw);
+}
+
+void DebuggerGui::addRecentRom(const std::string &path)
+{
+    // Remove duplicate if already in list
+    auto it = std::find(recentRoms_.begin(), recentRoms_.end(), path);
+    if (it != recentRoms_.end()) {
+        recentRoms_.erase(it);
+    }
+    // Insert at front
+    recentRoms_.insert(recentRoms_.begin(), path);
+    // Cap at maximum
+    if (static_cast<int>(recentRoms_.size()) > MAX_RECENT_ROMS) {
+        recentRoms_.resize(MAX_RECENT_ROMS);
+    }
+    saveRecentRoms();
+}
+
+void DebuggerGui::loadRomFile(const std::string &path, IDebugBackend &backend)
+{
+    uint32_t org = 0;
+    backend.requestPause();
+    if (backend.loadRom(path, org)) {
+        // Extract filename from path
+        size_t lastSlash = path.rfind('/');
+        currentRomName_ = (lastSlash != std::string::npos)
+            ? path.substr(lastSlash + 1) : path;
+        addRecentRom(path);
+        memoryInspector_.requestRefresh();
+        disassemblyView_.requestRefresh();
+        stackView_.requestRefresh();
+        vectorScreen_.requestRefresh();
+        histNeedsRefresh_ = true;
+    } else {
+        snprintf(romErrorBuffer_, sizeof(romErrorBuffer_),
+                 "Failed to load: %s", path.c_str());
     }
 }

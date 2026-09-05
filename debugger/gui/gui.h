@@ -18,6 +18,7 @@
 #include "sound_window.h"
 #include "plane_screen_window.h"
 #include "workspace_manager.h"
+#include "config_manager.h"
 #include "idebug_backend.h"
 #include "events.h"
 
@@ -141,6 +142,16 @@ private:
     char romAddrBuffer_[16] = "0x0100";
     bool romAutoDetect_ = true;
     char romErrorBuffer_[256] = "";
+    std::string currentRomName_ = "BOOT";  // filename only, shown in toolbar
+
+    // Recent ROMs
+    static constexpr int MAX_RECENT_ROMS = 10;
+    std::vector<std::string> recentRoms_;
+    bool recentRomsLoaded_ = false;
+    void loadRecentRoms();
+    void saveRecentRoms();
+    void addRecentRom(const std::string &path);
+    void loadRomFile(const std::string &path, IDebugBackend &backend);
 
     // CPU register editing state (Stage 3.6)
     bool editingRegister_ = false;
@@ -154,6 +165,9 @@ private:
 
     // Workspace Manager (Stage 5.1)
     WorkspaceManager workspaceManager_;
+
+    // Config Manager — app-level settings (Recent ROMs, last ROM dir, etc.)
+    ConfigManager configManager_;
     bool showSaveAsDialog_ = false;
     char saveAsNameBuffer_[256] = "";
     bool showDeleteConfirm_ = false;

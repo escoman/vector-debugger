@@ -45,7 +45,7 @@ public:
 
     virtual void stepInstruction() = 0;
     virtual void executeFrame() = 0;
-    virtual void reset(bool loadRom) = 0;
+    virtual void reset(bool attachBoot) = 0;  // true=BLK+ВВОД (attach boot ROM), false=BLK+СБР (detach boot ROM)
 
     // -- Debugger control ---------------------------------------------------
 

@@ -293,16 +293,13 @@ void DebugAdapter::executeFrame()
     board.execute_frame_with_cadence(true, false);
 }
 
-void DebugAdapter::reset(bool loadRom)
+void DebugAdapter::reset(bool attachBoot)
 {
-    if (loadRom) {
-        board.reset(Board::ResetMode::LOADROM);
+    if (attachBoot) {
+        // Reset (полный сброс): attach boot ROM, PC=0, execute bootloader.
+        board.reset(Board::ResetMode::BLKVVOD);
     } else {
-        // BLK+СБР: detach boot ROM, reset CPU.
-        // Matches original vector06sdl: board.reset(BLKSBR) which calls
-        // memory.detach_boot() + i8080_init().
-        // i8080_init() sets PC=0, clears flags (F=0x02), but does NOT
-        // modify A, B, C, D, E, H, L, SP, or IFF — they are preserved.
+        // Restart (горячий сброс): detach boot ROM, PC=0, execute from RAM.
         board.reset(Board::ResetMode::BLKSBR);
     }
 }
