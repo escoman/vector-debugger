@@ -185,6 +185,7 @@ public:
     virtual CommandResult requestAddBreakpoint(uint16_t addr) = 0;
     virtual CommandResult requestRemoveBreakpoint(uint16_t addr) = 0;
     virtual CommandResult requestSetBreakpointEnabled(uint16_t addr, bool enabled) = 0;
+    virtual CommandResult requestClearBreakpoints() = 0;
 
     // -- Trace execution (Stage 5.3.2 — through Command Queue) --------------
 

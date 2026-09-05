@@ -28,11 +28,11 @@ void BreakpointsWindow::render(IDebugBackend &backend)
     if (ImGui::Button("Add") || enterPressed) {
         unsigned int addr = 0;
         if (sscanf(addressInput_, "%x", &addr) == 1 && addr <= 0xFFFF) {
-            int id = backend.addBreakpoint(static_cast<uint16_t>(addr));
-            if (id >= 0) {
+            auto result = backend.requestAddBreakpoint(static_cast<uint16_t>(addr));
+            if (result.success) {
                 addressInput_[0] = '\0';  // clear input
             }
-            // If id == -1, duplicate — silently ignore
+            // If failed, duplicate — silently ignore
         }
     }
     
@@ -60,7 +60,7 @@ void BreakpointsWindow::render(IDebugBackend &backend)
             bool enabled = bp.enabled;
             ImGui::PushID(i);
             if (ImGui::Checkbox("##en", &enabled)) {
-                backend.setBreakpointEnabled(bp.address, enabled);
+                backend.requestSetBreakpointEnabled(bp.address, enabled);
             }
             ImGui::NextColumn();
             
@@ -117,12 +117,12 @@ void BreakpointsWindow::render(IDebugBackend &backend)
     bool hasSelection = (selectedBpIndex_ >= 0 && selectedBpIndex_ < static_cast<int>(bps.size()));
     
     if (ImGui::Button("Remove") && hasSelection) {
-        backend.removeBreakpoint(bps[selectedBpIndex_].address);
+        backend.requestRemoveBreakpoint(bps[selectedBpIndex_].address);
         selectedBpIndex_ = -1;
     }
     ImGui::SameLine();
     if (ImGui::Button("Clear All")) {
-        backend.clearBreakpoints();
+        backend.requestClearBreakpoints();
         selectedBpIndex_ = -1;
     }
     

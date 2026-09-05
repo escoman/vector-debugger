@@ -264,6 +264,13 @@ public:
         return r;
     }
 
+    CommandResult requestClearBreakpoints() override {
+        breakpoints_.clear();
+        CommandResult r;
+        r.success = true;
+        return r;
+    }
+
     // -- History ------------------------------------------------------------
 
     uint64_t instructionSequence() const override { return seq_; }

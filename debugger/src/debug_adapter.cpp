@@ -325,13 +325,32 @@ void DebugAdapter::setPollCallback(std::function<void()> cb)
 
 void DebugAdapter::syncBreakpoints(const DebuggerBreakpoint *bps, size_t count)
 {
-    // Board::insert_breakpoint() adds to its internal list.
-    // type=0 (software breakpoint), kind=1.
+    // Build set of new enabled addresses
+    std::set<uint16_t> newAddresses;
     for (size_t i = 0; i < count; ++i) {
         if (bps[i].enabled) {
-            board.insert_breakpoint(0, bps[i].address, 1);
+            newAddresses.insert(bps[i].address);
         }
     }
+    
+    // Remove breakpoints that are in synced but not in new list
+    for (uint16_t addr : syncedBreakpoints_) {
+        if (newAddresses.find(addr) == newAddresses.end()) {
+            // Breakpoint was removed or disabled
+            board.remove_breakpoint(0, addr, 1);
+        }
+    }
+    
+    // Add breakpoints that are in new list but not in synced
+    for (uint16_t addr : newAddresses) {
+        if (syncedBreakpoints_.find(addr) == syncedBreakpoints_.end()) {
+            // New breakpoint
+            board.insert_breakpoint(0, addr, 1);
+        }
+    }
+    
+    // Update tracked set
+    syncedBreakpoints_ = newAddresses;
 }
 
 // ---------------------------------------------------------------------------

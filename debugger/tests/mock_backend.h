@@ -146,6 +146,13 @@ public:
 
     void clearBreakpoints() { mockBreakpoints_.clear(); }
 
+    // request* variants (matching IDebugBackend interface)
+    struct CommandResult { bool success = true; };
+    CommandResult requestAddBreakpoint(uint16_t) { return {}; }
+    CommandResult requestRemoveBreakpoint(uint16_t) { return {}; }
+    CommandResult requestSetBreakpointEnabled(uint16_t, bool) { return {}; }
+    CommandResult requestClearBreakpoints() { mockBreakpoints_.clear(); return {}; }
+
     // -- History snapshots ---------------------------------------------------
 
     std::vector<InstructionEvent> instructionHistorySnapshot() const {

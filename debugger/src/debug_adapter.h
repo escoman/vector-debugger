@@ -13,6 +13,7 @@
 #include "fd1793.h"
 
 #include <string>
+#include <set>
 
 // ---------------------------------------------------------------------------
 // DebugAdapter
@@ -111,6 +112,9 @@ private:
     MemoryWriteCallback memWriteCb_;
     std::function<void(uint32_t,uint32_t,bool,uint8_t)> prevMemOnRead_;
     std::function<void(uint32_t,uint32_t,bool,uint8_t)> prevMemOnWrite_;
+
+    // Track breakpoints synced to Board (addresses only)
+    std::set<uint16_t> syncedBreakpoints_;
 
     static Memory       *s_memory;
     static IO           *s_io;

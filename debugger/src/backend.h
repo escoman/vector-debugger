@@ -119,6 +119,7 @@ public:
     CommandResult requestAddBreakpoint(uint16_t addr) override;
     CommandResult requestRemoveBreakpoint(uint16_t addr) override;
     CommandResult requestSetBreakpointEnabled(uint16_t addr, bool enabled) override;
+    CommandResult requestClearBreakpoints() override;
 
     // -- IDebugBackend: history ---------------------------------------------
 
@@ -207,7 +208,7 @@ public:
         // Memory/Register
         MemoryWrite, RegisterWrite,
         // Breakpoints
-        AddBreakpoint, RemoveBreakpoint, SetBreakpointEnabled,
+        AddBreakpoint, RemoveBreakpoint, SetBreakpointEnabled, ClearBreakpoints,
         // Symbols
         CreateFunction, RenameSymbol, SetComment, RemoveSymbol, AddLabel,
         // Trace

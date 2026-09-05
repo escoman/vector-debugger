@@ -797,6 +797,13 @@ CommandResult DebugBackend::requestSetBreakpointEnabled(uint16_t addr, bool enab
     return submitAndWait(std::move(cmd));
 }
 
+CommandResult DebugBackend::requestClearBreakpoints()
+{
+    auto cmd = std::make_unique<Command>();
+    cmd->type = CommandType::ClearBreakpoints;
+    return submitAndWait(std::move(cmd));
+}
+
 // ---------------------------------------------------------------------------
 // Stage 5.3.2: Command Queue implementation
 // ---------------------------------------------------------------------------
@@ -937,6 +944,11 @@ void DebugBackend::executeCommand(Command &cmd)
             result.error = "no breakpoint at this address";
             result.status = CommandResult::Failed;
         }
+        syncBreakpointsToTarget();
+        break;
+    }
+    case CommandType::ClearBreakpoints: {
+        clearBreakpoints();
         syncBreakpointsToTarget();
         break;
     }

@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <algorithm>
+#include <set>
 
 #include "memory.h"
 #include "i8080.h"
@@ -174,8 +175,22 @@ public:
     void debuggerDetached() override { board_.debugger_detached(); }
     void setPollCallback(std::function<void()> cb) override { board_.poll_debugger = cb; }
     void syncBreakpoints(const DebuggerBreakpoint *bps, size_t count) override {
+        // Diff-based sync matching DebugAdapter::syncBreakpoints()
+        std::set<uint16_t> newAddrs;
         for (size_t i = 0; i < count; ++i)
-            if (bps[i].enabled) board_.insert_breakpoint(0, bps[i].address, 1);
+            if (bps[i].enabled)
+                newAddrs.insert(bps[i].address);
+        // Remove old
+        for (uint16_t a : syncedBp_) {
+            if (newAddrs.find(a) == newAddrs.end())
+                board_.remove_breakpoint(0, a, 1);
+        }
+        // Add new
+        for (uint16_t a : newAddrs) {
+            if (syncedBp_.find(a) == syncedBp_.end())
+                board_.insert_breakpoint(0, a, 1);
+        }
+        syncedBp_ = newAddrs;
     }
     ScreenData screenSnapshot() override { return {}; }
     void pressKey(int) override {}
@@ -191,6 +206,7 @@ private:
     Board  &board_;
     MemoryReadCallback  prevOnRead_;
     MemoryWriteCallback prevOnWrite_;
+    std::set<uint16_t> syncedBp_;
 };
 
 // ---------------------------------------------------------------------------
@@ -937,6 +953,159 @@ static void test_board_smoke()
 }
 
 // ---------------------------------------------------------------------------
+// Regression test: Breakpoint removal syncs to Board
+//
+// Verifies the full chain:
+//   GUI → requestRemoveBreakpoint → DebugBackend → syncBreakpointsToTarget
+//   → DebugAdapter/TestTarget::syncBreakpoints → Board::remove_breakpoint
+//
+// Also tests: disable/re-enable, clear all, re-set after remove, duplicates.
+// ---------------------------------------------------------------------------
+
+static void test_breakpoint_sync_removal()
+{
+    TEST_BEGIN("Breakpoint removal syncs to Board (regression)");
+
+    // --- Headless setup (same as test_board_smoke) ---
+    Options.novideo = true;
+    Options.nosound = true;
+
+    Memory memory;
+    FD1793 fdc;
+    Wav wav;
+    WavPlayer tape_player(wav);
+    Keyboard keyboard;
+    I8253 timer;
+    TimerWrapper tw(timer);
+    AY ay;
+    AYWrapper aw(ay);
+    Soundnik soundnik(tw, aw);
+    IO io(memory, keyboard, timer, fdc, ay, tape_player);
+    TV tv;
+    PixelFiller filler(memory, io, tv);
+    filler.init();
+    soundnik.init(nullptr);
+    tv.init();
+    Board board(memory, io, filler, soundnik, tv, tape_player);
+    board.init();
+
+    TestBoardTarget target(memory, board);
+    DebugBackend backend(target);
+    backend.testSynchronous_ = true;
+
+    // Write test program:
+    // 0000: MVI A, 55h    ; 3E 55
+    // 0002: INR A         ; 3C
+    // 0003: JMP 0002h     ; C3 02 00
+    for (size_t i = 0; i < sizeof(test_program); ++i)
+        memory.write((uint16_t)i, test_program[i], false);
+
+    Options.pc = 0;
+    board.reset(Board::ResetMode::LOADROM);
+    backend.clearHistory();
+
+    // --- Test 1: Set breakpoint, verify it fires ---
+    printf("  Test 1: Set BP at 0x0002, run, expect stop...\n");
+    auto r1 = backend.requestAddBreakpoint(0x0002);
+    CHECK(r1.success, "BP added via request");
+    backend.run();
+    CHECK_EQ(0x0002, backend.getCpuState().pc, "PC == 0x0002 at BP");
+    CHECK_EQ(0x55, backend.getCpuState().a, "A == 0x55 (INR not executed)");
+
+    // --- Test 2: Remove breakpoint, verify execution passes through ---
+    printf("  Test 2: Remove BP, step past, run, expect no stop...\n");
+    auto r2 = backend.requestRemoveBreakpoint(0x0002);
+    CHECK(r2.success, "BP removed via request");
+    // Step past the breakpoint address
+    backend.stepInstruction();  // INR A at 0x0002, A becomes 0x56
+    CHECK_EQ(0x0003, backend.getCpuState().pc, "PC == 0x0003 after step");
+    CHECK_EQ(0x56, backend.getCpuState().a, "A == 0x56 (INR executed)");
+    // Key check: hasBreakpoint returns false
+    CHECK(!backend.hasBreakpoint(0x0002), "No BP at 0x0002 after removal");
+
+    // --- Test 3: Re-set and re-remove (spec item 9) ---
+    printf("  Test 3: Re-set BP at 0x0002, remove, verify gone...\n");
+    Options.pc = 0;
+    board.reset(Board::ResetMode::LOADROM);
+    backend.clearHistory();
+    auto r3 = backend.requestAddBreakpoint(0x0002);
+    CHECK(r3.success, "BP re-added via request");
+    backend.run();
+    CHECK_EQ(0x0002, backend.getCpuState().pc, "PC == 0x0002 (re-set BP fires)");
+    // Now remove
+    auto r4 = backend.requestRemoveBreakpoint(0x0002);
+    CHECK(r4.success, "BP removed via request");
+    CHECK(!backend.hasBreakpoint(0x0002), "BP gone after re-remove");
+    // Step through — should not stop
+    backend.stepInstruction();  // INR A
+    CHECK_EQ(0x0003, backend.getCpuState().pc, "PC == 0x0003 (passed through)");
+
+    // --- Test 4: Disable → sync → verify no stop → re-enable → verify stop ---
+    printf("  Test 4: Disable BP, verify no stop; re-enable, verify stop...\n");
+    Options.pc = 0;
+    board.reset(Board::ResetMode::LOADROM);
+    backend.clearHistory();
+    backend.requestClearBreakpoints();
+    backend.requestAddBreakpoint(0x0002);
+    // Disable
+    backend.requestSetBreakpointEnabled(0x0002, false);
+    CHECK(!backend.hasBreakpoint(0x0002), "Disabled BP not active");
+    // Re-enable
+    backend.requestSetBreakpointEnabled(0x0002, true);
+    CHECK(backend.hasBreakpoint(0x0002), "Re-enabled BP is active");
+    Options.pc = 0;
+    board.reset(Board::ResetMode::LOADROM);
+    backend.run();
+    CHECK_EQ(0x0002, backend.getCpuState().pc, "PC == 0x0002 (re-enabled BP fires)");
+
+    // --- Test 5: Clear all breakpoints → verify Board has none ---
+    printf("  Test 5: Clear all BPs, verify Board has none...\n");
+    backend.requestClearBreakpoints();
+    CHECK(!backend.hasBreakpoint(0x0002), "No BP after clearAll");
+    auto bpList = backend.getBreakpoints();
+    CHECK_EQ((size_t)0, bpList.size(), "BP list empty after clearAll");
+    // Step through — should not stop anywhere
+    // PC=0x0002 → step INR A → 0x0003 → step JMP 0002 → 0x0002
+    backend.stepInstruction();  // INR A
+    backend.stepInstruction();  // JMP 0002
+    CHECK_EQ(0x0002, backend.getCpuState().pc, "PC == 0x0002 (JMP landed)");
+    backend.stepInstruction();  // INR A again — no breakpoint!
+    CHECK_EQ(0x0003, backend.getCpuState().pc, "PC == 0x0003 (passed through, no BP)");
+
+    // --- Test 6: Duplicate add rejection + remove ---
+    printf("  Test 6: Duplicate add, remove, verify clean...\n");
+    backend.requestClearBreakpoints();
+    auto r5 = backend.requestAddBreakpoint(0x0003);
+    CHECK(r5.success, "First add succeeds");
+    auto r6 = backend.requestAddBreakpoint(0x0003);
+    CHECK(!r6.success, "Duplicate add returns failure");
+    // Remove
+    auto r7 = backend.requestRemoveBreakpoint(0x0003);
+    CHECK(r7.success, "BP removed");
+    CHECK(!backend.hasBreakpoint(0x0003), "BP gone after remove");
+    CHECK_EQ((size_t)0, backend.getBreakpoints().size(), "BP list empty");
+
+    // --- Test 7: Remove one BP doesn't affect another ---
+    printf("  Test 7: Remove one BP, other survives...\n");
+    backend.requestClearBreakpoints();
+    backend.requestAddBreakpoint(0x0002);
+    backend.requestAddBreakpoint(0x0003);
+    // Remove first
+    backend.requestRemoveBreakpoint(0x0002);
+    CHECK(!backend.hasBreakpoint(0x0002), "BP at 0x0002 removed");
+    CHECK(backend.hasBreakpoint(0x0003), "BP at 0x0003 survives");
+    // Verify in Board: run from 0, should stop at 0x0003 not 0x0002
+    Options.pc = 0;
+    board.reset(Board::ResetMode::LOADROM);
+    backend.run();
+    CHECK_EQ(0x0003, backend.getCpuState().pc, "Stopped at 0x0003 (0x0002 BP removed)");
+
+    backend.requestClearBreakpoints();
+
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -945,6 +1114,7 @@ int main()
     printf("\033[0;36m=== Board Integration Smoke Test (Stage 3.2, simplified) ===\033[0m\n");
     
     test_board_smoke();
+    test_breakpoint_sync_removal();
     
     printf("\n\033[0;36m=== Results: %d/%d passed", tests_passed, tests_run);
     if (tests_failed > 0) {
