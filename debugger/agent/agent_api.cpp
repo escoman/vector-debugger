@@ -1,6 +1,7 @@
 #include "agent_api.h"
 #include "disassembler.h"
 #include "opcode_info.h"
+#include "rom_load_address.h"
 
 #include <algorithm>
 #include <map>
@@ -10,7 +11,7 @@
 #include <thread>
 
 // ---------------------------------------------------------------------------
-// AgentApi implementation — Stage 5.3.1
+// AgentApi implementation — Stage 5.3.1 / Stage 6.1
 //
 // All operations delegate to IDebugBackend.  No direct access to Board,
 // Memory, CPU, IO, TV, or any emulator internals.
@@ -71,6 +72,11 @@ void AgentApi::reset()
     auto t0 = std::chrono::steady_clock::now();
     backend_.requestReset();
     log_.record("reset", "", "done", elapsedMs(t0));
+}
+
+bool AgentApi::isRunning() const
+{
+    return !backend_.isPaused();
 }
 
 // ---------------------------------------------------------------------------
@@ -168,6 +174,205 @@ std::vector<DebuggerBreakpoint> AgentApi::listBreakpoints()
                 std::to_string(bps.size()) + " breakpoints",
                 elapsedMs(t0));
     return bps;
+}
+
+AgentApiResult<void> AgentApi::clearAllBreakpoints()
+{
+    auto t0 = std::chrono::steady_clock::now();
+    auto result = backend_.requestClearBreakpoints();
+
+    log_.record("clearAllBreakpoints", "",
+                result.success ? "cleared" : result.error,
+                elapsedMs(t0), result.success, result.error);
+
+    if (!result.success) {
+        return AgentApiResult<void>::fail(
+            ErrorCode::OperationFailed, result.error);
+    }
+    return AgentApiResult<void>::ok();
+}
+
+// ---------------------------------------------------------------------------
+// Registers (Stage 6.1 §8)
+// ---------------------------------------------------------------------------
+
+AgentApiResult<void> AgentApi::setRegister(const std::string &name, uint16_t value)
+{
+    auto t0 = std::chrono::steady_clock::now();
+
+    // Map register name → (RegisterId, high/low/whole)
+    // Pairs AF, BC, DE, HL: high byte = first reg, low byte = second reg.
+    struct RegMapping {
+        IDebugBackend::RegisterId pair;
+        enum { High, Low, Whole } half;
+    };
+
+    static const std::map<std::string, RegMapping> regMap = {
+        {"A",  {IDebugBackend::RegisterId::AF, RegMapping::High}},
+        {"F",  {IDebugBackend::RegisterId::AF, RegMapping::Low}},
+        {"B",  {IDebugBackend::RegisterId::BC, RegMapping::High}},
+        {"C",  {IDebugBackend::RegisterId::BC, RegMapping::Low}},
+        {"D",  {IDebugBackend::RegisterId::DE, RegMapping::High}},
+        {"E",  {IDebugBackend::RegisterId::DE, RegMapping::Low}},
+        {"H",  {IDebugBackend::RegisterId::HL, RegMapping::High}},
+        {"L",  {IDebugBackend::RegisterId::HL, RegMapping::Low}},
+        {"PC", {IDebugBackend::RegisterId::PC, RegMapping::Whole}},
+        {"SP", {IDebugBackend::RegisterId::SP, RegMapping::Whole}},
+    };
+
+    auto it = regMap.find(name);
+    if (it == regMap.end()) {
+        log_.record("setRegister", "name=" + name,
+                     "unknown register", elapsedMs(t0), false, "unknown register");
+        return AgentApiResult<void>::fail(
+            ErrorCode::InvalidArgument,
+            "Unknown register: " + name);
+    }
+
+    const auto &m = it->second;
+    uint16_t writeValue = value;
+
+    if (m.half != RegMapping::Whole) {
+        // Read current pair, modify one half, write back
+        CpuState cpu = backend_.getCpuState();
+        uint16_t current = 0;
+        switch (m.pair) {
+            case IDebugBackend::RegisterId::AF: current = (static_cast<uint16_t>(cpu.a) << 8) | cpu.flags; break;
+            case IDebugBackend::RegisterId::BC: current = (static_cast<uint16_t>(cpu.b) << 8) | cpu.c; break;
+            case IDebugBackend::RegisterId::DE: current = (static_cast<uint16_t>(cpu.d) << 8) | cpu.e; break;
+            case IDebugBackend::RegisterId::HL: current = (static_cast<uint16_t>(cpu.h) << 8) | cpu.l; break;
+            default: break;
+        }
+        if (m.half == RegMapping::High) {
+            writeValue = (value << 8) | (current & 0xFF);
+        } else {
+            writeValue = (current & 0xFF00) | (value & 0xFF);
+        }
+    }
+
+    bool ok = backend_.writeRegister(m.pair, writeValue);
+
+    std::ostringstream oss;
+    oss << name << "=" << std::hex << value;
+    log_.record("setRegister", oss.str(), ok ? "ok" : "failed",
+                elapsedMs(t0), ok, ok ? "" : "write failed");
+
+    if (!ok) {
+        return AgentApiResult<void>::fail(
+            ErrorCode::OperationFailed, "Register write failed");
+    }
+    return AgentApiResult<void>::ok();
+}
+
+// ---------------------------------------------------------------------------
+// Disassembly (Stage 6.1 §10)
+// ---------------------------------------------------------------------------
+
+AgentApiResult<std::vector<DisassembledInstructionResult>>
+AgentApi::disassemble(uint16_t address, size_t count)
+{
+    auto t0 = std::chrono::steady_clock::now();
+
+    if (count == 0) {
+        log_.record("disassemble", "count=0", "invalid count",
+                    elapsedMs(t0), false, "count must be > 0");
+        return AgentApiResult<std::vector<DisassembledInstructionResult>>::fail(
+            ErrorCode::InvalidArgument, "count must be > 0");
+    }
+
+    auto readByte = [this](uint16_t addr) -> uint8_t {
+        return backend_.readMemory(addr);
+    };
+
+    std::vector<DisassembledInstructionResult> result;
+    result.reserve(count);
+
+    uint16_t pc = address;
+    for (size_t i = 0; i < count; ++i) {
+        DisassembledInstruction di = ::disassemble(pc, readByte);
+
+        DisassembledInstructionResult entry;
+        entry.address = di.address;
+        entry.next_address = pc + di.length;
+        entry.bytes.assign(di.bytes.begin(), di.bytes.begin() + di.length);
+        entry.mnemonic = di.mnemonic;
+        entry.operands = di.operands;
+        entry.text = di.text;
+        result.push_back(std::move(entry));
+
+        uint16_t nextPc = pc + di.length;
+        if (nextPc <= pc) break;  // overflow guard
+        pc = nextPc;
+    }
+
+    std::ostringstream oss;
+    oss << "addr=" << std::hex << address << " count=" << std::dec << count;
+    log_.record("disassemble", oss.str(),
+                std::to_string(result.size()) + " instructions",
+                elapsedMs(t0));
+
+    return AgentApiResult<std::vector<DisassembledInstructionResult>>::ok(
+        std::move(result));
+}
+
+// ---------------------------------------------------------------------------
+// Instruction History (Stage 6.1 §11)
+// ---------------------------------------------------------------------------
+
+AgentApiResult<std::vector<InstructionHistoryEntry>>
+AgentApi::getInstructionHistory(size_t count)
+{
+    auto t0 = std::chrono::steady_clock::now();
+
+    if (count == 0) {
+        log_.record("getInstructionHistory", "count=0", "invalid count",
+                    elapsedMs(t0), false, "count must be > 0");
+        return AgentApiResult<std::vector<InstructionHistoryEntry>>::fail(
+            ErrorCode::InvalidArgument, "count must be > 0");
+    }
+
+    auto all = backend_.instructionHistorySnapshot();
+
+    // Take last 'count' entries
+    size_t start = 0;
+    if (all.size() > count) {
+        start = all.size() - count;
+    }
+
+    auto readByte = [this](uint16_t addr) -> uint8_t {
+        return backend_.readMemory(addr);
+    };
+
+    std::vector<InstructionHistoryEntry> result;
+    result.reserve(all.size() - start);
+
+    for (size_t i = start; i < all.size(); ++i) {
+        const auto &ev = all[i];
+
+        InstructionHistoryEntry entry;
+        entry.address = ev.pcBefore;
+        entry.next_address = ev.pcAfter;
+
+        // Build instruction bytes: opcode + operand bytes
+        entry.bytes.push_back(ev.opcode);
+        if (ev.length >= 2) entry.bytes.push_back(ev.operandBytes[0]);
+        if (ev.length >= 3) entry.bytes.push_back(ev.operandBytes[1]);
+
+        // Disassemble for text
+        DisassembledInstruction di = ::disassemble(ev.pcBefore, readByte);
+        entry.disassembly = di.text;
+
+        result.push_back(std::move(entry));
+    }
+
+    std::ostringstream oss;
+    oss << "count=" << count << " available=" << all.size();
+    log_.record("getInstructionHistory", oss.str(),
+                std::to_string(result.size()) + " entries",
+                elapsedMs(t0));
+
+    return AgentApiResult<std::vector<InstructionHistoryEntry>>::ok(
+        std::move(result));
 }
 
 // ---------------------------------------------------------------------------
@@ -348,6 +553,392 @@ bool AgentApi::loadRom(const std::string &path, uint32_t org)
     return ok;
 }
 
+AgentApiResult<LoadRomResult> AgentApi::loadRomInfo(const std::string &path, uint32_t org)
+{
+    auto t0 = std::chrono::steady_clock::now();
+
+    // Auto-detect origin from extension if not explicitly given
+    uint32_t origin = org;
+    if (origin == 0 && path.find('.') != std::string::npos) {
+        origin = getRomLoadAddress(path);
+    }
+
+    bool ok = backend_.loadRom(path, org);
+    if (!ok) {
+        log_.record("loadRomInfo", path, "failed", elapsedMs(t0), false, "load failed");
+        return AgentApiResult<LoadRomResult>::fail(
+            ErrorCode::OperationFailed, "Failed to load ROM: " + path);
+    }
+
+    LoadRomResult result;
+    result.path = path;
+    result.origin = origin;
+    result.pc = backend_.getCpuState().pc;
+
+    std::ostringstream oss;
+    oss << "path=" << path << " origin=" << std::hex << origin
+        << " pc=" << result.pc;
+    log_.record("loadRomInfo", "", oss.str(), elapsedMs(t0));
+
+    return AgentApiResult<LoadRomResult>::ok(std::move(result));
+}
+
+// ---------------------------------------------------------------------------
+// Stack (Stage 6.1 §13)
+// ---------------------------------------------------------------------------
+
+AgentApiResult<std::vector<StackEntry>>
+AgentApi::getStack(size_t limit)
+{
+    auto t0 = std::chrono::steady_clock::now();
+
+    if (limit == 0) {
+        log_.record("getStack", "limit=0", "invalid limit",
+                    elapsedMs(t0), false, "limit must be > 0");
+        return AgentApiResult<std::vector<StackEntry>>::fail(
+            ErrorCode::InvalidArgument, "limit must be > 0");
+    }
+
+    uint16_t sp = backend_.getCpuState().sp;
+    const auto &db = backend_.symbolDatabase();
+
+    std::vector<StackEntry> result;
+    result.reserve(limit);
+
+    for (size_t i = 0; i < limit; ++i) {
+        uint16_t addr = sp + static_cast<uint16_t>(i * 2);
+
+        StackEntry entry;
+        entry.address = addr;
+
+        // Read 16-bit value (little-endian)
+        uint8_t lo = backend_.readMemory(addr);
+        uint8_t hi = backend_.readMemory(static_cast<uint16_t>(addr + 1));
+        entry.value = static_cast<uint16_t>(lo | (hi << 8));
+
+        // Look up symbol for this value
+        const DebugSymbol *sym = db.findSymbol(entry.value);
+        if (sym) {
+            entry.symbol = sym->name;
+        }
+
+        result.push_back(entry);
+    }
+
+    std::ostringstream oss;
+    oss << "sp=" << std::hex << sp << " limit=" << std::dec << limit;
+    log_.record("getStack", oss.str(),
+                std::to_string(result.size()) + " entries", elapsedMs(t0));
+
+    return AgentApiResult<std::vector<StackEntry>>::ok(std::move(result));
+}
+
+// ---------------------------------------------------------------------------
+// Memory Map (Stage 6.1 §18)
+// ---------------------------------------------------------------------------
+
+AgentApiResult<std::vector<MemoryMapBlock>>
+AgentApi::getMemoryMap()
+{
+    auto t0 = std::chrono::steady_clock::now();
+
+    auto activity = backend_.liveActivitySnapshot();
+    const auto &db = backend_.symbolDatabase();
+    auto regions = db.allRegions();
+
+    std::vector<MemoryMapBlock> result;
+    result.reserve(256);
+
+    for (int i = 0; i < 256; ++i) {
+        MemoryMapBlock block;
+        block.start = static_cast<uint16_t>(i * 256);
+        block.end = static_cast<uint16_t>(block.start + 255);
+
+        // Classification from SymbolDatabase regions
+        block.classification = MemoryMapBlock::Classification::Unknown;
+        for (const auto &r : regions) {
+            if (r.start <= block.start && r.end >= block.end) {
+                switch (r.type) {
+                    case MemoryRegionType::Code:
+                        block.classification = MemoryMapBlock::Classification::Code;
+                        break;
+                    case MemoryRegionType::Data:
+                        block.classification = MemoryMapBlock::Classification::Data;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+            }
+        }
+
+        // Activity counters
+        block.read_activity = activity.blocks[i].lastReadTime.time_since_epoch().count() > 0
+            ? 1 : 0;  // simplified: 1 = accessed, 0 = not
+        block.write_activity = activity.blocks[i].lastWriteTime.time_since_epoch().count() > 0
+            ? 1 : 0;
+
+        // Check if block has non-zero content
+        auto data = backend_.readMemorySnapshot(block.start, 256);
+        for (uint8_t b : data.data) {
+            if (b != 0) {
+                block.has_content = true;
+                break;
+            }
+        }
+
+        result.push_back(block);
+    }
+
+    log_.record("getMemoryMap", "", "256 blocks", elapsedMs(t0));
+
+    return AgentApiResult<std::vector<MemoryMapBlock>>::ok(std::move(result));
+}
+
+// ---------------------------------------------------------------------------
+// Screen Info (Stage 6.1 §20)
+// ---------------------------------------------------------------------------
+
+AgentApiResult<ScreenInfoResult> AgentApi::getScreenInfo()
+{
+    auto t0 = std::chrono::steady_clock::now();
+    auto video = backend_.videoModeSnapshot();
+
+    ScreenInfoResult result;
+    result.width = video.screenWidth;
+    result.height = video.screenHeight;
+    result.visible_width = video.visibleWidth;
+    result.visible_height = video.visibleHeight;
+    result.mode512 = video.mode512;
+    result.scroll_value = video.scrollValue;
+    result.vram_base = video.vramBase;
+    result.pixels_per_byte = video.pixelsPerByte;
+
+    std::ostringstream oss;
+    oss << result.width << "x" << result.height
+        << (result.mode512 ? " 512-mode" : " 256-mode");
+    log_.record("getScreenInfo", "", oss.str(), elapsedMs(t0));
+
+    return AgentApiResult<ScreenInfoResult>::ok(std::move(result));
+}
+
+// ---------------------------------------------------------------------------
+// VRAM Info (Stage 6.1 §19)
+// ---------------------------------------------------------------------------
+
+AgentApiResult<VramInfoResult> AgentApi::getVramInfo()
+{
+    auto t0 = std::chrono::steady_clock::now();
+    auto video = backend_.videoModeSnapshot();
+
+    VramInfoResult result;
+    result.mode512 = video.mode512;
+    result.vram_base = video.vramBase;
+    result.scroll_value = video.scrollValue;
+
+    // Vector-06C VRAM plane layout:
+    //   Plane 0: 0xE000 (8 KB)   Plane 1: 0xC000 (8 KB)
+    //   Plane 2: 0xA000 (8 KB)   Plane 3: 0x8000 (8 KB)
+    static const uint16_t planeBases[] = { 0xE000, 0xC000, 0xA000, 0x8000 };
+    for (int i = 0; i < 4; ++i) {
+        VramPlaneInfo plane;
+        plane.plane = i;
+        plane.address = planeBases[i];
+        plane.size = 8192;
+        result.planes.push_back(plane);
+    }
+
+    std::ostringstream oss;
+    oss << "vram_base=" << std::hex << result.vram_base
+        << (result.mode512 ? " 512-mode" : " 256-mode")
+        << " 4 planes";
+    log_.record("getVramInfo", "", oss.str(), elapsedMs(t0));
+
+    return AgentApiResult<VramInfoResult>::ok(std::move(result));
+}
+
+// ---------------------------------------------------------------------------
+// Symbols (Stage 6.1 §15)
+// ---------------------------------------------------------------------------
+
+AgentApiResult<std::vector<SymbolInfo>>
+AgentApi::getSymbols(size_t limit)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    const auto &db = backend_.symbolDatabase();
+    auto all = db.allSymbols();
+
+    std::vector<SymbolInfo> result;
+    size_t count = (limit > 0 && limit < all.size()) ? limit : all.size();
+    result.reserve(count);
+
+    for (size_t i = 0; i < count; ++i) {
+        SymbolInfo info;
+        info.address = all[i].address;
+        info.name = all[i].name;
+        info.comment = all[i].comment;
+        info.type = (all[i].type == SymbolType::Function)
+            ? SymbolInfo::Type::Function
+            : SymbolInfo::Type::Label;
+        result.push_back(std::move(info));
+    }
+
+    log_.record("getSymbols", "",
+                std::to_string(result.size()) + " / " + std::to_string(all.size()) + " symbols",
+                elapsedMs(t0));
+
+    return AgentApiResult<std::vector<SymbolInfo>>::ok(std::move(result));
+}
+
+AgentApiResult<SymbolInfo> AgentApi::getFunction(uint16_t address)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    const auto &db = backend_.symbolDatabase();
+    const DebugSymbol *sym = db.findSymbol(address);
+
+    if (!sym) {
+        log_.record("getFunction", "addr=" + std::to_string(address),
+                    "not found", elapsedMs(t0), false, "symbol not found");
+        return AgentApiResult<SymbolInfo>::fail(
+            ErrorCode::InvalidAddress, "No symbol at address");
+    }
+
+    SymbolInfo info;
+    info.address = sym->address;
+    info.name = sym->name;
+    info.comment = sym->comment;
+    info.type = (sym->type == SymbolType::Function)
+        ? SymbolInfo::Type::Function
+        : SymbolInfo::Type::Label;
+
+    std::ostringstream oss;
+    oss << "addr=" << std::hex << address << " name=" << sym->name;
+    log_.record("getFunction", oss.str(), "found", elapsedMs(t0));
+
+    return AgentApiResult<SymbolInfo>::ok(std::move(info));
+}
+
+// ---------------------------------------------------------------------------
+// Xrefs (Stage 6.1 §16)
+// ---------------------------------------------------------------------------
+
+AgentApiResult<std::vector<XrefResult>>
+AgentApi::getXrefs(uint16_t address)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    const auto &db = backend_.symbolDatabase();
+
+    auto toXrefs = db.xrefsTo(address);
+    auto fromXrefs = db.xrefsFrom(address);
+
+    std::vector<XrefResult> result;
+    result.reserve(toXrefs.size() + fromXrefs.size());
+
+    for (const auto &xr : toXrefs) {
+        XrefResult r;
+        r.from = xr.from;
+        r.to = xr.to;
+        result.push_back(r);
+    }
+    for (const auto &xr : fromXrefs) {
+        XrefResult r;
+        r.from = xr.from;
+        r.to = xr.to;
+        result.push_back(r);
+    }
+
+    std::ostringstream oss;
+    oss << "addr=" << std::hex << address
+        << " to=" << std::dec << toXrefs.size()
+        << " from=" << fromXrefs.size();
+    log_.record("getXrefs", oss.str(),
+                std::to_string(result.size()) + " xrefs", elapsedMs(t0));
+
+    return AgentApiResult<std::vector<XrefResult>>::ok(std::move(result));
+}
+
+// ---------------------------------------------------------------------------
+// Call Graph (Stage 6.1 §17)
+// ---------------------------------------------------------------------------
+
+AgentApiResult<std::vector<CallGraphEdge>>
+AgentApi::getCallGraph(uint16_t address, size_t limit)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    const auto &db = backend_.symbolDatabase();
+    auto allEdges = db.callGraph();
+
+    std::vector<CallGraphEdge> result;
+
+    if (address != 0) {
+        // Filter edges involving the given address (as caller or callee)
+        for (const auto &e : allEdges) {
+            if (e.from == address || e.to == address) {
+                CallGraphEdge edge;
+                edge.from = e.from;
+                edge.to = e.to;
+                result.push_back(edge);
+            }
+        }
+    } else {
+        // Return all edges
+        for (const auto &e : allEdges) {
+            CallGraphEdge edge;
+            edge.from = e.from;
+            edge.to = e.to;
+            result.push_back(edge);
+        }
+    }
+
+    // Apply limit
+    if (limit > 0 && result.size() > limit) {
+        result.resize(limit);
+    }
+
+    std::ostringstream oss;
+    oss << "addr=" << std::hex << address << " limit=" << std::dec << limit;
+    log_.record("getCallGraph", oss.str(),
+                std::to_string(result.size()) + " edges", elapsedMs(t0));
+
+    return AgentApiResult<std::vector<CallGraphEdge>>::ok(std::move(result));
+}
+
+// ---------------------------------------------------------------------------
+// Debug State (Stage 6.1 §21)
+// ---------------------------------------------------------------------------
+
+DebugStateResult AgentApi::getDebugState()
+{
+    auto t0 = std::chrono::steady_clock::now();
+
+    DebugStateResult result;
+    result.running = !backend_.isPaused();
+    result.cpu = backend_.getCpuState();
+    result.breakpoints = backend_.getBreakpoints();
+
+    // Disassemble current instruction
+    auto readByte = [this](uint16_t addr) -> uint8_t {
+        return backend_.readMemory(addr);
+    };
+    DisassembledInstruction di = ::disassemble(result.cpu.pc, readByte);
+    result.current_instruction = di.text;
+
+    // Look up function name at PC
+    const auto &db = backend_.symbolDatabase();
+    const DebugSymbol *sym = db.findSymbol(result.cpu.pc);
+    if (sym) {
+        result.current_function = sym->name;
+    }
+
+    std::ostringstream oss;
+    oss << "pc=" << std::hex << result.cpu.pc
+        << " running=" << result.running
+        << " bps=" << std::dec << result.breakpoints.size();
+    log_.record("getDebugState", "", oss.str(), elapsedMs(t0));
+
+    return result;
+}
+
 // ---------------------------------------------------------------------------
 // Agent log
 // ---------------------------------------------------------------------------
@@ -391,7 +982,7 @@ AgentApi::disassembleFunction(uint16_t address)
             break;
         }
 
-        DisassembledInstruction di = disassemble(pc, readByte);
+        DisassembledInstruction di = ::disassemble(pc, readByte);
 
         FunctionContext::Instruction fi;
         fi.address = di.address;

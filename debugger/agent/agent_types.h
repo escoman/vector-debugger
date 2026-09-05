@@ -4,11 +4,12 @@
 
 #include <chrono>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
 // ---------------------------------------------------------------------------
-// Agent Types — Stage 5.3.1
+// Agent Types — Stage 5.3.1 / Stage 6.1
 //
 // Data structures used by the Agent API for high-level analysis results,
 // annotations, and operation logging.
@@ -18,6 +19,97 @@
 //
 // No dependency on Board, Memory, CPU, IO, ImGui, or SDL.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// ErrorCode — Stage 6.1
+//
+// Uniform error classification for all Agent API operations.
+// Designed for future JSON/MCP serialization.
+// ---------------------------------------------------------------------------
+
+enum class ErrorCode
+{
+    None = 0,
+    InvalidArgument,
+    InvalidAddress,
+    InvalidRange,
+    NoRomLoaded,
+    NotPaused,
+    NotRunning,
+    OperationFailed,
+    Timeout,
+    Unsupported
+};
+
+// ---------------------------------------------------------------------------
+// AgentApiResult<T> — Stage 6.1
+//
+// Uniform result wrapper for all Agent API operations.
+// Every operation returns success/failure + typed value or error info.
+// JSON-ready: no pointers, no std::function, no internal types.
+//
+// Usage:
+//   auto result = api.someOperation();
+//   if (result.success) { use(result.value); }
+//   else { handle(result.error_code, result.error_message); }
+// ---------------------------------------------------------------------------
+
+template <typename T>
+struct AgentApiResult
+{
+    bool        success = false;
+    T           value{};
+    ErrorCode   error_code = ErrorCode::None;
+    std::string error_message;
+
+    // Factory: success
+    static AgentApiResult ok(T val) {
+        AgentApiResult r;
+        r.success = true;
+        r.value = std::move(val);
+        return r;
+    }
+
+    // Factory: success (void-like, no value)
+    static AgentApiResult ok() {
+        AgentApiResult r;
+        r.success = true;
+        return r;
+    }
+
+    // Factory: failure
+    static AgentApiResult fail(ErrorCode code, std::string message) {
+        AgentApiResult r;
+        r.success = false;
+        r.error_code = code;
+        r.error_message = std::move(message);
+        return r;
+    }
+};
+
+// Specialization for void — no value field used
+// Usage: AgentApiResult<void> for operations that don't return data
+template <>
+struct AgentApiResult<void>
+{
+    bool        success = false;
+    ErrorCode   error_code = ErrorCode::None;
+    std::string error_message;
+
+    static AgentApiResult ok() {
+        AgentApiResult r;
+        r.success = true;
+        return r;
+    }
+
+    static AgentApiResult fail(ErrorCode code, std::string message) {
+        AgentApiResult r;
+        r.success = false;
+        r.error_code = code;
+        r.error_message = std::move(message);
+        return r;
+    }
+};
 
 // ---------------------------------------------------------------------------
 // Trace-attributed access types (Sections 11, 12, 13)
@@ -211,4 +303,185 @@ struct AgentLogEntry
     double executionTimeMs = 0;
     bool success = true;
     std::string error;
+};
+
+// ---------------------------------------------------------------------------
+// DisassembledInstructionResult — Stage 6.1 (§10)
+//
+// Single instruction from disassemble(address, count).
+// JSON-ready: no pointers, no internal types.
+// ---------------------------------------------------------------------------
+
+struct DisassembledInstructionResult
+{
+    uint16_t    address = 0;
+    uint16_t    next_address = 0;
+    std::vector<uint8_t> bytes;
+    std::string mnemonic;
+    std::string operands;
+    std::string text;   // "MNEMONIC OPERANDS"
+};
+
+// ---------------------------------------------------------------------------
+// InstructionHistoryEntry — Stage 6.1 (§11)
+//
+// Single entry from getInstructionHistory(count).
+// Distinct from getExecutionTrace() — this is the last N executed
+// instructions, not a filtered/limited trace.
+// ---------------------------------------------------------------------------
+
+struct InstructionHistoryEntry
+{
+    uint16_t address = 0;
+    std::vector<uint8_t> bytes;
+    std::string disassembly;
+    uint16_t next_address = 0;
+};
+
+// ---------------------------------------------------------------------------
+// StackEntry — Stage 6.1 (§13)
+//
+// Single entry from getStack(limit).
+// Reads 16-bit values from memory starting at SP.
+// ---------------------------------------------------------------------------
+
+struct StackEntry
+{
+    uint16_t    address = 0;     // memory address of this stack slot
+    uint16_t    value = 0;       // 16-bit value at this address
+    std::string symbol;          // symbol name if known, empty otherwise
+};
+
+// ---------------------------------------------------------------------------
+// MemoryMapBlock — Stage 6.1 (§18)
+//
+// Single block from getMemoryMap().
+// The full 64 KB is divided into 256 blocks of 256 bytes each.
+// ---------------------------------------------------------------------------
+
+struct MemoryMapBlock
+{
+    uint16_t start = 0;
+    uint16_t end = 0;            // inclusive
+    enum class Classification { Unknown, Code, Data };
+    Classification classification = Classification::Unknown;
+    uint64_t read_activity = 0;
+    uint64_t write_activity = 0;
+    uint64_t execute_activity = 0;
+    bool     has_content = false; // true if any byte != 0
+};
+
+// ---------------------------------------------------------------------------
+// ScreenInfoResult — Stage 6.1 (§20)
+//
+// Structured screen state from getScreenInfo().
+// No pixel data — just mode parameters.
+// ---------------------------------------------------------------------------
+
+struct ScreenInfoResult
+{
+    int      width = 0;
+    int      height = 0;
+    int      visible_width = 0;
+    int      visible_height = 0;
+    bool     mode512 = false;
+    int      scroll_value = 0;
+    uint16_t vram_base = 0xC000;
+    int      pixels_per_byte = 8;
+};
+
+// ---------------------------------------------------------------------------
+// VramPlaneInfo — Stage 6.1 (§19)
+//
+// Describes one VRAM bit-plane region.
+// ---------------------------------------------------------------------------
+
+struct VramPlaneInfo
+{
+    int      plane = 0;          // 0..3
+    uint16_t address = 0;        // base address of this plane
+    uint16_t size = 0;           // size in bytes (typically 8192)
+};
+
+// ---------------------------------------------------------------------------
+// VramInfoResult — Stage 6.1 (§19)
+//
+// Result of getVramInfo().
+// Describes the VRAM layout for the current video mode.
+// ---------------------------------------------------------------------------
+
+struct VramInfoResult
+{
+    bool     mode512 = false;
+    uint16_t vram_base = 0xC000;
+    int      scroll_value = 0;
+    std::vector<VramPlaneInfo> planes;
+};
+
+// ---------------------------------------------------------------------------
+// SymbolInfo — Stage 6.1 (§15)
+//
+// Single entry from getSymbols().
+// ---------------------------------------------------------------------------
+
+struct SymbolInfo
+{
+    uint16_t    address = 0;
+    std::string name;
+    enum class Type { Function, Label };
+    Type        type = Type::Function;
+    std::string comment;
+};
+
+// ---------------------------------------------------------------------------
+// XrefResult — Stage 6.1 (§16)
+//
+// Single entry from getXrefs().
+// ---------------------------------------------------------------------------
+
+struct XrefResult
+{
+    uint16_t from = 0;
+    uint16_t to = 0;
+};
+
+// ---------------------------------------------------------------------------
+// CallGraphEdge — Stage 6.1 (§17)
+//
+// Single entry from getCallGraph().
+// ---------------------------------------------------------------------------
+
+struct CallGraphEdge
+{
+    uint16_t from = 0;
+    uint16_t to = 0;
+};
+
+// ---------------------------------------------------------------------------
+// LoadRomResult — Stage 6.1 (§4)
+//
+// Structured result of loadRomInfo().
+// ---------------------------------------------------------------------------
+
+struct LoadRomResult
+{
+    std::string path;
+    uint32_t    origin = 0;
+    uint16_t    pc = 0;
+};
+
+// ---------------------------------------------------------------------------
+// DebugStateResult — Stage 6.1 (§21)
+//
+// High-level debugger state from getDebugState().
+// One-call snapshot for the AI agent.
+// ---------------------------------------------------------------------------
+
+struct DebugStateResult
+{
+    bool        running = false;
+    CpuState    cpu{};
+    std::vector<DebuggerBreakpoint> breakpoints;
+    std::string current_instruction;   // disassembly at PC
+    std::string current_function;      // symbol name at PC (if any)
 };

@@ -1,4 +1,4 @@
-// Agent API tests — Stage 5.3
+// Agent API tests — Stage 5.3 / Stage 6.1
 //
 // Unit tests for AgentApi using MockAgentBackend.
 // No Board, SDL, or emulator dependency.
@@ -562,13 +562,802 @@ static void test_comment_nonexistent()
 }
 
 // ---------------------------------------------------------------------------
+// Tests: Stage 6.1 — ErrorCode and AgentApiResult
+// ---------------------------------------------------------------------------
+
+static void test_agent_api_result_ok()
+{
+    TEST_BEGIN("AgentApiResult::ok factory");
+    auto r = AgentApiResult<int>::ok(42);
+    CHECK(r.success, "success is true");
+    CHECK_EQ(42u, (unsigned)r.value, "value is 42");
+    CHECK(r.error_code == ErrorCode::None, "error_code is None");
+    CHECK(r.error_message.empty(), "error_message is empty");
+    TEST_END();
+}
+
+static void test_agent_api_result_fail()
+{
+    TEST_BEGIN("AgentApiResult::fail factory");
+    auto r = AgentApiResult<int>::fail(ErrorCode::InvalidArgument, "bad arg");
+    CHECK(!r.success, "success is false");
+    CHECK(r.error_code == ErrorCode::InvalidArgument, "error_code is InvalidArgument");
+    CHECK_STR("bad arg", r.error_message, "error_message matches");
+    TEST_END();
+}
+
+static void test_agent_api_result_void()
+{
+    TEST_BEGIN("AgentApiResult<void> factory");
+    auto ok = AgentApiResult<void>::ok();
+    CHECK(ok.success, "void ok success");
+    CHECK(ok.error_code == ErrorCode::None, "void ok no error");
+
+    auto fail = AgentApiResult<void>::fail(ErrorCode::OperationFailed, "oops");
+    CHECK(!fail.success, "void fail not success");
+    CHECK(fail.error_code == ErrorCode::OperationFailed, "void fail error code");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Stage 6.1 — isRunning()
+// ---------------------------------------------------------------------------
+
+static void test_is_running_initially()
+{
+    TEST_BEGIN("isRunning initially false (paused)");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    CHECK(!api.isRunning(), "not running when paused");
+    CHECK(mock.isPaused(), "backend confirms paused");
+    TEST_END();
+}
+
+static void test_is_running_after_run()
+{
+    TEST_BEGIN("isRunning after run/pause cycle");
+    MockAgentBackend mock;
+
+    // Fill with NOPs so run hits safety limit and pauses
+    std::vector<uint8_t> nops(256, 0x00);
+    mock.setMemory(0x0100, nops);
+
+    AgentApi api(mock);
+    api.run();
+    // Mock runs synchronously until HLT/limit, then pauses
+    CHECK(!api.isRunning(), "not running after mock run completes");
+    CHECK(mock.isPaused(), "backend paused after run");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Stage 6.1 — clearAllBreakpoints()
+// ---------------------------------------------------------------------------
+
+static void test_clear_all_breakpoints()
+{
+    TEST_BEGIN("clearAllBreakpoints removes all");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    api.setBreakpoint(0x0200);
+    api.setBreakpoint(0x0300);
+    api.setBreakpoint(0x0400);
+    CHECK_EQ(3u, (unsigned)api.listBreakpoints().size(), "3 breakpoints");
+
+    auto r = api.clearAllBreakpoints();
+    CHECK(r.success, "clearAll succeeds");
+    CHECK(r.error_code == ErrorCode::None, "no error");
+    CHECK_EQ(0u, (unsigned)api.listBreakpoints().size(), "0 breakpoints after clear");
+    TEST_END();
+}
+
+static void test_clear_all_breakpoints_empty()
+{
+    TEST_BEGIN("clearAllBreakpoints on empty list");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto r = api.clearAllBreakpoints();
+    CHECK(r.success, "clearAll on empty succeeds");
+    CHECK_EQ(0u, (unsigned)api.listBreakpoints().size(), "still 0 breakpoints");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Stage 6.1 — setRegister()
+// ---------------------------------------------------------------------------
+
+static void test_set_register_a()
+{
+    TEST_BEGIN("setRegister A");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto r = api.setRegister("A", 0xAA);
+    CHECK(r.success, "setRegister A succeeds");
+    CHECK_EQ(0xAAu, (unsigned)api.getCpuState().a, "A = 0xAA");
+    TEST_END();
+}
+
+static void test_set_register_f_preserves_a()
+{
+    TEST_BEGIN("setRegister F preserves A");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    api.setRegister("A", 0x55);
+    auto r = api.setRegister("F", 0x03);
+    CHECK(r.success, "setRegister F succeeds");
+    CHECK_EQ(0x55u, (unsigned)api.getCpuState().a, "A preserved");
+    CHECK_EQ(0x03u, (unsigned)api.getCpuState().flags, "F = 0x03");
+    TEST_END();
+}
+
+static void test_set_register_bc()
+{
+    TEST_BEGIN("setRegister B and C");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    api.setRegister("B", 0x12);
+    api.setRegister("C", 0x34);
+    CHECK_EQ(0x12u, (unsigned)api.getCpuState().b, "B = 0x12");
+    CHECK_EQ(0x34u, (unsigned)api.getCpuState().c, "C = 0x34");
+    TEST_END();
+}
+
+static void test_set_register_hl()
+{
+    TEST_BEGIN("setRegister H and L");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    api.setRegister("H", 0xDE);
+    api.setRegister("L", 0xAD);
+    CHECK_EQ(0xDEu, (unsigned)api.getCpuState().h, "H = 0xDE");
+    CHECK_EQ(0xADu, (unsigned)api.getCpuState().l, "L = 0xAD");
+    TEST_END();
+}
+
+static void test_set_register_pc()
+{
+    TEST_BEGIN("setRegister PC");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto r = api.setRegister("PC", 0x8000);
+    CHECK(r.success, "setRegister PC succeeds");
+    CHECK_EQ(0x8000u, (unsigned)api.getCpuState().pc, "PC = 0x8000");
+    TEST_END();
+}
+
+static void test_set_register_sp()
+{
+    TEST_BEGIN("setRegister SP");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto r = api.setRegister("SP", 0xF000);
+    CHECK(r.success, "setRegister SP succeeds");
+    CHECK_EQ(0xF000u, (unsigned)api.getCpuState().sp, "SP = 0xF000");
+    TEST_END();
+}
+
+static void test_set_register_invalid()
+{
+    TEST_BEGIN("setRegister invalid name");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto r = api.setRegister("X", 0x42);
+    CHECK(!r.success, "invalid register fails");
+    CHECK(r.error_code == ErrorCode::InvalidArgument, "error is InvalidArgument");
+    CHECK(!r.error_message.empty(), "error message provided");
+    TEST_END();
+}
+
+static void test_set_register_empty_name()
+{
+    TEST_BEGIN("setRegister empty name");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto r = api.setRegister("", 0x42);
+    CHECK(!r.success, "empty name fails");
+    CHECK(r.error_code == ErrorCode::InvalidArgument, "error is InvalidArgument");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Stage 6.1 — disassemble()
+// ---------------------------------------------------------------------------
+
+static void test_disassemble_basic()
+{
+    TEST_BEGIN("disassemble basic program");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    // Program at 0x0100: LXI SP,0xF800 (31 00 F8), MVI A,0x55 (3E 55)
+    auto r = api.disassemble(0x0100, 2);
+    CHECK(r.success, "disassemble succeeds");
+    CHECK(r.error_code == ErrorCode::None, "no error");
+    CHECK_EQ(2u, (unsigned)r.value.size(), "2 instructions");
+
+    // First: LXI SP, 0xF800
+    CHECK_EQ(0x0100u, (unsigned)r.value[0].address, "first addr 0100");
+    CHECK_EQ(0x0103u, (unsigned)r.value[0].next_address, "first next_addr 0103");
+    CHECK_EQ(3u, (unsigned)r.value[0].bytes.size(), "3 bytes");
+    CHECK_EQ(0x31u, (unsigned)r.value[0].bytes[0], "opcode 0x31");
+
+    // Second: MVI A, 0x55
+    CHECK_EQ(0x0103u, (unsigned)r.value[1].address, "second addr 0103");
+    CHECK_EQ(0x0105u, (unsigned)r.value[1].next_address, "second next_addr 0105");
+    CHECK_EQ(2u, (unsigned)r.value[1].bytes.size(), "2 bytes");
+    CHECK_EQ(0x3Eu, (unsigned)r.value[1].bytes[0], "opcode 0x3E");
+    TEST_END();
+}
+
+static void test_disassemble_single_instruction()
+{
+    TEST_BEGIN("disassemble single instruction");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto r = api.disassemble(0x0100, 1);
+    CHECK(r.success, "disassemble succeeds");
+    CHECK_EQ(1u, (unsigned)r.value.size(), "1 instruction");
+    CHECK(!r.value[0].text.empty(), "text is non-empty");
+    CHECK(!r.value[0].mnemonic.empty(), "mnemonic is non-empty");
+    TEST_END();
+}
+
+static void test_disassemble_count_zero()
+{
+    TEST_BEGIN("disassemble count=0 fails");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto r = api.disassemble(0x0100, 0);
+    CHECK(!r.success, "count=0 fails");
+    CHECK(r.error_code == ErrorCode::InvalidArgument, "error is InvalidArgument");
+    TEST_END();
+}
+
+static void test_disassemble_hlt()
+{
+    TEST_BEGIN("disassemble HLT instruction");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    // HLT at 0x0108
+    auto r = api.disassemble(0x0108, 1);
+    CHECK(r.success, "disassemble succeeds");
+    CHECK_EQ(1u, (unsigned)r.value.size(), "1 instruction");
+    CHECK_EQ(0x76u, (unsigned)r.value[0].bytes[0], "opcode 0x76 (HLT)");
+    CHECK_EQ(1u, (unsigned)r.value[0].bytes.size(), "1 byte");
+    CHECK_EQ(0x0109u, (unsigned)r.value[0].next_address, "next_addr 0109");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Stage 6.1 — getInstructionHistory()
+// ---------------------------------------------------------------------------
+
+static void test_get_instruction_history_after_steps()
+{
+    TEST_BEGIN("getInstructionHistory after stepping");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    // Step a few instructions
+    api.step();  // LXI SP at 0100
+    api.step();  // MVI A at 0103
+    api.step();  // CALL at 0105
+
+    auto r = api.getInstructionHistory(10);
+    CHECK(r.success, "getInstructionHistory succeeds");
+    CHECK(r.error_code == ErrorCode::None, "no error");
+    CHECK(r.value.size() >= 3, "at least 3 entries");
+
+    // First entry should be at 0x0100
+    CHECK_EQ(0x0100u, (unsigned)r.value[0].address, "first entry at 0100");
+    // Second at 0x0103
+    CHECK_EQ(0x0103u, (unsigned)r.value[1].address, "second entry at 0103");
+    // Third at 0x0105
+    CHECK_EQ(0x0105u, (unsigned)r.value[2].address, "third entry at 0105");
+
+    // Each entry should have bytes and disassembly
+    CHECK(!r.value[0].bytes.empty(), "first entry has bytes");
+    CHECK(!r.value[0].disassembly.empty(), "first entry has disassembly");
+    TEST_END();
+}
+
+static void test_get_instruction_history_limit()
+{
+    TEST_BEGIN("getInstructionHistory respects limit");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    api.step();
+    api.step();
+    api.step();
+
+    auto r = api.getInstructionHistory(2);
+    CHECK(r.success, "succeeds");
+    CHECK_EQ(2u, (unsigned)r.value.size(), "limited to 2 entries");
+    // Should be the LAST 2 entries
+    CHECK_EQ(0x0103u, (unsigned)r.value[0].address, "first of last 2 at 0103");
+    CHECK_EQ(0x0105u, (unsigned)r.value[1].address, "second of last 2 at 0105");
+    TEST_END();
+}
+
+static void test_get_instruction_history_count_zero()
+{
+    TEST_BEGIN("getInstructionHistory count=0 fails");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto r = api.getInstructionHistory(0);
+    CHECK(!r.success, "count=0 fails");
+    CHECK(r.error_code == ErrorCode::InvalidArgument, "error is InvalidArgument");
+    TEST_END();
+}
+
+static void test_get_instruction_history_empty()
+{
+    TEST_BEGIN("getInstructionHistory with no history");
+    MockAgentBackend mock;
+    // Don't step — mock has pre-populated events from constructor? No, only from simulateStep.
+    AgentApi api(mock);
+
+    auto r = api.getInstructionHistory(10);
+    CHECK(r.success, "succeeds even with empty history");
+    CHECK_EQ(0u, (unsigned)r.value.size(), "0 entries");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Stage 6.1 Iteration 2 — getStack (§13)
+// ---------------------------------------------------------------------------
+
+static void test_get_stack_basic()
+{
+    TEST_BEGIN("getStack returns SP entries");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    // SP = 0xF800, memory is zeroed
+    auto r = api.getStack(4);
+    CHECK(r.success, "getStack succeeds");
+    CHECK_EQ(4u, (unsigned)r.value.size(), "4 entries");
+    CHECK_EQ(0xF800u, (unsigned)r.value[0].address, "first entry at SP");
+    CHECK_EQ(0xF802u, (unsigned)r.value[1].address, "second entry at SP+2");
+    CHECK_EQ(0xF804u, (unsigned)r.value[2].address, "third entry at SP+4");
+    CHECK_EQ(0xF806u, (unsigned)r.value[3].address, "fourth entry at SP+6");
+    // Values are 0 (memory is zeroed)
+    CHECK_EQ(0x0000u, (unsigned)r.value[0].value, "first value = 0");
+    TEST_END();
+}
+
+static void test_get_stack_with_data()
+{
+    TEST_BEGIN("getStack reads 16-bit values from memory");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    // Write known values at SP
+    // SP = 0xF800: lo=0x34, hi=0x12 → value = 0x1234
+    mock.setMemory(0xF800, {0x34, 0x12});
+    // SP+2: lo=0xAB, hi=0xCD → value = 0xCDAB
+    mock.setMemory(0xF802, {0xAB, 0xCD});
+
+    auto r = api.getStack(2);
+    CHECK(r.success, "succeeds");
+    CHECK_EQ(0x1234u, (unsigned)r.value[0].value, "first value = 0x1234");
+    CHECK_EQ(0xCDABu, (unsigned)r.value[1].value, "second value = 0xCDAB");
+    TEST_END();
+}
+
+static void test_get_stack_with_symbols()
+{
+    TEST_BEGIN("getStack resolves symbols");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    // Create a symbol at 0x0200
+    mock.requestCreateFunction(0x0200, "myFunc");
+
+    // Write 0x0200 at SP
+    mock.setMemory(0xF800, {0x00, 0x02});
+
+    auto r = api.getStack(1);
+    CHECK(r.success, "succeeds");
+    CHECK_EQ(0x0200u, (unsigned)r.value[0].value, "value = 0x0200");
+    CHECK_STR("myFunc", r.value[0].symbol, "symbol resolved");
+    TEST_END();
+}
+
+static void test_get_stack_limit_zero()
+{
+    TEST_BEGIN("getStack limit=0 fails");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto r = api.getStack(0);
+    CHECK(!r.success, "limit=0 fails");
+    CHECK(r.error_code == ErrorCode::InvalidArgument, "InvalidArgument");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Stage 6.1 Iteration 2 — getMemoryMap (§18)
+// ---------------------------------------------------------------------------
+
+static void test_get_memory_map()
+{
+    TEST_BEGIN("getMemoryMap returns 256 blocks");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto r = api.getMemoryMap();
+    CHECK(r.success, "succeeds");
+    CHECK_EQ(256u, (unsigned)r.value.size(), "256 blocks");
+
+    // First block: 0x0000-0x00FF
+    CHECK_EQ(0x0000u, (unsigned)r.value[0].start, "block 0 start");
+    CHECK_EQ(0x00FFu, (unsigned)r.value[0].end, "block 0 end");
+
+    // Last block: 0xFF00-0xFFFF
+    CHECK_EQ(0xFF00u, (unsigned)r.value[255].start, "block 255 start");
+    CHECK_EQ(0xFFFFu, (unsigned)r.value[255].end, "block 255 end");
+    TEST_END();
+}
+
+static void test_get_memory_map_has_content()
+{
+    TEST_BEGIN("getMemoryMap detects non-zero content");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    // Mock has program at 0x0100-0x0208, so block 1 (0x0100-0x01FF) and
+    // block 2 (0x0200-0x02FF) should have content
+    auto r = api.getMemoryMap();
+    CHECK(r.success, "succeeds");
+    CHECK(r.value[1].has_content, "block 1 (0x0100-0x01FF) has content");
+    CHECK(r.value[2].has_content, "block 2 (0x0200-0x02FF) has content");
+    CHECK(!r.value[10].has_content, "block 10 (0x0A00-0x0AFF) is empty");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Stage 6.1 Iteration 2 — getScreenInfo (§20)
+// ---------------------------------------------------------------------------
+
+static void test_get_screen_info()
+{
+    TEST_BEGIN("getScreenInfo returns video mode");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto r = api.getScreenInfo();
+    CHECK(r.success, "succeeds");
+    CHECK_EQ(576u, (unsigned)r.value.width, "width = 576");
+    CHECK_EQ(288u, (unsigned)r.value.height, "height = 288");
+    CHECK_EQ(512u, (unsigned)r.value.visible_width, "visible_width = 512");
+    CHECK_EQ(256u, (unsigned)r.value.visible_height, "visible_height = 256");
+    CHECK(!r.value.mode512, "256-mode by default");
+    CHECK_EQ(0xC000u, (unsigned)r.value.vram_base, "vram_base = 0xC000");
+    CHECK_EQ(8u, (unsigned)r.value.pixels_per_byte, "pixels_per_byte = 8");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Stage 6.1 Iteration 2 — getVramInfo (§19)
+// ---------------------------------------------------------------------------
+
+static void test_get_vram_info()
+{
+    TEST_BEGIN("getVramInfo returns 4 planes");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto r = api.getVramInfo();
+    CHECK(r.success, "succeeds");
+    CHECK_EQ(4u, (unsigned)r.value.planes.size(), "4 planes");
+    CHECK(!r.value.mode512, "256-mode");
+    CHECK_EQ(0xC000u, (unsigned)r.value.vram_base, "vram_base = 0xC000");
+
+    // Plane 0: 0xE000, Plane 1: 0xC000, Plane 2: 0xA000, Plane 3: 0x8000
+    CHECK_EQ(0u, (unsigned)r.value.planes[0].plane, "plane 0 index");
+    CHECK_EQ(0xE000u, (unsigned)r.value.planes[0].address, "plane 0 addr");
+    CHECK_EQ(8192u, (unsigned)r.value.planes[0].size, "plane 0 size");
+
+    CHECK_EQ(1u, (unsigned)r.value.planes[1].plane, "plane 1 index");
+    CHECK_EQ(0xC000u, (unsigned)r.value.planes[1].address, "plane 1 addr");
+
+    CHECK_EQ(3u, (unsigned)r.value.planes[3].plane, "plane 3 index");
+    CHECK_EQ(0x8000u, (unsigned)r.value.planes[3].address, "plane 3 addr");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Stage 6.1 Iteration 2 — getSymbols / getFunction (§15)
+// ---------------------------------------------------------------------------
+
+static void test_get_symbols_empty()
+{
+    TEST_BEGIN("getSymbols with no symbols");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto r = api.getSymbols();
+    CHECK(r.success, "succeeds");
+    CHECK_EQ(0u, (unsigned)r.value.size(), "0 symbols");
+    TEST_END();
+}
+
+static void test_get_symbols_with_data()
+{
+    TEST_BEGIN("getSymbols returns created symbols");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    mock.requestCreateFunction(0x0200, "myFunc");
+    mock.requestAddLabel(0x0300, "myLabel");
+
+    auto r = api.getSymbols();
+    CHECK(r.success, "succeeds");
+    CHECK_EQ(2u, (unsigned)r.value.size(), "2 symbols");
+
+    // Sorted by address: 0x0200 first, 0x0300 second
+    CHECK_EQ(0x0200u, (unsigned)r.value[0].address, "first addr");
+    CHECK_STR("myFunc", r.value[0].name, "first name");
+    CHECK(r.value[0].type == SymbolInfo::Type::Function, "first is Function");
+
+    CHECK_EQ(0x0300u, (unsigned)r.value[1].address, "second addr");
+    CHECK_STR("myLabel", r.value[1].name, "second name");
+    CHECK(r.value[1].type == SymbolInfo::Type::Label, "second is Label");
+    TEST_END();
+}
+
+static void test_get_symbols_with_limit()
+{
+    TEST_BEGIN("getSymbols with limit");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    mock.requestCreateFunction(0x0200, "func1");
+    mock.requestAddLabel(0x0300, "label1");
+    mock.requestCreateFunction(0x0400, "func2");
+
+    auto r = api.getSymbols(2);
+    CHECK(r.success, "succeeds");
+    CHECK_EQ(2u, (unsigned)r.value.size(), "limited to 2");
+    TEST_END();
+}
+
+static void test_get_function_found()
+{
+    TEST_BEGIN("getFunction finds existing symbol");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    mock.requestCreateFunction(0x0200, "myFunc");
+
+    auto r = api.getFunction(0x0200);
+    CHECK(r.success, "found");
+    CHECK_STR("myFunc", r.value.name, "name matches");
+    CHECK_EQ(0x0200u, (unsigned)r.value.address, "address matches");
+    CHECK(r.value.type == SymbolInfo::Type::Function, "is Function");
+    TEST_END();
+}
+
+static void test_get_function_not_found()
+{
+    TEST_BEGIN("getFunction fails for unknown address");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto r = api.getFunction(0x9999);
+    CHECK(!r.success, "not found");
+    CHECK(r.error_code == ErrorCode::InvalidAddress, "InvalidAddress");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Stage 6.1 Iteration 2 — getXrefs (§16)
+// ---------------------------------------------------------------------------
+
+static void test_get_xrefs_empty()
+{
+    TEST_BEGIN("getXrefs with no xrefs");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto r = api.getXrefs(0x0200);
+    CHECK(r.success, "succeeds");
+    CHECK_EQ(0u, (unsigned)r.value.size(), "0 xrefs");
+    TEST_END();
+}
+
+static void test_get_xrefs_with_data()
+{
+    TEST_BEGIN("getXrefs returns xrefs after rebuild");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    // The mock has CALL 0x0200 at address 0x0105 (CD 00 02)
+    // Rebuild xrefs to detect it
+    auto readByte = [&mock](uint16_t addr) -> uint8_t {
+        return mock.readMemory(addr);
+    };
+    mock.symbolDatabase().rebuildXrefs(readByte);
+
+    auto r = api.getXrefs(0x0200);
+    CHECK(r.success, "succeeds");
+    CHECK(r.value.size() > 0, "has xrefs to 0x0200");
+    CHECK_EQ(0x0105u, (unsigned)r.value[0].from, "xref from 0x0105");
+    CHECK_EQ(0x0200u, (unsigned)r.value[0].to, "xref to 0x0200");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Stage 6.1 Iteration 2 — getCallGraph (§17)
+// ---------------------------------------------------------------------------
+
+static void test_get_call_graph()
+{
+    TEST_BEGIN("getCallGraph returns edges");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    // Rebuild xrefs so call graph has data
+    auto readByte = [&mock](uint16_t addr) -> uint8_t {
+        return mock.readMemory(addr);
+    };
+    mock.symbolDatabase().rebuildXrefs(readByte);
+
+    // Get all edges
+    auto r = api.getCallGraph();
+    CHECK(r.success, "succeeds");
+    // Mock has CALL 0x0200 at 0x0105
+    CHECK(r.value.size() > 0, "has at least 1 edge");
+
+    bool found = false;
+    for (const auto &e : r.value) {
+        if (e.from == 0x0105 && e.to == 0x0200) {
+            found = true;
+            break;
+        }
+    }
+    CHECK(found, "found CALL 0x0200 edge");
+    TEST_END();
+}
+
+static void test_get_call_graph_filtered()
+{
+    TEST_BEGIN("getCallGraph filtered by address");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto readByte = [&mock](uint16_t addr) -> uint8_t {
+        return mock.readMemory(addr);
+    };
+    mock.symbolDatabase().rebuildXrefs(readByte);
+
+    // Filter for address 0x0200
+    auto r = api.getCallGraph(0x0200);
+    CHECK(r.success, "succeeds");
+    CHECK(r.value.size() > 0, "has edges involving 0x0200");
+    for (const auto &e : r.value) {
+        CHECK(e.from == 0x0200 || e.to == 0x0200, "edge involves 0x0200");
+    }
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Stage 6.1 Iteration 2 — loadRomInfo (§4)
+// ---------------------------------------------------------------------------
+
+static void test_load_rom_info()
+{
+    TEST_BEGIN("loadRomInfo returns structured result");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto r = api.loadRomInfo("test.rom");
+    CHECK(r.success, "succeeds");
+    CHECK_STR("test.rom", r.value.path, "path matches");
+    CHECK_EQ(0x0100u, (unsigned)r.value.origin, ".rom origin = 0x0100");
+    // PC is whatever the mock returns after load (mock doesn't change PC in loadRom)
+    // So PC stays at 0x0100 (initial)
+    CHECK_EQ(0x0100u, (unsigned)r.value.pc, "pc after load");
+    TEST_END();
+}
+
+static void test_load_rom_info_r0m()
+{
+    TEST_BEGIN("loadRomInfo .r0m origin = 0x0000");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto r = api.loadRomInfo("game.r0m");
+    CHECK(r.success, "succeeds");
+    CHECK_EQ(0x0000u, (unsigned)r.value.origin, ".r0m origin = 0x0000");
+    TEST_END();
+}
+
+static void test_load_rom_info_explicit_org()
+{
+    TEST_BEGIN("loadRomInfo with explicit org");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto r = api.loadRomInfo("data.bin", 0x8000);
+    CHECK(r.success, "succeeds");
+    CHECK_EQ(0x8000u, (unsigned)r.value.origin, "explicit org = 0x8000");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Stage 6.1 Iteration 2 — getDebugState (§21)
+// ---------------------------------------------------------------------------
+
+static void test_get_debug_state()
+{
+    TEST_BEGIN("getDebugState returns full snapshot");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto r = api.getDebugState();
+    CHECK(!r.running, "not running (paused)");
+    CHECK_EQ(0x0100u, (unsigned)r.cpu.pc, "PC = 0x0100");
+    CHECK_EQ(0xF800u, (unsigned)r.cpu.sp, "SP = 0xF800");
+    CHECK_EQ(0x42u, (unsigned)r.cpu.a, "A = 0x42");
+    CHECK_EQ(0u, (unsigned)r.breakpoints.size(), "no breakpoints");
+    // Current instruction at PC=0x0100: LXI SP, 0xF800
+    CHECK(!r.current_instruction.empty(), "has current instruction");
+    TEST_END();
+}
+
+static void test_get_debug_state_with_breakpoint()
+{
+    TEST_BEGIN("getDebugState includes breakpoints");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    api.setBreakpoint(0x0200);
+
+    auto r = api.getDebugState();
+    CHECK_EQ(1u, (unsigned)r.breakpoints.size(), "1 breakpoint");
+    CHECK_EQ(0x0200u, (unsigned)r.breakpoints[0].address, "at 0x0200");
+    TEST_END();
+}
+
+static void test_get_debug_state_with_function()
+{
+    TEST_BEGIN("getDebugState resolves current function");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    mock.requestCreateFunction(0x0100, "main");
+
+    auto r = api.getDebugState();
+    CHECK_STR("main", r.current_function, "current function = main");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
 int main()
 {
     printf("\n\033[1;33m========================================\033[0m\n");
-    printf("\033[1;33m  Agent API Tests — Stage 5.3\033[0m\n");
+    printf("\033[1;33m  Agent API Tests — Stage 5.3 / 6.1\033[0m\n");
     printf("\033[1;33m========================================\033[0m\n");
 
     // Execution control
@@ -612,6 +1401,82 @@ int main()
     test_read_memory_zero_size();
     test_rename_nonexistent();
     test_comment_nonexistent();
+
+    // Stage 6.1 — ErrorCode / AgentApiResult
+    test_agent_api_result_ok();
+    test_agent_api_result_fail();
+    test_agent_api_result_void();
+
+    // Stage 6.1 — isRunning
+    test_is_running_initially();
+    test_is_running_after_run();
+
+    // Stage 6.1 — clearAllBreakpoints
+    test_clear_all_breakpoints();
+    test_clear_all_breakpoints_empty();
+
+    // Stage 6.1 — setRegister
+    test_set_register_a();
+    test_set_register_f_preserves_a();
+    test_set_register_bc();
+    test_set_register_hl();
+    test_set_register_pc();
+    test_set_register_sp();
+    test_set_register_invalid();
+    test_set_register_empty_name();
+
+    // Stage 6.1 — disassemble
+    test_disassemble_basic();
+    test_disassemble_single_instruction();
+    test_disassemble_count_zero();
+    test_disassemble_hlt();
+
+    // Stage 6.1 — getInstructionHistory
+    test_get_instruction_history_after_steps();
+    test_get_instruction_history_limit();
+    test_get_instruction_history_count_zero();
+    test_get_instruction_history_empty();
+
+    // Stage 6.1 Iteration 2 — getStack (§13)
+    test_get_stack_basic();
+    test_get_stack_with_data();
+    test_get_stack_with_symbols();
+    test_get_stack_limit_zero();
+
+    // Stage 6.1 Iteration 2 — getMemoryMap (§18)
+    test_get_memory_map();
+    test_get_memory_map_has_content();
+
+    // Stage 6.1 Iteration 2 — getScreenInfo (§20)
+    test_get_screen_info();
+
+    // Stage 6.1 Iteration 2 — getVramInfo (§19)
+    test_get_vram_info();
+
+    // Stage 6.1 Iteration 2 — getSymbols / getFunction (§15)
+    test_get_symbols_empty();
+    test_get_symbols_with_data();
+    test_get_symbols_with_limit();
+    test_get_function_found();
+    test_get_function_not_found();
+
+    // Stage 6.1 Iteration 2 — getXrefs (§16)
+    test_get_xrefs_empty();
+    test_get_xrefs_with_data();
+
+    // Stage 6.1 Iteration 2 — getCallGraph (§17)
+    test_get_call_graph();
+    test_get_call_graph_filtered();
+
+    // Stage 6.1 Iteration 2 — loadRomInfo (§4)
+    test_load_rom_info();
+    test_load_rom_info_r0m();
+    test_load_rom_info_explicit_org();
+
+    // Stage 6.1 Iteration 2 — getDebugState (§21)
+    test_get_debug_state();
+    test_get_debug_state_with_breakpoint();
+    test_get_debug_state_with_function();
 
     printf("\n\033[1;33m========================================\033[0m\n");
     printf("  Results: %d/%d passed", tests_passed, tests_run);

@@ -10,7 +10,7 @@
 #include <vector>
 
 // ---------------------------------------------------------------------------
-// AgentApi — Stage 5.3.1
+// AgentApi — Stage 5.3.1 / Stage 6.1
 //
 // AI Agent interface to the Vector-06C Debugger.
 //
@@ -23,6 +23,11 @@
 //
 // Read-only operations (getCpuState, readMemory, symbolDatabase() const)
 // are safe snapshot queries.
+//
+// Stage 6.1 additions:
+//   - AgentApiResult<T> uniform error model
+//   - isRunning(), clearBreakpoints(), setRegister(), disassemble(),
+//     getInstructionHistory()
 // ---------------------------------------------------------------------------
 
 class AgentApi
@@ -36,6 +41,7 @@ public:
     void pause();
     void step();
     void reset();
+    bool isRunning() const;
 
     // -- CPU state ----------------------------------------------------------
 
@@ -52,6 +58,24 @@ public:
     CommandResult clearBreakpoint(uint16_t address);
     CommandResult setBreakpointEnabled(uint16_t address, bool enabled);
     std::vector<DebuggerBreakpoint> listBreakpoints();
+    AgentApiResult<void> clearAllBreakpoints();
+
+    // -- Registers (Stage 6.1 §8) -------------------------------------------
+
+    // setRegister by name: "A","F","B","C","D","E","H","L","PC","SP"
+    // Goes through command queue for state-changing operations.
+    AgentApiResult<void> setRegister(const std::string &name, uint16_t value);
+
+    // -- Disassembly (Stage 6.1 §10) ----------------------------------------
+
+    AgentApiResult<std::vector<DisassembledInstructionResult>>
+    disassemble(uint16_t address, size_t count);
+
+    // -- Instruction History (Stage 6.1 §11) --------------------------------
+
+    // Last N executed instructions. Distinct from getExecutionTrace().
+    AgentApiResult<std::vector<InstructionHistoryEntry>>
+    getInstructionHistory(size_t count);
 
     // -- Trace / I/O / VRAM -------------------------------------------------
 
@@ -77,11 +101,53 @@ public:
     FunctionContext getFunctionContext(uint16_t address);
     TraceResult     traceFunction(uint16_t address);
 
-    // -- ROM ----------------------------------------------------------------
+    // -- Stack (Stage 6.1 §13) -----------------------------------------------
+
+    AgentApiResult<std::vector<StackEntry>>
+    getStack(size_t limit);
+
+    // -- Memory Map (Stage 6.1 §18) ------------------------------------------
+
+    AgentApiResult<std::vector<MemoryMapBlock>>
+    getMemoryMap();
+
+    // -- Screen Info (Stage 6.1 §20) -----------------------------------------
+
+    AgentApiResult<ScreenInfoResult> getScreenInfo();
+
+    // -- VRAM Info (Stage 6.1 §19) -------------------------------------------
+
+    AgentApiResult<VramInfoResult> getVramInfo();
+
+    // -- Symbols (Stage 6.1 §15) ---------------------------------------------
+
+    AgentApiResult<std::vector<SymbolInfo>>
+    getSymbols(size_t limit = 0);
+
+    AgentApiResult<SymbolInfo> getFunction(uint16_t address);
+
+    // -- Xrefs (Stage 6.1 §16) -----------------------------------------------
+
+    AgentApiResult<std::vector<XrefResult>>
+    getXrefs(uint16_t address);
+
+    // -- Call Graph (Stage 6.1 §17) ------------------------------------------
+
+    AgentApiResult<std::vector<CallGraphEdge>>
+    getCallGraph(uint16_t address = 0, size_t limit = 0);
+
+    // -- ROM (Stage 6.1 §4) --------------------------------------------------
 
     bool loadRom(const std::string &path, uint32_t org = 0);
 
-    // -- Agent log ----------------------------------------------------------
+    // Structured ROM load result
+    AgentApiResult<LoadRomResult> loadRomInfo(const std::string &path, uint32_t org = 0);
+
+    // -- Debug State (Stage 6.1 §21) -----------------------------------------
+
+    DebugStateResult getDebugState();
+
+    // -- Agent log -----------------------------------------------------------
 
     const AgentLog &log() const;
     void clearLog();
