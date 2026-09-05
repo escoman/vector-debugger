@@ -21,7 +21,6 @@
 #include <cctype>
 #include <string>
 #include <algorithm>
-#include <sys/stat.h>
 
 // ---------------------------------------------------------------------------
 // Lifecycle
@@ -122,9 +121,6 @@ void DebuggerGui::shutdown()
 {
     if (!window_) return;
 
-    // Save recent ROMs list before saving config
-    saveRecentRoms();
-
     // Save config (Recent ROMs, etc.) on exit
     configManager_.shutdown();
 
@@ -196,12 +192,6 @@ void DebuggerGui::applyPendingWorkspace()
 {
     workspaceManager_.applyPendingWorkspace();
     workspaceManager_.processDeferredOps();
-
-    // Load recent ROMs from config.ini (independent of workspace)
-    if (!recentRomsLoaded_) {
-        loadRecentRoms();
-        recentRomsLoaded_ = true;
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -670,11 +660,12 @@ void DebuggerGui::renderToolbar(IDebugBackend &backend)
                 romErrorBuffer_[0] = '\0';
             }
             // Recent ROMs submenu
-            if (!recentRoms_.empty()) {
+            const auto &recentRoms = configManager_.getRecentRoms();
+            if (!recentRoms.empty()) {
                 ImGui::Separator();
-                for (size_t i = 0; i < recentRoms_.size(); ++i) {
+                for (size_t i = 0; i < recentRoms.size(); ++i) {
                     // Extract filename from full path
-                    std::string displayName = recentRoms_[i];
+                    std::string displayName = recentRoms[i];
                     size_t lastSlash = displayName.rfind('/');
                     if (lastSlash != std::string::npos) {
                         displayName = displayName.substr(lastSlash + 1);
@@ -683,7 +674,7 @@ void DebuggerGui::renderToolbar(IDebugBackend &backend)
                     snprintf(label, sizeof(label), "%d. %s", (int)(i + 1),
                              displayName.c_str());
                     if (ImGui::MenuItem(label)) {
-                        loadRomFile(recentRoms_[i], backend);
+                        loadRomFile(recentRoms[i], backend);
                     }
                 }
             }
@@ -1049,58 +1040,6 @@ void DebuggerGui::renderStatusBar(IDebugBackend &backend)
     }
 }
 
-// ---------------------------------------------------------------------------
-// Recent ROMs
-// ---------------------------------------------------------------------------
-
-void DebuggerGui::loadRecentRoms()
-{
-    recentRoms_.clear();
-    std::string raw = configManager_.get("RecentRoms");
-    if (raw.empty()) return;
-
-    size_t start = 0;
-    while (start < raw.size()) {
-        size_t pos = raw.find('|', start);
-        if (pos == std::string::npos) pos = raw.size();
-        std::string entry = raw.substr(start, pos - start);
-        // Validate: must be a non-empty path to an existing file
-        if (!entry.empty() && entry.size() < 4096 && entry[0] == '/') {
-            struct stat st;
-            if (stat(entry.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
-                recentRoms_.push_back(entry);
-            }
-        }
-        start = pos + 1;
-    }
-}
-
-void DebuggerGui::saveRecentRoms()
-{
-    std::string raw;
-    for (size_t i = 0; i < recentRoms_.size(); ++i) {
-        if (i > 0) raw += '|';
-        raw += recentRoms_[i];
-    }
-    configManager_.set("RecentRoms", raw);
-}
-
-void DebuggerGui::addRecentRom(const std::string &path)
-{
-    // Remove duplicate if already in list
-    auto it = std::find(recentRoms_.begin(), recentRoms_.end(), path);
-    if (it != recentRoms_.end()) {
-        recentRoms_.erase(it);
-    }
-    // Insert at front
-    recentRoms_.insert(recentRoms_.begin(), path);
-    // Cap at maximum
-    if (static_cast<int>(recentRoms_.size()) > MAX_RECENT_ROMS) {
-        recentRoms_.resize(MAX_RECENT_ROMS);
-    }
-    saveRecentRoms();
-}
-
 void DebuggerGui::loadRomFile(const std::string &path, IDebugBackend &backend)
 {
     uint32_t org = 0;
@@ -1110,7 +1049,8 @@ void DebuggerGui::loadRomFile(const std::string &path, IDebugBackend &backend)
         size_t lastSlash = path.rfind('/');
         currentRomName_ = (lastSlash != std::string::npos)
             ? path.substr(lastSlash + 1) : path;
-        addRecentRom(path);
+        // Add to recent ROMs list (ConfigManager handles persistence)
+        configManager_.addRecentRom(path);
         memoryInspector_.requestRefresh();
         disassemblyView_.requestRefresh();
         stackView_.requestRefresh();

@@ -2,6 +2,7 @@
 
 #include <string>
 #include <map>
+#include <vector>
 
 // ---------------------------------------------------------------------------
 // ConfigManager — manages config.ini (application-level settings).
@@ -17,6 +18,8 @@
 class ConfigManager
 {
 public:
+    static constexpr int MAX_RECENT_ROMS = 10;
+
     // Initialize with path to directory containing config.ini
     // (typically next to the executable).
     void initialize(const std::string &configDir);
@@ -31,11 +34,16 @@ public:
     std::string get(const std::string &key, const std::string &defaultVal = "") const;
     void set(const std::string &key, const std::string &value);
 
+    // Recent ROMs management
+    void addRecentRom(const std::string &path);
+    const std::vector<std::string>& getRecentRoms() const { return recentRoms_; }
+
     bool isDirty() const { return dirty_; }
 
 private:
     std::string configDir_;
     std::map<std::string, std::string> data_;
+    std::vector<std::string> recentRoms_;
     bool dirty_ = false;
     double lastDirtyTime_ = 0.0;
 

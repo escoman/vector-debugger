@@ -5,6 +5,7 @@
 #include <fstream>
 #include <sstream>
 #include <cstdio>
+#include <algorithm>
 #include <sys/stat.h>
 
 // ---------------------------------------------------------------------------
@@ -65,6 +66,32 @@ void ConfigManager::set(const std::string &key, const std::string &value)
 }
 
 // ---------------------------------------------------------------------------
+// Recent ROMs management
+// ---------------------------------------------------------------------------
+
+void ConfigManager::addRecentRom(const std::string &path)
+{
+    if (path.empty()) return;
+
+    // Remove duplicate if already in list
+    auto it = std::find(recentRoms_.begin(), recentRoms_.end(), path);
+    if (it != recentRoms_.end()) {
+        recentRoms_.erase(it);
+    }
+
+    // Insert at front
+    recentRoms_.insert(recentRoms_.begin(), path);
+
+    // Cap at maximum
+    if (static_cast<int>(recentRoms_.size()) > MAX_RECENT_ROMS) {
+        recentRoms_.resize(MAX_RECENT_ROMS);
+    }
+
+    dirty_ = true;
+    lastDirtyTime_ = 0.0;
+}
+
+// ---------------------------------------------------------------------------
 // File I/O
 // ---------------------------------------------------------------------------
 
@@ -91,7 +118,30 @@ bool ConfigManager::loadFromFile()
 
         size_t eq = line.find('=');
         if (eq == std::string::npos) continue;
-        data_[line.substr(0, eq)] = line.substr(eq + 1);
+
+        std::string key = line.substr(0, eq);
+        std::string value = line.substr(eq + 1);
+
+        // Handle RecentRoms specially — parse pipe-separated list
+        if (key == "RecentRoms") {
+            recentRoms_.clear();
+            size_t start = 0;
+            while (start < value.size()) {
+                size_t pos = value.find('|', start);
+                if (pos == std::string::npos) pos = value.size();
+                std::string entry = value.substr(start, pos - start);
+                // Validate: must be a non-empty path to an existing file
+                if (!entry.empty() && entry.size() < 4096 && entry[0] == '/') {
+                    struct stat st;
+                    if (stat(entry.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
+                        recentRoms_.push_back(entry);
+                    }
+                }
+                start = pos + 1;
+            }
+        } else {
+            data_[key] = value;
+        }
     }
 
     return true;
@@ -106,6 +156,16 @@ bool ConfigManager::saveToFile()
     content += "[Config]\n";
     for (const auto &pair : data_) {
         content += pair.first + "=" + pair.second + "\n";
+    }
+
+    // Serialize RecentRoms as pipe-separated list
+    if (!recentRoms_.empty()) {
+        content += "RecentRoms=";
+        for (size_t i = 0; i < recentRoms_.size(); ++i) {
+            if (i > 0) content += '|';
+            content += recentRoms_[i];
+        }
+        content += '\n';
     }
 
     // Skip write if content hasn't changed

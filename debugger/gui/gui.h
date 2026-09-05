@@ -144,13 +144,7 @@ private:
     char romErrorBuffer_[256] = "";
     std::string currentRomName_ = "BOOT";  // filename only, shown in toolbar
 
-    // Recent ROMs
-    static constexpr int MAX_RECENT_ROMS = 10;
-    std::vector<std::string> recentRoms_;
-    bool recentRomsLoaded_ = false;
-    void loadRecentRoms();
-    void saveRecentRoms();
-    void addRecentRom(const std::string &path);
+    // Recent ROMs — managed by ConfigManager
     void loadRomFile(const std::string &path, IDebugBackend &backend);
 
     // CPU register editing state (Stage 3.6)
