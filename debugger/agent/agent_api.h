@@ -145,7 +145,7 @@ public:
 
     // -- Debug State (Stage 6.1 §21) -----------------------------------------
 
-    DebugStateResult getDebugState();
+    AgentApiResult<DebugStateResult> getDebugState();
 
     // -- Agent log -----------------------------------------------------------
 

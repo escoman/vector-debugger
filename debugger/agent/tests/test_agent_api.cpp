@@ -1046,7 +1046,7 @@ static void test_get_screen_info()
     CHECK(r.success, "succeeds");
     CHECK_EQ(576u, (unsigned)r.value.width, "width = 576");
     CHECK_EQ(288u, (unsigned)r.value.height, "height = 288");
-    CHECK_EQ(512u, (unsigned)r.value.visible_width, "visible_width = 512");
+    CHECK_EQ(256u, (unsigned)r.value.visible_width, "visible_width = 256");
     CHECK_EQ(256u, (unsigned)r.value.visible_height, "visible_height = 256");
     CHECK(!r.value.mode512, "256-mode by default");
     CHECK_EQ(0xC000u, (unsigned)r.value.vram_base, "vram_base = 0xC000");
@@ -1060,26 +1060,44 @@ static void test_get_screen_info()
 
 static void test_get_vram_info()
 {
-    TEST_BEGIN("getVramInfo returns 4 planes");
+    TEST_BEGIN("getVramInfo returns 1 plane in 256-mode");
     MockAgentBackend mock;
     AgentApi api(mock);
 
     auto r = api.getVramInfo();
     CHECK(r.success, "succeeds");
-    CHECK_EQ(4u, (unsigned)r.value.planes.size(), "4 planes");
+    CHECK_EQ(1u, (unsigned)r.value.planes.size(), "1 plane in 256-mode");
     CHECK(!r.value.mode512, "256-mode");
     CHECK_EQ(0xC000u, (unsigned)r.value.vram_base, "vram_base = 0xC000");
 
-    // Plane 0: 0xE000, Plane 1: 0xC000, Plane 2: 0xA000, Plane 3: 0x8000
+    // Single screen plane at vramBase, size = 32 * 256 = 8192
     CHECK_EQ(0u, (unsigned)r.value.planes[0].plane, "plane 0 index");
-    CHECK_EQ(0xE000u, (unsigned)r.value.planes[0].address, "plane 0 addr");
-    CHECK_EQ(8192u, (unsigned)r.value.planes[0].size, "plane 0 size");
+    CHECK_EQ(0xC000u, (unsigned)r.value.planes[0].address, "plane 0 addr = vramBase");
+    CHECK_EQ(8192u, (unsigned)r.value.planes[0].size, "plane 0 size = 8192");
+    TEST_END();
+}
 
+static void test_get_vram_info_512()
+{
+    TEST_BEGIN("getVramInfo returns 2 planes in 512-mode");
+    MockAgentBackend mock;
+    mock.setVideoMode(true);  // 512-mode
+    AgentApi api(mock);
+
+    auto r = api.getVramInfo();
+    CHECK(r.success, "succeeds");
+    CHECK(r.value.mode512, "512-mode");
+    CHECK_EQ(2u, (unsigned)r.value.planes.size(), "2 planes in 512-mode");
+
+    // Plane 0: 0xC000, 16 KB
+    CHECK_EQ(0u, (unsigned)r.value.planes[0].plane, "plane 0 index");
+    CHECK_EQ(0xC000u, (unsigned)r.value.planes[0].address, "plane 0 addr = C000");
+    CHECK_EQ(16384u, (unsigned)r.value.planes[0].size, "plane 0 size = 16384");
+
+    // Plane 1: 0xE000, 16 KB
     CHECK_EQ(1u, (unsigned)r.value.planes[1].plane, "plane 1 index");
-    CHECK_EQ(0xC000u, (unsigned)r.value.planes[1].address, "plane 1 addr");
-
-    CHECK_EQ(3u, (unsigned)r.value.planes[3].plane, "plane 3 index");
-    CHECK_EQ(0x8000u, (unsigned)r.value.planes[3].address, "plane 3 addr");
+    CHECK_EQ(0xE000u, (unsigned)r.value.planes[1].address, "plane 1 addr = E000");
+    CHECK_EQ(16384u, (unsigned)r.value.planes[1].size, "plane 1 size = 16384");
     TEST_END();
 }
 
@@ -1308,18 +1326,20 @@ static void test_load_rom_info_explicit_org()
 
 static void test_get_debug_state()
 {
-    TEST_BEGIN("getDebugState returns full snapshot");
+    TEST_BEGIN("getDebugState returns full snapshot via AgentApiResult");
     MockAgentBackend mock;
     AgentApi api(mock);
 
     auto r = api.getDebugState();
-    CHECK(!r.running, "not running (paused)");
-    CHECK_EQ(0x0100u, (unsigned)r.cpu.pc, "PC = 0x0100");
-    CHECK_EQ(0xF800u, (unsigned)r.cpu.sp, "SP = 0xF800");
-    CHECK_EQ(0x42u, (unsigned)r.cpu.a, "A = 0x42");
-    CHECK_EQ(0u, (unsigned)r.breakpoints.size(), "no breakpoints");
+    CHECK(r.success, "succeeds");
+    CHECK(r.error_code == ErrorCode::None, "no error");
+    CHECK(!r.value.running, "not running (paused)");
+    CHECK_EQ(0x0100u, (unsigned)r.value.cpu.pc, "PC = 0x0100");
+    CHECK_EQ(0xF800u, (unsigned)r.value.cpu.sp, "SP = 0xF800");
+    CHECK_EQ(0x42u, (unsigned)r.value.cpu.a, "A = 0x42");
+    CHECK_EQ(0u, (unsigned)r.value.breakpoints.size(), "no breakpoints");
     // Current instruction at PC=0x0100: LXI SP, 0xF800
-    CHECK(!r.current_instruction.empty(), "has current instruction");
+    CHECK(!r.value.current_instruction.empty(), "has current instruction");
     TEST_END();
 }
 
@@ -1332,8 +1352,9 @@ static void test_get_debug_state_with_breakpoint()
     api.setBreakpoint(0x0200);
 
     auto r = api.getDebugState();
-    CHECK_EQ(1u, (unsigned)r.breakpoints.size(), "1 breakpoint");
-    CHECK_EQ(0x0200u, (unsigned)r.breakpoints[0].address, "at 0x0200");
+    CHECK(r.success, "succeeds");
+    CHECK_EQ(1u, (unsigned)r.value.breakpoints.size(), "1 breakpoint");
+    CHECK_EQ(0x0200u, (unsigned)r.value.breakpoints[0].address, "at 0x0200");
     TEST_END();
 }
 
@@ -1346,7 +1367,8 @@ static void test_get_debug_state_with_function()
     mock.requestCreateFunction(0x0100, "main");
 
     auto r = api.getDebugState();
-    CHECK_STR("main", r.current_function, "current function = main");
+    CHECK(r.success, "succeeds");
+    CHECK_STR("main", r.value.current_function, "current function = main");
     TEST_END();
 }
 
@@ -1452,6 +1474,7 @@ int main()
 
     // Stage 6.1 Iteration 2 — getVramInfo (§19)
     test_get_vram_info();
+    test_get_vram_info_512();
 
     // Stage 6.1 Iteration 2 — getSymbols / getFunction (§15)
     test_get_symbols_empty();

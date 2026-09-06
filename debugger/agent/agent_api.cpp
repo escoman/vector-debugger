@@ -736,22 +736,42 @@ AgentApiResult<VramInfoResult> AgentApi::getVramInfo()
     result.vram_base = video.vramBase;
     result.scroll_value = video.scrollValue;
 
-    // Vector-06C VRAM plane layout:
-    //   Plane 0: 0xE000 (8 KB)   Plane 1: 0xC000 (8 KB)
-    //   Plane 2: 0xA000 (8 KB)   Plane 3: 0x8000 (8 KB)
-    static const uint16_t planeBases[] = { 0xE000, 0xC000, 0xA000, 0x8000 };
-    for (int i = 0; i < 4; ++i) {
+    // Vector-06C VRAM plane layout depends on video mode:
+    //   256-mode: 1 screen plane at vramBase (typically 0xC000), 8 KB
+    //   512-mode: 2 screen planes at 0xC000 (16 KB) and 0xE000 (16 KB)
+    //
+    // Derive from actual video mode parameters (visibleWidth, pixelsPerByte).
+    int numCols = video.visibleWidth / video.pixelsPerByte;
+    uint16_t planeSize = static_cast<uint16_t>(numCols * 256);
+
+    if (!video.mode512) {
+        // 256-mode: single screen plane
         VramPlaneInfo plane;
-        plane.plane = i;
-        plane.address = planeBases[i];
-        plane.size = 8192;
+        plane.plane = 0;
+        plane.address = video.vramBase;
+        plane.size = planeSize;
         result.planes.push_back(plane);
+    } else {
+        // 512-mode: two screen planes
+        // Plane 0: 0xC000 (16 KB)
+        // Plane 1: 0xE000 (16 KB)
+        VramPlaneInfo plane0;
+        plane0.plane = 0;
+        plane0.address = 0xC000;
+        plane0.size = 16384;
+        result.planes.push_back(plane0);
+
+        VramPlaneInfo plane1;
+        plane1.plane = 1;
+        plane1.address = 0xE000;
+        plane1.size = 16384;
+        result.planes.push_back(plane1);
     }
 
     std::ostringstream oss;
     oss << "vram_base=" << std::hex << result.vram_base
         << (result.mode512 ? " 512-mode" : " 256-mode")
-        << " 4 planes";
+        << " " << std::dec << result.planes.size() << " planes";
     log_.record("getVramInfo", "", oss.str(), elapsedMs(t0));
 
     return AgentApiResult<VramInfoResult>::ok(std::move(result));
@@ -907,7 +927,7 @@ AgentApi::getCallGraph(uint16_t address, size_t limit)
 // Debug State (Stage 6.1 §21)
 // ---------------------------------------------------------------------------
 
-DebugStateResult AgentApi::getDebugState()
+AgentApiResult<DebugStateResult> AgentApi::getDebugState()
 {
     auto t0 = std::chrono::steady_clock::now();
 
@@ -936,7 +956,7 @@ DebugStateResult AgentApi::getDebugState()
         << " bps=" << std::dec << result.breakpoints.size();
     log_.record("getDebugState", "", oss.str(), elapsedMs(t0));
 
-    return result;
+    return AgentApiResult<DebugStateResult>::ok(std::move(result));
 }
 
 // ---------------------------------------------------------------------------

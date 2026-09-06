@@ -72,6 +72,9 @@ public:
         executeCount_[0x0208] = 1;
 
         writeCount_[0xC000] = 1;  // VRAM write
+
+        // Initialize video mode to consistent 256-mode defaults
+        setVideoMode(false);
     }
 
     // -- State queries ------------------------------------------------------
@@ -445,6 +448,18 @@ public:
 
     void setCpuState(const CpuState &cpu) { cpu_ = cpu; }
     void setState(DebuggerState s) { state_ = s; }
+
+    void setVideoMode(bool mode512, uint16_t vramBase = 0xC000) {
+        videoSnap_.mode512 = mode512;
+        videoSnap_.vramBase = vramBase;
+        videoSnap_.visibleWidth = mode512 ? 512 : 256;
+        videoSnap_.visibleHeight = 256;
+        videoSnap_.pixelsPerByte = mode512 ? 4 : 8;
+        videoSnap_.screenWidth = 576;
+        videoSnap_.screenHeight = 288;
+        videoSnap_.borderLeft = (videoSnap_.screenWidth - videoSnap_.visibleWidth) / 2;
+        videoSnap_.borderTop = (videoSnap_.screenHeight - videoSnap_.visibleHeight) / 2;
+    }
 
     void setMemory(uint16_t addr, const std::vector<uint8_t> &data) {
         for (size_t i = 0; i < data.size(); ++i) {
