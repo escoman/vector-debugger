@@ -226,6 +226,47 @@ void DebuggerGui::render(IDebugBackend &backend)
 {
     ImGuiViewport *viewport = ImGui::GetMainViewport();
 
+    // --- Hotkeys (debug control) ---
+    if (!keyboardWindow_.isLocked()) {
+        bool hotkeyPressed = false;
+
+        if (ImGui::IsKeyPressed(ImGuiKey_F3)) {
+            backend.requestPause();
+            hotkeyPressed = true;
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_F4)) {
+            backend.requestStep();
+            hotkeyPressed = true;
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_F5)) {
+            backend.requestRun();
+            hotkeyPressed = true;
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_F11)) {
+            backend.requestReset();
+            currentRomName_ = "BOOT";
+            hotkeyPressed = true;
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_F12)) {
+            backend.requestRestart();
+            currentRomName_ = "BOOT";
+            hotkeyPressed = true;
+        }
+
+        if (hotkeyPressed) {
+            memoryInspector_.requestRefresh();
+            stackView_.requestRefresh();
+            disassemblyView_.requestRefresh();
+            executionTrace_.requestRefresh();
+            ioInspector_.requestRefresh();
+            vectorScreen_.requestRefresh();
+            functionsWindow_.requestRefresh();
+            xrefsWindow_.requestRefresh();
+            callGraphWindow_.requestRefresh();
+            histNeedsRefresh_ = true;
+        }
+    }
+
     // --- Main menu bar (rendered first, on top of everything) ---
     renderToolbar(backend);
 
@@ -778,7 +819,7 @@ void DebuggerGui::renderToolbar(IDebugBackend &backend)
         // Debug controls on the right side
         float romLabelWidth = currentRomName_.empty() ? 0.0f :
             ImGui::CalcTextSize(currentRomName_.c_str()).x + ImGui::GetStyle().ItemSpacing.x;
-        float controlsWidth = 280.0f + romLabelWidth;
+        float controlsWidth = 480.0f + romLabelWidth;
         ImGui::SameLine(ImGui::GetContentRegionAvail().x - controlsWidth);
         renderControls(backend);
 
@@ -804,7 +845,7 @@ void DebuggerGui::renderControls(IDebugBackend &backend)
 
     // Step: enabled only when paused
     if (!paused) ImGui::BeginDisabled();
-    if (ImGui::Button("\xe2\x96\xba Step")) {  // ► Step
+    if (ImGui::Button("\xe2\x96\xba Step (F4)")) {  // ► Step (F4)
         backend.requestStep();
         memoryInspector_.requestRefresh();
         stackView_.requestRefresh();
@@ -822,7 +863,7 @@ void DebuggerGui::renderControls(IDebugBackend &backend)
 
     // Run: enabled only when paused
     if (!paused) ImGui::BeginDisabled();
-    if (ImGui::Button("\xe2\x96\xb6 Run")) {  // ▶ Run
+    if (ImGui::Button("\xe2\x96\xb6 Run (F5)")) {  // ▶ Run (F5)
         backend.requestRun();
     }
     if (!paused) ImGui::EndDisabled();
@@ -830,7 +871,7 @@ void DebuggerGui::renderControls(IDebugBackend &backend)
 
     // Pause: enabled only when running
     if (!running) ImGui::BeginDisabled();
-    if (ImGui::Button("\xe2\x80\x96 Pause")) {  // ‖ Pause
+    if (ImGui::Button("\xe2\x80\x96 Pause (F3)")) {  // ‖ Pause (F3)
         backend.requestPause();
         memoryInspector_.requestRefresh();
         stackView_.requestRefresh();
@@ -847,7 +888,7 @@ void DebuggerGui::renderControls(IDebugBackend &backend)
     ImGui::SameLine();
 
     // Restart (БЛК+ВВОД): always enabled — attaches boot ROM, resets CPU
-    if (ImGui::Button("\xe2\x86\xbb Restart")) {  // ↻ Restart
+    if (ImGui::Button("\xe2\x86\xbb Restart (F12)")) {  // ↻ Restart (F12)
         backend.requestRestart();
         currentRomName_ = "BOOT";
         memoryInspector_.requestRefresh();
@@ -861,7 +902,7 @@ void DebuggerGui::renderControls(IDebugBackend &backend)
     ImGui::SameLine();
 
     // Reset: attach boot ROM, reset CPU to PC=0 (bootloader entry)
-    if (ImGui::Button("Reset")) {
+    if (ImGui::Button("Reset (F11)")) {
         backend.requestReset();
         currentRomName_ = "BOOT";
         memoryInspector_.requestRefresh();
