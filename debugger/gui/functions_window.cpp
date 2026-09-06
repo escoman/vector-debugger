@@ -145,8 +145,20 @@ void FunctionsWindow::render(IDebugBackend &backend)
         for (const auto &sym : filtered) {
             ImGui::TableNextRow();
 
+            // Stage 6.2: Check breakpoint state for this address
+            bool hasBp = backend.hasBreakpoint(sym.address);
+
             // Address column
             ImGui::TableSetColumnIndex(0);
+
+            // Breakpoint indicator (same style as Disassembly window)
+            if (hasBp) {
+                ImGui::TextColored(ImVec4(0.9f, 0.2f, 0.2f, 1.0f), "\xe2\x97\x8f");  // ●
+            } else {
+                ImGui::TextDisabled(" ");
+            }
+            ImGui::SameLine();
+
             char addrBuf[16];
             snprintf(addrBuf, sizeof(addrBuf), "%04X", sym.address);
             ImGui::Text("%s", addrBuf);
@@ -155,6 +167,19 @@ void FunctionsWindow::render(IDebugBackend &backend)
             if (ImGui::BeginPopupContextItem()) {
                 contextAddress_ = sym.address;
 
+                // Stage 6.2: Set/Remove Breakpoint (dynamic, same address)
+                if (hasBp) {
+                    if (ImGui::MenuItem("Remove Breakpoint")) {
+                        backend.removeBreakpoint(sym.address);
+                        needsRefresh_ = true;
+                    }
+                } else {
+                    if (ImGui::MenuItem("Set Breakpoint")) {
+                        backend.addBreakpoint(sym.address);
+                        needsRefresh_ = true;
+                    }
+                }
+                ImGui::Separator();
                 if (ImGui::MenuItem("Rename")) {
                     editingName_ = true;
                     editingAddress_ = sym.address;

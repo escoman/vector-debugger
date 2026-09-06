@@ -4345,6 +4345,197 @@ static void test_step_after_pause()
 }
 
 // ---------------------------------------------------------------------------
+// Stage 6.2 — Functions → Breakpoint tests
+//
+// These tests verify the breakpoint mechanism that the Functions window uses:
+//   - Set breakpoint at a function's address (from SymbolDatabase)
+//   - Remove breakpoint
+//   - Functions ↔ Breakpoints bidirectional sync (same backend API)
+//   - Board synchronization (breakpoint stops CPU at function address)
+//   - ROM reload semantics (breakpoints preserved, as per existing behavior)
+// ---------------------------------------------------------------------------
+
+// Test 1: Set breakpoint on function address
+static void test_func_bp_set()
+{
+    TEST_BEGIN("S6.2: func bp set");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+
+    // Add a function symbol to SymbolDatabase (simulating MAP-loaded function)
+    auto &db = dbg->symbolDatabase();
+    db.addSymbol(0x0252, "_main", SymbolType::Function);
+
+    // Verify symbol exists
+    const DebugSymbol *sym = db.findSymbol(0x0252);
+    CHECK(sym != nullptr, "symbol _main found at 0x0252");
+    CHECK_STR("_main", sym->name.c_str(), "symbol name == _main");
+
+    // Set breakpoint at function address (same as Functions window does)
+    CHECK(!dbg->hasBreakpoint(0x0252), "no BP at 0x0252 initially");
+    int bpId = dbg->addBreakpoint(0x0252);
+    CHECK(bpId >= 0, "addBreakpoint returns positive id");
+    CHECK(dbg->hasBreakpoint(0x0252), "BP exists at 0x0252");
+
+    // Verify it appears in breakpoint list
+    auto bps = dbg->getBreakpoints();
+    CHECK_EQ((size_t)1, bps.size(), "1 breakpoint in list");
+    CHECK_EQ(0x0252, bps[0].address, "BP address == 0x0252");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// Test 2: Remove breakpoint from function
+static void test_func_bp_remove()
+{
+    TEST_BEGIN("S6.2: func bp remove");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+
+    // Add function symbol and set breakpoint
+    auto &db = dbg->symbolDatabase();
+    db.addSymbol(0x0252, "_main", SymbolType::Function);
+    dbg->addBreakpoint(0x0252);
+    CHECK(dbg->hasBreakpoint(0x0252), "BP exists after add");
+
+    // Remove breakpoint (same as Functions window "Remove Breakpoint")
+    bool removed = dbg->removeBreakpoint(static_cast<uint16_t>(0x0252));
+    CHECK(removed, "removeBreakpoint returns true");
+    CHECK(!dbg->hasBreakpoint(0x0252), "BP gone after remove");
+
+    // Breakpoint list should be empty
+    auto bps = dbg->getBreakpoints();
+    CHECK_EQ((size_t)0, bps.size(), "0 breakpoints in list");
+
+    // Symbol should still exist (removing BP doesn't remove symbol)
+    const DebugSymbol *sym = db.findSymbol(0x0252);
+    CHECK(sym != nullptr, "symbol _main still exists after BP removal");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// Test 3: Functions ↔ Breakpoints bidirectional sync
+static void test_func_bp_sync()
+{
+    TEST_BEGIN("S6.2: func bp sync");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+
+    // Add two function symbols
+    auto &db = dbg->symbolDatabase();
+    db.addSymbol(0x0252, "_main", SymbolType::Function);
+    db.addSymbol(0x030C, "_gfx_set_palette", SymbolType::Function);
+
+    // Direction 1: Set BP via backend (simulating Functions window)
+    dbg->addBreakpoint(0x0252);
+    CHECK(dbg->hasBreakpoint(0x0252), "BP at _main visible via backend");
+
+    // Direction 2: Set BP at another address (simulating Breakpoints window)
+    dbg->addBreakpoint(0x030C);
+    CHECK(dbg->hasBreakpoint(0x030C), "BP at _gfx_set_palette visible via backend");
+
+    // Both should appear in the same breakpoint list (single source of truth)
+    auto bps = dbg->getBreakpoints();
+    CHECK_EQ((size_t)2, bps.size(), "2 breakpoints in unified list");
+
+    // Functions window checks hasBreakpoint() for each symbol address
+    // Verify the same API works for both
+    const DebugSymbol *sym1 = db.findSymbol(0x0252);
+    const DebugSymbol *sym2 = db.findSymbol(0x030C);
+    CHECK(sym1 && dbg->hasBreakpoint(sym1->address), "Functions: _main shows BP");
+    CHECK(sym2 && dbg->hasBreakpoint(sym2->address), "Functions: _gfx_set_palette shows BP");
+
+    // Remove via backend (simulating Functions window "Remove Breakpoint")
+    dbg->removeBreakpoint(static_cast<uint16_t>(0x0252));
+    CHECK(!dbg->hasBreakpoint(0x0252), "_main BP removed");
+    CHECK(dbg->hasBreakpoint(0x030C), "_gfx_set_palette BP still present");
+
+    // Breakpoints window should also reflect the removal
+    bps = dbg->getBreakpoints();
+    CHECK_EQ((size_t)1, bps.size(), "1 breakpoint remaining");
+    CHECK_EQ(0x030C, bps[0].address, "remaining BP at _gfx_set_palette");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// Test 4: Board synchronization — breakpoint at function address stops CPU
+static void test_func_bp_board_sync()
+{
+    TEST_BEGIN("S6.2: func bp board sync");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_test_rom(mem);
+    dbg->reset();
+
+    // Add a function symbol at 0x0005 (MOV M, A in test ROM)
+    auto &db = dbg->symbolDatabase();
+    db.addSymbol(0x0005, "_store", SymbolType::Function);
+
+    // Set breakpoint at function address (via Functions window path)
+    const DebugSymbol *sym = db.findSymbol(0x0005);
+    CHECK(sym != nullptr, "symbol _store found");
+    dbg->addBreakpoint(sym->address);
+
+    // Run — CPU should stop at function address
+    dbg->run();
+    CHECK(dbg->isPaused(), "state == Paused");
+
+    CpuState s = dbg->getCpuState();
+    CHECK_EQ(0x0005, s.pc, "PC == 0x0005 (function address)");
+    CHECK_EQ(0x42, s.a, "A == 0x42 (MVI executed, MOV M,A not yet)");
+
+    // Verify MOV M,A was NOT executed (breakpoint stops before execution)
+    uint8_t val = DebugMemoryAccess::peek(mem, 0xC000);
+    CHECK_EQ(0x00, val, "[C000] == 0 (store not executed)");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// Test 5: ROM reload — breakpoints preserved (existing semantics unchanged)
+static void test_func_bp_rom_reload()
+{
+    TEST_BEGIN("S6.2: func bp rom reload");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_test_rom(mem);
+    dbg->reset();
+
+    // Add function symbol and breakpoint
+    auto &db = dbg->symbolDatabase();
+    db.addSymbol(0x0005, "_store", SymbolType::Function);
+    dbg->addBreakpoint(0x0005);
+    CHECK(dbg->hasBreakpoint(0x0005), "BP exists before reload");
+
+    // Load ROM again (simulating user loading a different ROM)
+    dbg->loadRom("test.rom");
+
+    // Existing behavior: breakpoints are preserved across ROM reload
+    // (This is the current debugger semantics — we verify we don't change it)
+    CHECK(dbg->hasBreakpoint(0x0005), "BP preserved after ROM reload");
+
+    // Symbol should also be preserved (user-defined, not MAP-loaded)
+    const DebugSymbol *sym = db.findSymbol(0x0005);
+    CHECK(sym != nullptr, "user symbol preserved after ROM reload");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -4501,6 +4692,13 @@ int main()
     test_quit_while_running_v2();
     test_rapid_run_pause();
     test_step_after_pause();
+
+    // Stage 6.2 — Functions → Breakpoint tests
+    test_func_bp_set();
+    test_func_bp_remove();
+    test_func_bp_sync();
+    test_func_bp_board_sync();
+    test_func_bp_rom_reload();
 
     printf("\n\033[0;36m=== Results: %d/%d passed", tests_passed, tests_run);
     if (tests_failed > 0) {
