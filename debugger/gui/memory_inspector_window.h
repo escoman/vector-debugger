@@ -40,6 +40,7 @@ public:
         snprintf(addressInput_, sizeof(addressInput_), "%04X", address);
         needsRefresh_ = true;
         pendingScroll_ = true;
+        pendingFocus_ = true;
         visible_ = true;
     }
     
@@ -60,6 +61,7 @@ private:
     MemorySnapshot snapshot_;
     bool needsRefresh_ = true;
     bool pendingScroll_ = false;      // Stage 3.9: real scroll on next render
+    bool pendingFocus_ = false;       // bring dock tab to front
     
     // Input buffer for address field
     char addressInput_[8] = "0000";

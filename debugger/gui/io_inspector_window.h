@@ -76,7 +76,7 @@ private:
     bool followIo_ = true;
     bool pauseCapture_ = false;
     bool needsRefresh_ = true;
-    int  maxEntries_ = 1000;          // display limit (user-configurable)
+    int  maxEntries_ = 100;           // display limit (user-configurable)
 
     // Filter state
     TypeFilter typeFilter_ = TypeFilter::All;
@@ -86,6 +86,9 @@ private:
     // Cached snapshots (refreshed when needsRefresh_ and !pauseCapture_)
     std::vector<IoAccessEvent> cachedEntries_;
     std::vector<InstructionEvent> cachedInstrEvents_;  // for PC resolution
+
+    // Auto-scroll tracking
+    int lastDisplayedCount_ = -1;  // scroll only when count changes
 
     // Render sub-components
     void renderToolbar(IDebugBackend &backend);

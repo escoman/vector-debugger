@@ -37,6 +37,12 @@ void DisassemblyWindow::render(IDebugBackend &backend)
         ImGui::End();
         return;
     }
+
+    // Bring dock tab to front when navigated to from another window
+    if (pendingFocus_) {
+        ImGui::SetWindowFocus();
+        pendingFocus_ = false;
+    }
     
     // Detect PC changes for Follow PC
     CpuState cpu = backend.getCpuState();
@@ -278,14 +284,14 @@ void DisassemblyWindow::renderDisassemblyList(IDebugBackend &backend)
         // Stage 4.6: Resolve symbol names in operands
         std::string displayText = instr.text;
         if (instr.hasTarget) {
-            const char *symName = symbols.displayName(instr.target).c_str();
-            if (symName[0] != '\0') {
+            std::string symNameStr = symbols.displayName(instr.target);
+            if (!symNameStr.empty()) {
                 // Replace address with symbol name in the text
                 char addrStr[8];
                 snprintf(addrStr, sizeof(addrStr), "%04X", instr.target);
                 size_t pos = displayText.find(addrStr);
                 if (pos != std::string::npos) {
-                    displayText.replace(pos, 4, symName);
+                    displayText.replace(pos, 4, symNameStr);
                 }
             }
         }
@@ -344,6 +350,7 @@ void DisassemblyWindow::renderDisassemblyList(IDebugBackend &backend)
                 }
                 if (ImGui::MenuItem("Delete Symbol")) {
                     symbols.removeSymbol(lineAddr);
+                    backend.saveComments();
                     needsRefresh_ = true;
                 }
             }
@@ -420,6 +427,7 @@ void DisassemblyWindow::renderDisassemblyList(IDebugBackend &backend)
                 } else if (editingComment_) {
                     symbols.setComment(editingAddress_, editBuffer_);
                 }
+                backend.saveComments();
                 needsRefresh_ = true;
             }
             editingDefineFunc_ = false;

@@ -241,6 +241,7 @@ static bool parseMapLine(const std::string &line, MapSymbol &sym)
 
     // Parse comment fields: "addr, public, source_location"
     bool isAddr = false;
+    bool isConst = false;
     MapSymbolVisibility visibility = MapSymbolVisibility::Public;
 
     if (!comment.empty()) {
@@ -251,14 +252,21 @@ static bool parseMapLine(const std::string &line, MapSymbol &sym)
             std::string f = trim(field);
             if (f == "addr") {
                 isAddr = true;
+            } else if (f == "const") {
+                isConst = true;
             } else if (f == "public") {
                 visibility = MapSymbolVisibility::Public;
             } else if (f == "local") {
                 visibility = MapSymbolVisibility::Local;
             }
-            // Other fields (like "defn", "globl") are ignored
+            // Other fields (like "defn", "globl", "def") are ignored
         }
     }
+
+    // Stage 6.2.1: Skip const entries — they are compile-time constants,
+    // not memory addresses. Loading them would block real addr symbols
+    // at the same address (e.g. STACK_TOP=$0100 const blocks start=$0100 addr).
+    if (isConst) return false;
 
     // Extract source location from comment
     std::string sourceFile;

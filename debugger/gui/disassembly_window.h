@@ -32,6 +32,7 @@ public:
         viewAddress_ = address;
         followPc_ = false;
         pendingScroll_ = true;
+        pendingFocus_ = true;
         needsRefresh_ = true;
         visible_ = true;
         snprintf(addressInput_, sizeof(addressInput_), "%04X", address);
@@ -54,6 +55,7 @@ private:
     bool followPc_ = true;
     bool needsRefresh_ = true;
     bool pendingScroll_ = false;        // Stage 3.9: real scroll on next render
+    bool pendingFocus_ = false;         // bring dock tab to front
     
     uint16_t viewAddress_ = 0;          // top of the disassembly view
     uint16_t lastPc_ = 0;               // previous PC for change detection

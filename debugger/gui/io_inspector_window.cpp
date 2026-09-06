@@ -39,15 +39,14 @@ void IoInspectorWindow::render(IDebugBackend &backend)
         return;
     }
 
-    // Refresh snapshots if needed
-    if (needsRefresh_ && !pauseCapture_) {
-        cachedEntries_    = backend.ioHistorySnapshot();
+    // Refresh snapshots:
+    // - pauseCapture_ OFF → always fetch fresh data from backend each frame
+    // - pauseCapture_ ON  → freeze current display (no new snapshots)
+    if (!pauseCapture_) {
+        cachedEntries_     = backend.ioHistorySnapshot();
         cachedInstrEvents_ = backend.instructionHistorySnapshot();
-        needsRefresh_ = false;
-    } else if (needsRefresh_ && pauseCapture_) {
-        // Pause Capture: don't fetch new data, just clear the refresh flag
-        needsRefresh_ = false;
     }
+    needsRefresh_ = false;
 
     // Render toolbar
     renderToolbar(backend);
@@ -91,7 +90,7 @@ void IoInspectorWindow::renderToolbar(IDebugBackend &backend)
 
     ImGui::SameLine();
     // Max entries input
-    ImGui::SetNextItemWidth(70);
+    ImGui::SetNextItemWidth(140);
     if (ImGui::InputInt("Max", &maxEntries_)) {
         if (maxEntries_ < 100) maxEntries_ = 100;
         if (maxEntries_ > 10000) maxEntries_ = 10000;
@@ -113,7 +112,7 @@ void IoInspectorWindow::renderToolbar(IDebugBackend &backend)
 
     // Port filter
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(50);
+    ImGui::SetNextItemWidth(80);
     ImGui::InputInt("Port", &portInput_);
     ImGui::SameLine();
     if (ImGui::Button("Apply")) {
@@ -145,20 +144,21 @@ void IoInspectorWindow::renderIoTable(IDebugBackend &backend)
         startIdx = totalEntries - static_cast<size_t>(maxEntries_);
     }
 
-    // Child window for scrolling
-    ImGui::BeginChild("IoScroll", ImVec2(0, 0), ImGuiChildFlags_None,
-                       ImGuiWindowFlags_HorizontalScrollbar);
+    if (!ImGui::CollapsingHeader("I/O Log")) {
+        return;
+    }
 
     // Column header
     ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f),
-                       "%-10s  %-4s  %-4s  %-4s  %-5s",
-                       "Seq", "PC", "Type", "Port", "Value");
+                       "%-5s  %-4s  %-4s  %-4s  %-5s",
+                       "#", "PC", "Type", "Port", "Value");
 
     int displayedCount = 0;
-    int lastDisplayedIndex = -1;
+    int entryNum = 0;  // simple entry counter for display
 
     for (size_t i = startIdx; i < totalEntries; ++i) {
         const auto &ev = cachedEntries_[i];
+        entryNum++;
 
         // Type filter
         if (typeFilter_ == TypeFilter::In && ev.type != IoAccessType::In) continue;
@@ -167,60 +167,69 @@ void IoInspectorWindow::renderIoTable(IDebugBackend &backend)
         // Port filter
         if (portFilter_ >= 0 && ev.port != static_cast<uint8_t>(portFilter_)) continue;
 
-        // Resolve PC
+        // Resolve PC (returns 0xFFFF if unknown)
         uint16_t pc = resolvePc(ev.instructionSequence);
+        bool pcKnown = (pc != 0xFFFF);
 
         const char *typeStr = (ev.type == IoAccessType::In) ? "IN" : "OUT";
 
         // Render as selectable line
         char line[128];
-        snprintf(line, sizeof(line), "%-10llu  %04X  %-4s  %02X     %02X",
-                 (unsigned long long)ev.instructionSequence,
-                 pc,
-                 typeStr,
-                 ev.port,
-                 ev.value);
+        if (pcKnown) {
+            snprintf(line, sizeof(line), "%-5d  %04X  %-4s  %02X     %02X",
+                     entryNum, pc, typeStr, ev.port, ev.value);
+        } else {
+            snprintf(line, sizeof(line), "%-5d  --    %-4s  %02X     %02X",
+                     entryNum, typeStr, ev.port, ev.value);
+        }
+
+        // PushID per row — gives each Selectable+popup a unique ID scope
+        ImGui::PushID(static_cast<int>(i));
 
         bool isSelected = false;
         bool clicked = ImGui::Selectable(line, isSelected,
                                           ImGuiSelectableFlags_AllowDoubleClick);
 
-        // Context menu for navigation
+        // Context menu for navigation (unique per row via PushID)
         if (ImGui::BeginPopupContextItem("ioctx")) {
-            if (ImGui::MenuItem("Go to Disassembly")) {
-                if (onGoToDisassembly && pc != 0xFFFF) {
-                    onGoToDisassembly(pc);
+            if (pcKnown) {
+                if (ImGui::MenuItem("Go to Disassembly")) {
+                    if (onGoToDisassembly) {
+                        onGoToDisassembly(pc);
+                    }
                 }
-            }
-            if (ImGui::MenuItem("Go to Memory Inspector")) {
-                if (onGoToMemoryInspector && pc != 0xFFFF) {
-                    onGoToMemoryInspector(pc);
+                if (ImGui::MenuItem("Go to Memory Inspector")) {
+                    if (onGoToMemoryInspector) {
+                        onGoToMemoryInspector(pc);
+                    }
                 }
+            } else {
+                ImGui::TextDisabled("PC unknown — step mode required");
             }
             ImGui::EndPopup();
         }
 
         // Double-click -> Go to Disassembly
         if (clicked && ImGui::IsMouseDoubleClicked(0)) {
-            if (onGoToDisassembly && pc != 0xFFFF) {
+            if (pcKnown && onGoToDisassembly) {
                 onGoToDisassembly(pc);
             }
         }
 
-        lastDisplayedIndex = displayedCount;
+        ImGui::PopID();
+
         displayedCount++;
     }
 
-    // Auto-scroll to last entry when Follow I/O is ON
-    if (followIo_ && lastDisplayedIndex >= 0) {
+    // Auto-scroll to last entry only when NEW entries appear (not every frame)
+    if (followIo_ && displayedCount > 0 && displayedCount != lastDisplayedCount_) {
         ImGui::SetScrollHereY(1.0f);
     }
+    lastDisplayedCount_ = displayedCount;
 
     if (displayedCount == 0) {
         ImGui::TextDisabled("(no matching I/O events)");
     }
-
-    ImGui::EndChild();
 }
 
 // ---------------------------------------------------------------------------

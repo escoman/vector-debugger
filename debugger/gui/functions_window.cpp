@@ -114,183 +114,179 @@ void FunctionsWindow::render(IDebugBackend &backend)
             });
     }
 
-    // Table
-    ImGui::BeginChild("TableScroll", ImVec2(0, 0), ImGuiChildFlags_None, ImGuiWindowFlags_None);
+    // Symbol list
+    ImGui::BeginChild("FuncListScroll", ImVec2(0, 0), ImGuiChildFlags_None, ImGuiWindowFlags_None);
 
-    if (ImGui::BeginTable("FunctionsTable", 6,
-            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Sortable |
-            ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp)) {
+    if (filtered.empty()) {
+        ImGui::TextDisabled("(no functions)");
+    }
 
-        // Headers
-        ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableSetupColumn("Address", ImGuiTableColumnFlags_DefaultSort, 80.0f);
-        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_DefaultSort, 150.0f);
-        ImGui::TableSetupColumn("Size", 0, 60.0f);
-        ImGui::TableSetupColumn("Calls", 0, 50.0f);
-        ImGui::TableSetupColumn("Source", 0, 150.0f);  // Stage 6.2
-        ImGui::TableSetupColumn("Comment", 0, 200.0f);
-        ImGui::TableHeadersRow();
+    for (const auto &sym : filtered) {
+        ImGui::PushID(sym.address);
 
-        // Handle sorting
-        if (ImGuiTableSortSpecs *sortSpecs = ImGui::TableGetSortSpecs()) {
-            if (sortSpecs->SpecsDirty && sortSpecs->SpecsCount > 0) {
-                sortColumn_ = sortSpecs->Specs[0].ColumnIndex;
-                sortReverse_ = (sortSpecs->Specs[0].SortDirection == ImGuiSortDirection_Descending);
-                sortSpecs->SpecsDirty = false;
-                needsRefresh_ = true;
+        bool hasBp = backend.hasBreakpoint(sym.address);
+
+        // Build row content as a single formatted string
+        char rowBuf[256];
+        int pos = 0;
+
+        // Breakpoint indicator + address
+        if (hasBp) {
+            pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos, "\xe2\x97\x8f ");  // ●
+        } else {
+            pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos, "  ");
+        }
+        pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos, "%04X  ", sym.address);
+
+        // Name [type]
+        const char *typeStr = (sym.type == SymbolType::Function) ? "func" : "label";
+        pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos, "%s [%s]  ", sym.name.c_str(), typeStr);
+
+        // Size
+        if (sym.type == SymbolType::Function) {
+            uint16_t sz = calculateFunctionSize(sym.address, allSymbols);
+            if (sz > 0) {
+                pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos, "sz:%u  ", sz);
             }
         }
 
-        // Rows
-        for (const auto &sym : filtered) {
-            ImGui::TableNextRow();
+        // Calls (xrefs)
+        int xrefs = countXrefsTo(sym.address, allSymbols);
+        pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos, "calls:%d  ", xrefs);
 
-            // Stage 6.2: Check breakpoint state for this address
-            bool hasBp = backend.hasBreakpoint(sym.address);
-
-            // Address column
-            ImGui::TableSetColumnIndex(0);
-
-            // Breakpoint indicator (same style as Disassembly window)
-            if (hasBp) {
-                ImGui::TextColored(ImVec4(0.9f, 0.2f, 0.2f, 1.0f), "\xe2\x97\x8f");  // ●
+        // Source
+        if (!sym.sourceFile.empty()) {
+            if (sym.sourceLine > 0) {
+                pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos, "%s:%d  ",
+                                sym.sourceFile.c_str(), sym.sourceLine);
             } else {
-                ImGui::TextDisabled(" ");
+                pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos, "%s  ", sym.sourceFile.c_str());
             }
-            ImGui::SameLine();
+        }
 
-            char addrBuf[16];
-            snprintf(addrBuf, sizeof(addrBuf), "%04X", sym.address);
-            ImGui::Text("%s", addrBuf);
+        // Comment
+        if (!sym.comment.empty()) {
+            snprintf(rowBuf + pos, sizeof(rowBuf) - pos, "; %s", sym.comment.c_str());
+        }
 
-            // Context menu for this row
-            if (ImGui::BeginPopupContextItem()) {
-                contextAddress_ = sym.address;
+        // Selectable row (single item per row — no two-line issue)
+        bool isSelected = (contextAddress_ == sym.address);
+        ImGui::Selectable(rowBuf, isSelected);
 
-                // Stage 6.2: Set/Remove Breakpoint (dynamic, same address)
-                if (hasBp) {
-                    if (ImGui::MenuItem("Remove Breakpoint")) {
-                        backend.removeBreakpoint(sym.address);
-                        needsRefresh_ = true;
-                    }
-                } else {
-                    if (ImGui::MenuItem("Set Breakpoint")) {
-                        backend.addBreakpoint(sym.address);
-                        needsRefresh_ = true;
-                    }
-                }
-                ImGui::Separator();
-                if (ImGui::MenuItem("Rename")) {
-                    editingName_ = true;
-                    editingAddress_ = sym.address;
-                    snprintf(editNameBuffer_, sizeof(editNameBuffer_), "%s", sym.name.c_str());
-                }
-                if (ImGui::MenuItem("Edit Comment")) {
-                    editingComment_ = true;
-                    editingAddress_ = sym.address;
-                    snprintf(editCommentBuffer_, sizeof(editCommentBuffer_), "%s", sym.comment.c_str());
-                }
-                ImGui::Separator();
-                if (ImGui::MenuItem("Go to Disassembly")) {
-                    if (onGoToDisassembly) {
-                        onGoToDisassembly(sym.address);
-                    }
-                }
-                if (ImGui::MenuItem("Go to Memory Inspector")) {
-                    if (onGoToMemoryInspector) {
-                        onGoToMemoryInspector(sym.address);
-                    }
-                }
-                ImGui::Separator();
-                if (ImGui::MenuItem("Delete")) {
-                    auto &db = backend.symbolDatabase();
-                    db.removeSymbol(sym.address);
+        // Context menu attached to the selectable
+        if (ImGui::BeginPopupContextItem("funcctx")) {
+            contextAddress_ = sym.address;
+            bool hasBpCtx = backend.hasBreakpoint(contextAddress_);
+
+            if (hasBpCtx) {
+                if (ImGui::MenuItem("Remove Breakpoint")) {
+                    backend.removeBreakpoint(contextAddress_);
                     needsRefresh_ = true;
                 }
-                ImGui::EndPopup();
-            }
-
-            // Name column
-            ImGui::TableSetColumnIndex(1);
-            if (editingName_ && editingAddress_ == sym.address) {
-                ImGui::SetNextItemWidth(-1);
-                bool enterPressed = ImGui::InputText("##editname", editNameBuffer_,
-                    sizeof(editNameBuffer_), ImGuiInputTextFlags_EnterReturnsTrue);
-                bool escapePressed = ImGui::IsKeyPressed(ImGuiKey_Escape);
-                if (enterPressed || escapePressed || !ImGui::IsItemActive()) {
-                    if (enterPressed && editNameBuffer_[0] != '\0') {
-                        auto &db = backend.symbolDatabase();
-                        db.renameSymbol(sym.address, editNameBuffer_);
-                        needsRefresh_ = true;
-                    }
-                    editingName_ = false;
-                }
             } else {
-                const char *typeStr = (sym.type == SymbolType::Function) ? "func" : "label";
-                ImGui::TextColored(
-                    sym.type == SymbolType::Function ? ImVec4(1.0f, 1.0f, 0.6f, 1.0f)
-                                                      : ImVec4(0.6f, 1.0f, 0.6f, 1.0f),
-                    "%s [%s]", sym.name.c_str(), typeStr);
-            }
-
-            // Size column
-            ImGui::TableSetColumnIndex(2);
-            if (sym.type == SymbolType::Function) {
-                uint16_t size = calculateFunctionSize(sym.address, allSymbols);
-                if (size > 0) {
-                    ImGui::Text("%u", size);
-                } else {
-                    ImGui::TextDisabled("N/A");
-                }
-            } else {
-                ImGui::TextDisabled("N/A");
-            }
-
-            // Calls column
-            ImGui::TableSetColumnIndex(3);
-            int calls = countXrefsTo(sym.address, allSymbols);
-            ImGui::Text("%d", calls);
-
-            // Stage 6.2: Source column
-            ImGui::TableSetColumnIndex(4);
-            if (!sym.sourceFile.empty()) {
-                if (sym.sourceLine > 0) {
-                    ImGui::Text("%s:%d", sym.sourceFile.c_str(), sym.sourceLine);
-                } else {
-                    ImGui::Text("%s", sym.sourceFile.c_str());
-                }
-            } else {
-                ImGui::TextDisabled("-");
-            }
-
-            // Comment column
-            ImGui::TableSetColumnIndex(5);
-            if (editingComment_ && editingAddress_ == sym.address) {
-                ImGui::SetNextItemWidth(-1);
-                bool enterPressed = ImGui::InputText("##editcomment", editCommentBuffer_,
-                    sizeof(editCommentBuffer_), ImGuiInputTextFlags_EnterReturnsTrue);
-                bool escapePressed = ImGui::IsKeyPressed(ImGuiKey_Escape);
-                if (enterPressed || escapePressed || !ImGui::IsItemActive()) {
-                    if (enterPressed) {
-                        auto &db = backend.symbolDatabase();
-                        db.setComment(sym.address, editCommentBuffer_);
-                        needsRefresh_ = true;
-                    }
-                    editingComment_ = false;
-                }
-            } else {
-                if (sym.comment.empty()) {
-                    ImGui::TextDisabled("-");
-                } else {
-                    ImGui::Text("%s", sym.comment.c_str());
+                if (ImGui::MenuItem("Set Breakpoint")) {
+                    backend.addBreakpoint(contextAddress_);
+                    needsRefresh_ = true;
                 }
             }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Rename")) {
+                editingName_ = true;
+                editingAddress_ = contextAddress_;
+                const DebugSymbol *ctxSym = backend.symbolDatabase().findSymbol(contextAddress_);
+                if (ctxSym) {
+                    snprintf(editNameBuffer_, sizeof(editNameBuffer_), "%s", ctxSym->name.c_str());
+                }
+                pendingEditOpen_ = true;
+            }
+            if (ImGui::MenuItem("Edit Comment")) {
+                editingComment_ = true;
+                editingAddress_ = contextAddress_;
+                const DebugSymbol *ctxSym = backend.symbolDatabase().findSymbol(contextAddress_);
+                if (ctxSym) {
+                    snprintf(editCommentBuffer_, sizeof(editCommentBuffer_), "%s", ctxSym->comment.c_str());
+                }
+                pendingEditOpen_ = true;
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Go to Disassembly")) {
+                if (onGoToDisassembly) {
+                    onGoToDisassembly(contextAddress_);
+                }
+            }
+            if (ImGui::MenuItem("Go to Memory Inspector")) {
+                if (onGoToMemoryInspector) {
+                    onGoToMemoryInspector(contextAddress_);
+                }
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Delete")) {
+                auto &db = backend.symbolDatabase();
+                db.removeSymbol(contextAddress_);
+                backend.saveComments();
+                needsRefresh_ = true;
+            }
+            ImGui::EndPopup();
         }
 
-        ImGui::EndTable();
+        ImGui::PopID();
     }
 
     ImGui::EndChild();
+
+    // Edit Name / Edit Comment popup dialogs (outside BeginChild for visibility)
+    if (pendingEditOpen_) {
+        if (editingName_) {
+            ImGui::OpenPopup("Rename Symbol");
+        } else if (editingComment_) {
+            ImGui::OpenPopup("Edit Comment");
+        }
+        pendingEditOpen_ = false;
+    }
+
+    if (ImGui::BeginPopupModal("Rename Symbol", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Rename symbol at %04X:", editingAddress_);
+        ImGui::SetNextItemWidth(200);
+        bool enterPressed = ImGui::InputText("##editname", editNameBuffer_,
+            sizeof(editNameBuffer_), ImGuiInputTextFlags_EnterReturnsTrue);
+        if (ImGui::Button("OK", ImVec2(120, 0)) || enterPressed) {
+            if (editNameBuffer_[0] != '\0') {
+                auto &db = backend.symbolDatabase();
+                db.renameSymbol(editingAddress_, editNameBuffer_);
+                backend.saveComments();
+                needsRefresh_ = true;
+            }
+            editingName_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            editingName_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    if (ImGui::BeginPopupModal("Edit Comment", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Edit comment at %04X:", editingAddress_);
+        ImGui::SetNextItemWidth(300);
+        bool enterPressed = ImGui::InputText("##editcomment", editCommentBuffer_,
+            sizeof(editCommentBuffer_), ImGuiInputTextFlags_EnterReturnsTrue);
+        if (ImGui::Button("OK", ImVec2(120, 0)) || enterPressed) {
+            auto &db = backend.symbolDatabase();
+            db.setComment(editingAddress_, editCommentBuffer_);
+            backend.saveComments();
+            needsRefresh_ = true;
+            editingComment_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            editingComment_ = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
 
     // "Define Function" dialog
     if (showDefineDialog_) {
@@ -318,6 +314,7 @@ void FunctionsWindow::render(IDebugBackend &backend)
                     if (defineCommentBuffer_[0] != '\0') {
                         db.setComment(static_cast<uint16_t>(addr), defineCommentBuffer_);
                     }
+                    backend.saveComments();
                     needsRefresh_ = true;
                 }
             }

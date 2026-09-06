@@ -363,6 +363,19 @@ private:
 
     SymbolDatabase symbols_;
 
+    // -- Comment persistence (Stage 6.2.1) ----------------------------------
+
+    std::string commentsPath_;  // sidecar file: <rom_path>.comments
+
+public:
+    // Load comments from sidecar file and apply to existing symbols.
+    void loadComments();
+
+    // Save all non-empty comments to sidecar file.
+    void saveComments() override;
+
+private:
+
     // -- Activity counters --------------------------------------------------
 
     uint64_t executeCount_[65536];

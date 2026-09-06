@@ -26,6 +26,12 @@ void MemoryInspectorWindow::render(IDebugBackend &backend)
         ImGui::End();
         return;
     }
+
+    // Bring dock tab to front when navigated to from another window
+    if (pendingFocus_) {
+        ImGui::SetWindowFocus();
+        pendingFocus_ = false;
+    }
     
     // Refresh snapshot if needed
     if (needsRefresh_) {

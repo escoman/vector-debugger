@@ -519,6 +519,134 @@ static void test_no_comment()
 }
 
 // ---------------------------------------------------------------------------
+// Test 18: const entries are skipped (Stage 6.2.1)
+// ---------------------------------------------------------------------------
+
+static void test_const_entries_skipped()
+{
+    TEST_BEGIN("S6.2.1: const entries skipped");
+
+    std::string content =
+        "_myconst  = $0042 ; const, public\n"
+        "_main     = $0100 ; addr, public\n"
+        "_label    = $0103 ; addr, local\n"
+        "_value    = $FFFF ; const, public\n";
+
+    auto result = MapLoader::parseMapContent(content);
+    CHECK(result.success, "parse succeeded");
+    CHECK_EQ(2, result.parsedCount, "2 addr symbols parsed");
+    CHECK_EQ(2, result.skippedLines, "2 const lines skipped");
+
+    // _myconst should NOT be present
+    bool foundMyconst = false;
+    bool foundValue = false;
+    for (const auto &sym : result.symbols) {
+        if (sym.name == "_myconst") foundMyconst = true;
+        if (sym.name == "_value") foundValue = true;
+    }
+    CHECK(!foundMyconst, "_myconst (const) not in symbols");
+    CHECK(!foundValue, "_value (const at $FFFF) not in symbols");
+
+    // _main and _label should be present
+    CHECK_EQ(0x0100, result.symbols[0].address, "_main at $0100");
+    CHECK_EQ(0x0103, result.symbols[1].address, "_label at $0103");
+
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test 19: const does not block addr at same address (Stage 6.2.1)
+// ---------------------------------------------------------------------------
+
+static void test_const_does_not_block_addr()
+{
+    TEST_BEGIN("S6.2.1: const does not block addr at same address");
+
+    // Real scenario from check_bugs.map:
+    // STACK_TOP = $0100 ; const, local  — should be skipped
+    // start     = $0100 ; addr, local   — should be loaded
+    std::string content =
+        "STACK_TOP = $0100 ; const, local, , startup_asm, , startup.asm:26\n"
+        "start     = $0100 ; addr, local, , startup_asm, , startup.asm:34\n";
+
+    auto result = MapLoader::parseMapContent(content);
+    CHECK(result.success, "parse succeeded");
+    CHECK_EQ(1, result.parsedCount, "1 addr symbol parsed");
+    CHECK_EQ(1, result.skippedLines, "1 const line skipped");
+
+    // Load into SymbolDatabase
+    SymbolDatabase db;
+    for (const auto &ms : result.symbols) {
+        SymbolType type = (ms.isAddress && ms.visibility == MapSymbolVisibility::Public)
+            ? SymbolType::Function : SymbolType::Label;
+        db.addSymbol(ms.address, ms.name, type);
+    }
+
+    // Address 0x0100 should be 'start', not STACK_TOP
+    const DebugSymbol *sym = db.findSymbol(0x0100);
+    CHECK(sym != nullptr, "symbol at 0x0100 exists");
+    if (sym) {
+        CHECK_STR("start", sym->name.c_str(), "0x0100 is 'start' (not STACK_TOP)");
+    }
+
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test 20: Real check_bugs.map (Stage 6.2.1 regression)
+// ---------------------------------------------------------------------------
+
+static void test_real_map_check_bugs()
+{
+    TEST_BEGIN("S6.2.1: real check_bugs.map regression");
+
+    auto result = MapLoader::loadMapFile("/home/alexey/Projects/vector-games/tests/check_bugs/check_bugs.map");
+
+    // If file not found, skip (CI might not have it)
+    bool fileNotFound = !result.success &&
+        result.errorMessage.find("cannot open") != std::string::npos;
+    if (fileNotFound) {
+        printf("  SKIP: check_bugs.map not found\n");
+    } else {
+        CHECK(result.success, "parse succeeded");
+        CHECK_EQ(86, result.parsedCount, "86 addr symbols parsed");
+        CHECK_EQ(22, result.skippedLines, "22 const lines skipped");
+
+        // Verify no const entries leaked through
+        int constCount = 0;
+        for (const auto &sym : result.symbols) {
+            if (!sym.isAddress) constCount++;
+        }
+        CHECK_EQ(0, constCount, "no non-addr symbols in output");
+
+        // Load into SymbolDatabase — verify no crash, correct symbols
+        SymbolDatabase db;
+        int added = 0;
+        for (const auto &ms : result.symbols) {
+            SymbolType type = (ms.isAddress && ms.visibility == MapSymbolVisibility::Public)
+                ? SymbolType::Function : SymbolType::Label;
+            if (db.addSymbol(ms.address, ms.name, type)) {
+                auto *p = const_cast<DebugSymbol*>(db.findSymbol(ms.address));
+                if (p) { p->fromMap = true; p->sourceFile = ms.sourceFile; p->sourceLine = ms.sourceLine; }
+                added++;
+            }
+        }
+        CHECK(added > 60, "60+ symbols loaded (86 minus duplicates)");
+
+        // Verify key addresses
+        const DebugSymbol *mainSym = db.findSymbol(0x0252);
+        CHECK(mainSym != nullptr, "_main found at 0x0252");
+        if (mainSym) CHECK_STR("_main", mainSym->name.c_str(), "name = _main");
+
+        const DebugSymbol *startSym = db.findSymbol(0x0100);
+        CHECK(startSym != nullptr, "start found at 0x0100");
+        if (startSym) CHECK_STR("start", startSym->name.c_str(), "name = start (not STACK_TOP)");
+    }
+
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -545,6 +673,9 @@ int main()
     test_symbol_database_integration();
     test_multiple_symbols();
     test_no_comment();
+    test_const_entries_skipped();
+    test_const_does_not_block_addr();
+    test_real_map_check_bugs();
 
     printf("\n\033[1;33m========================================\033[0m\n");
     printf("\033[1;33m  Results: %d passed, %d failed (of %d)\033[0m\n",

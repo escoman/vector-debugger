@@ -172,6 +172,10 @@ public:
     virtual SymbolDatabase       &symbolDatabase() = 0;
     virtual const SymbolDatabase &symbolDatabase() const = 0;
 
+    // Stage 6.2.1: Persist user comments to sidecar file.
+    // Default: no-op (mocks/tests). DebugBackend overrides to write <rom>.comments.
+    virtual void saveComments() {}
+
     // -- Symbol commands (Stage 5.3.1 — through command protocol) -----------
 
     virtual CommandResult requestCreateFunction(uint16_t addr, const std::string &name) = 0;

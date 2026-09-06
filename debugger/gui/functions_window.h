@@ -56,4 +56,6 @@ private:
 
     bool editingComment_ = false;
     char editCommentBuffer_[128] = "";
+
+    bool pendingEditOpen_ = false;  // trigger popup after EndChild
 };
