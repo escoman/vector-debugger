@@ -494,3 +494,17 @@ void DebugAdapter::initCpu(uint16_t pc, uint16_t sp)
     i8080_setreg_sp(sp);
     i8080_init();
 }
+
+// ---------------------------------------------------------------------------
+// I/O ports (Stage 6.1 Iteration 3)
+// ---------------------------------------------------------------------------
+
+uint8_t DebugAdapter::readIoPort(uint8_t port)
+{
+    return static_cast<uint8_t>(io.input(port));
+}
+
+void DebugAdapter::writeIoPort(uint8_t port, uint8_t value)
+{
+    io.output(port, value);
+}

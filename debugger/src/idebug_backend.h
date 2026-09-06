@@ -229,4 +229,11 @@ public:
     virtual void pressKey(int scancode) = 0;
     virtual void releaseKey(int scancode) = 0;
     virtual bool isRuslatMode() const = 0;
+
+    // -- I/O ports (Stage 6.1 Iteration 3) ----------------------------------
+    // readIoPort: read port value. Returns 0xFF on error or if no target.
+    // writeIoPort: write to port through Command Queue (state-changing operation).
+
+    virtual uint8_t readIoPort(uint8_t port) = 0;
+    virtual CommandResult writeIoPort(uint8_t port, uint8_t value) = 0;
 };

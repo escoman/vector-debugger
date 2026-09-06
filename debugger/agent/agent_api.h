@@ -52,6 +52,13 @@ public:
     std::vector<uint8_t> readMemory(uint16_t address, size_t size);
     bool writeMemory(uint16_t address, const std::vector<uint8_t> &data);
 
+    // -- I/O ports (Stage 6.1 Iteration 3) ----------------------------------
+    // readIo: read I/O port value. Returns AgentApiResult<uint8_t>.
+    // writeIo: write to I/O port through Command Queue. Returns CommandResult.
+
+    AgentApiResult<uint8_t> readIo(uint8_t port);
+    CommandResult writeIo(uint8_t port, uint8_t value);
+
     // -- Breakpoints (through command protocol) -----------------------------
 
     CommandResult setBreakpoint(uint16_t address);

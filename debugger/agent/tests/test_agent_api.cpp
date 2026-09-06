@@ -188,6 +188,116 @@ static void test_write_memory()
 }
 
 // ---------------------------------------------------------------------------
+// Tests: I/O ports (Stage 6.1 Iteration 3)
+// ---------------------------------------------------------------------------
+
+static void test_read_io()
+{
+    TEST_BEGIN("readIo returns port value");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    // Pre-set port value
+    mock.setIoPort(0x10, 0x55);
+
+    auto r = api.readIo(0x10);
+    CHECK(r.success, "read succeeds");
+    CHECK_EQ(0x55u, (unsigned)r.value, "value is 0x55");
+    TEST_END();
+}
+
+static void test_write_io()
+{
+    TEST_BEGIN("writeIo modifies port");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto r = api.writeIo(0x10, 0xAA);
+    CHECK(r.success, "write succeeds");
+    CHECK_EQ(0xAAu, (unsigned)mock.getIoPort(0x10), "port value is 0xAA");
+    TEST_END();
+}
+
+static void test_io_zero_port()
+{
+    TEST_BEGIN("I/O port 0x00 is valid");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    mock.setIoPort(0x00, 0x42);
+    auto r = api.readIo(0x00);
+    CHECK(r.success, "read port 0 succeeds");
+    CHECK_EQ(0x42u, (unsigned)r.value, "value is 0x42");
+
+    auto w = api.writeIo(0x00, 0x99);
+    CHECK(w.success, "write port 0 succeeds");
+    CHECK_EQ(0x99u, (unsigned)mock.getIoPort(0x00), "port 0 value is 0x99");
+    TEST_END();
+}
+
+static void test_io_max_port()
+{
+    TEST_BEGIN("I/O port 0xFF is valid");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    mock.setIoPort(0xFF, 0x77);
+    auto r = api.readIo(0xFF);
+    CHECK(r.success, "read port 0xFF succeeds");
+    CHECK_EQ(0x77u, (unsigned)r.value, "value is 0x77");
+
+    auto w = api.writeIo(0xFF, 0x88);
+    CHECK(w.success, "write port 0xFF succeeds");
+    CHECK_EQ(0x88u, (unsigned)mock.getIoPort(0xFF), "port 0xFF value is 0x88");
+    TEST_END();
+}
+
+static void test_io_read_write_sequence()
+{
+    TEST_BEGIN("I/O read/write sequence");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    // Write and read back
+    api.writeIo(0x20, 0x12);
+    auto r1 = api.readIo(0x20);
+    CHECK(r1.success, "first read succeeds");
+    CHECK_EQ(0x12u, (unsigned)r1.value, "first value is 0x12");
+
+    // Write new value and read back
+    api.writeIo(0x20, 0x34);
+    auto r2 = api.readIo(0x20);
+    CHECK(r2.success, "second read succeeds");
+    CHECK_EQ(0x34u, (unsigned)r2.value, "second value is 0x34");
+    TEST_END();
+}
+
+static void test_io_trace_not_affected()
+{
+    TEST_BEGIN("I/O trace not affected by agent I/O");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    // Add a CPU I/O event (simulating real CPU I/O)
+    IoAccessEvent cpuIo{};
+    cpuIo.instructionSequence = 100;
+    cpuIo.port = 0x02;
+    cpuIo.value = 0x55;
+    cpuIo.type = IoAccessType::Out;
+    mock.addIoEvent(cpuIo);
+
+    // Agent I/O operations should not affect the trace
+    api.writeIo(0x10, 0xAA);
+    api.readIo(0x10);
+
+    auto trace = api.getIoTrace();
+    CHECK_EQ(1u, (unsigned)trace.size(), "only CPU I/O in trace");
+    CHECK_EQ(0x02u, (unsigned)trace[0].port, "CPU I/O port preserved");
+    CHECK_EQ(0x55u, (unsigned)trace[0].value, "CPU I/O value preserved");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // Tests: Breakpoints
 // ---------------------------------------------------------------------------
 
@@ -1393,6 +1503,14 @@ int main()
     // Memory access
     test_read_memory();
     test_write_memory();
+
+    // I/O ports (Stage 6.1 Iteration 3)
+    test_read_io();
+    test_write_io();
+    test_io_zero_port();
+    test_io_max_port();
+    test_io_read_write_sequence();
+    test_io_trace_not_affected();
 
     // Breakpoints
     test_set_clear_breakpoint();

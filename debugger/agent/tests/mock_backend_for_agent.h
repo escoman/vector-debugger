@@ -444,6 +444,20 @@ public:
     // -- Ruslat -------------------------------------------------------------
     bool isRuslatMode() const override { return false; }
 
+    // -- I/O ports (Stage 6.1 Iteration 3) ----------------------------------
+
+    uint8_t readIoPort(uint8_t port) override {
+        return ioPorts_[port];
+    }
+
+    CommandResult writeIoPort(uint8_t port, uint8_t value) override {
+        ioPorts_[port] = value;
+        CommandResult r;
+        r.success = true;
+        r.status = CommandResult::Completed;
+        return r;
+    }
+
     // -- Test data setters --------------------------------------------------
 
     void setCpuState(const CpuState &cpu) { cpu_ = cpu; }
@@ -479,6 +493,16 @@ public:
         ioHistory_.push_back(ev);
     }
 
+    // Set I/O port value for testing
+    void setIoPort(uint8_t port, uint8_t value) {
+        ioPorts_[port] = value;
+    }
+
+    // Get I/O port value (to verify writes)
+    uint8_t getIoPort(uint8_t port) const {
+        return ioPorts_[port];
+    }
+
 private:
     CpuState cpu_{};
     DebuggerState state_ = DebuggerState::Paused;
@@ -502,6 +526,9 @@ private:
     std::vector<uint64_t> writeCount_;
 
     SymbolDatabase symbols_;
+
+    // I/O port state (256 ports)
+    uint8_t ioPorts_[256] = {};
 
     bool halted_ = false;
     uint32_t runStepCount_ = 0;

@@ -78,6 +78,14 @@ public:
     virtual void releaseKey(int scancode) {}
     virtual bool isRuslatMode() const { return false; }
 
+    // -- I/O ports (Stage 6.1 Iteration 3) ---------------------------------
+    // readIoPort: returns port value (0-255). Default returns 0xFF.
+    // writeIoPort: writes value to port. Default is no-op.
+    // These are called from emulation thread only (via Command Queue for write).
+
+    virtual uint8_t readIoPort(uint8_t port) { (void)port; return 0xFF; }
+    virtual void    writeIoPort(uint8_t port, uint8_t value) { (void)port; (void)value; }
+
     // -- ROM / init ---------------------------------------------------------
 
     virtual bool loadRom(const std::string &path, uint32_t org) = 0;

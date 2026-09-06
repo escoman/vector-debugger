@@ -1792,6 +1792,44 @@ static void test_quit_fulfills_all_pause_promises()
 }
 
 // ---------------------------------------------------------------------------
+// Test 46: I/O port access through Command Queue
+// ---------------------------------------------------------------------------
+
+static void test_io_port_write_through_queue()
+{
+    TEST_BEGIN("io_port_write_through_queue");
+    TestFixture f;
+    writeProgram(f.mem, loop_program, sizeof(loop_program), 0x0000);
+    f.initCpu(0x0003);
+
+    AgentApi api(*f.backend);
+
+    // readIo should return 0xFF (default NoBoardTarget implementation)
+    auto r1 = api.readIo(0x10);
+    CHECK(r1.success, "readIo succeeds");
+    CHECK_EQ(0xFFu, (unsigned)r1.value, "default port value is 0xFF");
+
+    // writeIo goes through Command Queue (testSynchronous_ = true)
+    auto w1 = api.writeIo(0x10, 0x55);
+    CHECK(w1.success, "writeIo succeeds through queue");
+
+    // NoBoardTarget doesn't store port state, so read still returns 0xFF
+    // But the command succeeded, proving the queue mechanism works
+    auto r2 = api.readIo(0x10);
+    CHECK(r2.success, "second readIo succeeds");
+    CHECK_EQ(0xFFu, (unsigned)r2.value, "NoBoardTarget doesn't store port state");
+
+    // Verify zero and max ports are valid
+    auto r3 = api.readIo(0x00);
+    CHECK(r3.success, "port 0x00 is valid");
+
+    auto r4 = api.readIo(0xFF);
+    CHECK(r4.success, "port 0xFF is valid");
+
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -1859,6 +1897,9 @@ int main()
     test_thread_isolation_register_write();         // 43
     test_thread_isolation_reset();                  // 44
     test_quit_fulfills_all_pause_promises();        // 45
+
+    // Stage 6.1 Iteration 3 — I/O ports
+    test_io_port_write_through_queue();             // 46
 
     printf("\n\033[1;33m========================================\033[0m\n");
     printf("  Results: %d/%d passed", tests_passed, tests_run);

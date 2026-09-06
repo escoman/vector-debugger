@@ -72,6 +72,11 @@ public:
     bool loadWav(const std::string &path) override;
     void initCpu(uint16_t pc, uint16_t sp) override;
 
+    // -- I/O ports (Stage 6.1 Iteration 3) ----------------------------------
+
+    uint8_t readIoPort(uint8_t port) override;
+    void    writeIoPort(uint8_t port, uint8_t value) override;
+
     // -- HAL binding --------------------------------------------------------
 
     // Bind HAL callbacks to this adapter's components.

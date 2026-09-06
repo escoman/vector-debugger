@@ -124,6 +124,37 @@ bool AgentApi::writeMemory(uint16_t address, const std::vector<uint8_t> &data)
 }
 
 // ---------------------------------------------------------------------------
+// I/O ports (Stage 6.1 Iteration 3)
+// ---------------------------------------------------------------------------
+
+AgentApiResult<uint8_t> AgentApi::readIo(uint8_t port)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    uint8_t value = backend_.readIoPort(port);
+
+    std::ostringstream oss;
+    oss << "port=" << std::hex << static_cast<int>(port);
+    log_.record("readIo", oss.str(),
+                "value=" + std::to_string(value),
+                elapsedMs(t0));
+    return AgentApiResult<uint8_t>::ok(value);
+}
+
+CommandResult AgentApi::writeIo(uint8_t port, uint8_t value)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    auto result = backend_.writeIoPort(port, value);
+
+    std::ostringstream oss;
+    oss << "port=" << std::hex << static_cast<int>(port)
+        << " value=" << std::hex << static_cast<int>(value);
+    log_.record("writeIo", oss.str(),
+                result.success ? "ok" : result.error, elapsedMs(t0),
+                result.success, result.error);
+    return result;
+}
+
+// ---------------------------------------------------------------------------
 // Breakpoints (through command protocol)
 // ---------------------------------------------------------------------------
 

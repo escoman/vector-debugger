@@ -163,6 +163,25 @@ bool DebugBackend::isRuslatMode() const
 }
 
 // ---------------------------------------------------------------------------
+// I/O ports (Stage 6.1 Iteration 3)
+// ---------------------------------------------------------------------------
+
+uint8_t DebugBackend::readIoPort(uint8_t port)
+{
+    if (!target_) return 0xFF;
+    return target_->readIoPort(port);
+}
+
+CommandResult DebugBackend::writeIoPort(uint8_t port, uint8_t value)
+{
+    auto cmd = std::make_unique<Command>();
+    cmd->type = CommandType::IoWrite;
+    cmd->address = port;  // port number fits in uint16_t
+    cmd->ioValue = value;
+    return submitAndWait(std::move(cmd));
+}
+
+// ---------------------------------------------------------------------------
 // Memory callback installation (with chaining)
 // ---------------------------------------------------------------------------
 
@@ -1074,6 +1093,20 @@ void DebugBackend::executeCommand(Command &cmd)
         // These are handled by the emulation loop directly, not through executeCommand.
         result.success = true;
         break;
+    case CommandType::IoWrite: {
+        // Stage 6.1 Iteration 3: Write to I/O port through Command Queue.
+        // Must be executed on emulation thread.
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        if (state_ == DebuggerState::Paused) {
+            target_->writeIoPort(static_cast<uint8_t>(cmd.address), cmd.ioValue);
+            result.success = true;
+        } else {
+            result.success = false;
+            result.error = "cannot write I/O port while running";
+            result.status = CommandResult::Failed;
+        }
+        break;
+    }
     default:
         result.success = false;
         result.error = "unknown command type";

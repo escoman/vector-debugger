@@ -70,6 +70,11 @@ public:
     void releaseKey(int scancode) override;
     bool isRuslatMode() const override;
 
+    // -- IDebugBackend: I/O ports (Stage 6.1 Iteration 3) -------------------
+
+    uint8_t readIoPort(uint8_t port) override;
+    CommandResult writeIoPort(uint8_t port, uint8_t value) override;
+
     // -- IDebugBackend: memory access ---------------------------------------
 
     uint8_t readMemory(uint16_t address) override;
@@ -212,7 +217,9 @@ public:
         // Symbols
         CreateFunction, RenameSymbol, SetComment, RemoveSymbol, AddLabel,
         // Trace
-        ExecuteTrace
+        ExecuteTrace,
+        // I/O (Stage 6.1 Iteration 3)
+        IoWrite
     };
 
     // Stage 5.3.3.2: Explicit command lifecycle state machine
@@ -231,6 +238,8 @@ public:
         // Register write
         RegisterId regId = RegisterId::AF;
         uint16_t regValue = 0;
+        // I/O write (Stage 6.1 Iteration 3)
+        uint8_t ioValue = 0;
         // Trace
         TraceExecutionParams traceParams;
         std::shared_ptr<std::promise<TraceExecutionResult>> tracePromise;
