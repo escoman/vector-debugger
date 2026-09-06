@@ -3,6 +3,7 @@
 #include "opcode_info.h"
 #include "ring_buffer.h"
 #include "debug_memory.h"
+#include "map_loader.h"
 
 #include <cstdio>
 #include <cstring>
@@ -112,6 +113,45 @@ bool DebugBackend::loadRom(const std::string &path, uint32_t org)
         state_ = DebuggerState::Paused;
     }
     pauseRequestedAtomic_.store(false, std::memory_order_release);
+
+    // Stage 6.2: Auto-detect and load Z88DK MAP file
+    symbols_.clearMapSymbols();  // remove MAP symbols from previous ROM
+    std::string mapPath = MapLoader::mapPathFromRom(path);
+    MapLoadResult mapResult = MapLoader::loadMapFile(mapPath);
+    if (mapResult.success) {
+        int added = 0;
+        for (const auto &ms : mapResult.symbols) {
+            // Classify: addr + public → Function, otherwise → Label
+            SymbolType type = (ms.isAddress && ms.visibility == MapSymbolVisibility::Public)
+                ? SymbolType::Function : SymbolType::Label;
+
+            DebugSymbol sym;
+            sym.address   = ms.address;
+            sym.name      = ms.name;
+            sym.type      = type;
+            sym.fromMap   = true;
+            sym.sourceFile = ms.sourceFile;
+            sym.sourceLine = ms.sourceLine;
+
+            // Try to add; if address already taken, skip (first wins)
+            if (symbols_.addSymbol(sym.address, sym.name, sym.type)) {
+                // Update MAP-specific fields
+                auto *p = const_cast<DebugSymbol*>(symbols_.findSymbol(sym.address));
+                if (p) {
+                    p->fromMap   = true;
+                    p->sourceFile = ms.sourceFile;
+                    p->sourceLine = ms.sourceLine;
+                }
+                added++;
+            }
+        }
+        printf("DebugBackend::loadRom(): loaded MAP %s (%d symbols, %d skipped lines)\n",
+               mapPath.c_str(), added, mapResult.skippedLines);
+    } else {
+        // MAP not found or invalid format — not an error
+        printf("DebugBackend::loadRom(): MAP not loaded (%s)\n",
+               mapResult.errorMessage.c_str());
+    }
 
     return true;
 }

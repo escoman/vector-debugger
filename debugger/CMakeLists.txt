@@ -69,6 +69,7 @@ set(DBG_SOURCES
     ${DBG_SRC_DIR}/project_file.cpp
     ${DBG_SRC_DIR}/vram_mapping.cpp
     ${DBG_SRC_DIR}/no_board_target.cpp
+    ${DBG_SRC_DIR}/map_loader.cpp
 )
 
 # Debug Adapter — bridge between Debugger Core and Vector Emulator (Stage 3.13/3.13a)
@@ -123,6 +124,38 @@ add_executable(test_symbol_database
 add_executable(test_vram_mapping
     ${DBG_TST_DIR}/test_vram_mapping.cpp
     ${DBG_SRC_DIR}/vram_mapping.cpp
+)
+
+# ---------------------------------------------------------------------------
+# MAP Loader test executable (Stage 6.2)
+# ---------------------------------------------------------------------------
+
+add_executable(test_map_loader
+    ${DBG_TST_DIR}/test_map_loader.cpp
+    ${DBG_SRC_DIR}/map_loader.cpp
+    ${DBG_SRC_DIR}/symbol_database.cpp
+)
+
+# ---------------------------------------------------------------------------
+# MAP Loader integration test (Stage 6.2)
+# Uses real DebugBackend + NoBoardTarget.
+# ---------------------------------------------------------------------------
+
+add_executable(test_map_integration
+    ${DBG_TST_DIR}/test_map_integration.cpp
+    ${DBG_SOURCES}
+    ${CORE_SOURCES}
+    ${SRC_DIR}/options.cpp
+)
+
+target_include_directories(test_map_integration PRIVATE
+    ${DBG_SRC_DIR}
+    ${SRC_DIR}
+)
+
+target_link_libraries(test_map_integration
+    ${Boost_LIBRARIES}
+    pthread
 )
 
 # ---------------------------------------------------------------------------

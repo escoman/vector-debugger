@@ -34,6 +34,11 @@ struct DebugSymbol
     std::string name;
     std::string comment;
     SymbolType type;
+    // Stage 6.2: MAP source location
+    std::string sourceFile;  // e.g. "main.c"
+    int         sourceLine = 0;
+    // Stage 6.2: origin tracking (for ROM reload cleanup)
+    bool        fromMap    = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -154,6 +159,12 @@ public:
     // -- Clear all data ------------------------------------------------------
 
     void clear();
+
+    // -- MAP symbols (Stage 6.2) ---------------------------------------------
+
+    // Remove all symbols that were loaded from a MAP file.
+    // Preserves user-defined symbols (fromMap == false).
+    void clearMapSymbols();
 
 private:
     // Symbols indexed by address

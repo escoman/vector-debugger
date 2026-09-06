@@ -117,7 +117,7 @@ void FunctionsWindow::render(IDebugBackend &backend)
     // Table
     ImGui::BeginChild("TableScroll", ImVec2(0, 0), ImGuiChildFlags_None, ImGuiWindowFlags_None);
 
-    if (ImGui::BeginTable("FunctionsTable", 5,
+    if (ImGui::BeginTable("FunctionsTable", 6,
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Sortable |
             ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp)) {
 
@@ -127,6 +127,7 @@ void FunctionsWindow::render(IDebugBackend &backend)
         ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_DefaultSort, 150.0f);
         ImGui::TableSetupColumn("Size", 0, 60.0f);
         ImGui::TableSetupColumn("Calls", 0, 50.0f);
+        ImGui::TableSetupColumn("Source", 0, 150.0f);  // Stage 6.2
         ImGui::TableSetupColumn("Comment", 0, 200.0f);
         ImGui::TableHeadersRow();
 
@@ -225,8 +226,20 @@ void FunctionsWindow::render(IDebugBackend &backend)
             int calls = countXrefsTo(sym.address, allSymbols);
             ImGui::Text("%d", calls);
 
-            // Comment column
+            // Stage 6.2: Source column
             ImGui::TableSetColumnIndex(4);
+            if (!sym.sourceFile.empty()) {
+                if (sym.sourceLine > 0) {
+                    ImGui::Text("%s:%d", sym.sourceFile.c_str(), sym.sourceLine);
+                } else {
+                    ImGui::Text("%s", sym.sourceFile.c_str());
+                }
+            } else {
+                ImGui::TextDisabled("-");
+            }
+
+            // Comment column
+            ImGui::TableSetColumnIndex(5);
             if (editingComment_ && editingAddress_ == sym.address) {
                 ImGui::SetNextItemWidth(-1);
                 bool enterPressed = ImGui::InputText("##editcomment", editCommentBuffer_,

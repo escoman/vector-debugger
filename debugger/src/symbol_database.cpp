@@ -364,3 +364,18 @@ void SymbolDatabase::clear()
     xrefs_.clear();
     callTargets_.clear();
 }
+
+// ---------------------------------------------------------------------------
+// MAP symbols (Stage 6.2)
+// ---------------------------------------------------------------------------
+
+void SymbolDatabase::clearMapSymbols()
+{
+    for (auto it = symbols_.begin(); it != symbols_.end(); ) {
+        if (it->second.fromMap) {
+            it = symbols_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
