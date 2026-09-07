@@ -38,7 +38,8 @@ enum class ErrorCode
     NotRunning,
     OperationFailed,
     Timeout,
-    Unsupported
+    Unsupported,
+    NotFound            // Stage 6.3: object not found by valid key (symbol, breakpoint)
 };
 
 // ---------------------------------------------------------------------------
@@ -110,6 +111,34 @@ struct AgentApiResult<void>
         return r;
     }
 };
+
+// ---------------------------------------------------------------------------
+// AgentScreenSnapshot — Stage 6.3
+//
+// MCP-ready screen snapshot. No dependency on IDebugBackend::ScreenSnapshot.
+// ---------------------------------------------------------------------------
+
+struct AgentScreenSnapshot
+{
+    std::vector<uint32_t> pixels;  // ARGB8888
+    int width  = 0;
+    int height = 0;
+};
+
+// ---------------------------------------------------------------------------
+// Safe maximum limits — Stage 6.3
+//
+// Prevent unbounded memory allocation from Agent API requests.
+// ---------------------------------------------------------------------------
+
+namespace AgentLimits {
+    static const size_t MAX_DISASSEMBLY_COUNT  = 10000;
+    static const size_t MAX_SYMBOLS_LIMIT      = 10000;
+    static const size_t MAX_CALL_GRAPH_LIMIT   = 10000;
+    static const size_t MAX_STACK_LIMIT        = 1000;
+    static const size_t MAX_TRACE_ENTRIES      = 100000;
+    static const size_t MAX_HISTORY_ENTRIES    = 100000;
+}
 
 // ---------------------------------------------------------------------------
 // Trace-attributed access types (Sections 11, 12, 13)

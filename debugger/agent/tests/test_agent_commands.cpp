@@ -111,7 +111,8 @@ static void test_breakpoint_mutation()
 
     // List should show 2
     auto bps = api.listBreakpoints();
-    CHECK_EQ(2u, (unsigned)bps.size(), "2 breakpoints listed");
+    CHECK(bps.success, "listBreakpoints succeeds");
+    CHECK_EQ(2u, (unsigned)bps.value.size(), "2 breakpoints listed");
 
     // Remove first
     auto r3 = api.clearBreakpoint(0x0300);
@@ -122,7 +123,7 @@ static void test_breakpoint_mutation()
     // Duplicate should fail
     auto r4 = api.setBreakpoint(0x0400);
     CHECK(!r4.success, "duplicate breakpoint rejected");
-    CHECK(!r4.error.empty(), "error message provided");
+    CHECK(!r4.error_message.empty(), "error message provided");
     TEST_END();
 }
 
@@ -157,7 +158,8 @@ static void test_breakpoint_concurrent()
     CHECK_EQ(0, failCount.load(), "no failures");
 
     auto bps = api.listBreakpoints();
-    CHECK_EQ(4u, (unsigned)bps.size(), "4 breakpoints total");
+    CHECK(bps.success, "listBreakpoints succeeds");
+    CHECK_EQ(4u, (unsigned)bps.value.size(), "4 breakpoints total");
 
     // Try adding duplicates from multiple threads
     std::atomic<int> dupSuccess{0};
@@ -230,13 +232,13 @@ static void test_annotation_error_propagation()
 
     auto r2 = api.createFunction(0x0300);
     CHECK(!r2.success, "duplicate create fails");
-    CHECK(!r2.error.empty(), "error message provided");
-    CHECK_EQ((unsigned)CommandResult::Failed, (unsigned)r2.status, "status is Failed");
+    CHECK(!r2.error_message.empty(), "error message provided");
+
 
     // Rename nonexistent
     auto r3 = api.renameFunction(0x9999, "Ghost");
     CHECK(!r3.success, "rename nonexistent fails");
-    CHECK(!r3.error.empty(), "error for rename nonexistent");
+    CHECK(!r3.error_message.empty(), "error for rename nonexistent");
 
     // Comment on nonexistent
     auto r4 = api.setFunctionComment(0x9999, "Ghost");
@@ -319,7 +321,9 @@ static void test_trace_entry()
     mock.setMemory(0xF7FE, retAddr);
 
     AgentApi api(mock);
-    TraceResult tr = api.traceFunction(0x0200);
+    auto trResult = api.traceFunction(0x0200);
+    CHECK(trResult.success, "trace succeeds");
+    TraceResult tr = trResult.value;
 
     CHECK_EQ(0x0200u, (unsigned)tr.entryPc, "entryPc is function address");
     CHECK(tr.instructionCount > 0, "instructions were executed");
@@ -352,7 +356,9 @@ static void test_trace_exit_ret()
     mock.setMemory(0xF7FE, retAddr);
 
     AgentApi api(mock);
-    TraceResult tr = api.traceFunction(0x0200);
+    auto trResult = api.traceFunction(0x0200);
+    CHECK(trResult.success, "trace succeeds");
+    TraceResult tr = trResult.value;
 
     CHECK_EQ(0x0201u, (unsigned)tr.exitPc, "exitPc at RET instruction");
     CHECK(tr.exitReason == ExitReason::Ret, "exitReason is Ret");
@@ -424,7 +430,9 @@ static void test_memory_attribution()
     mock.setMemory(0xF7FE, retAddr);
 
     AgentApi api(mock);
-    TraceResult tr = api.traceFunction(0x0200);
+    auto trResult = api.traceFunction(0x0200);
+    CHECK(trResult.success, "trace succeeds");
+    TraceResult tr = trResult.value;
 
     // The MOV M,A instruction in the default program at 0x0206 writes to (HL).
     // But our function at 0x0200 is PUSH H; POP H; RET — no MOV M,A.
@@ -467,7 +475,9 @@ static void test_io_attribution()
     mock.setMemory(0xF7FE, retAddr);
 
     AgentApi api(mock);
-    TraceResult tr = api.traceFunction(0x0200);
+    auto trResult = api.traceFunction(0x0200);
+    CHECK(trResult.success, "trace succeeds");
+    TraceResult tr = trResult.value;
 
     // The IO event at sequence 100 should be captured if it falls within
     // the trace's [startSequence, endSequence) range.
@@ -510,7 +520,9 @@ static void test_vram_attribution()
     mock.setMemory(0xF7FE, retAddr);
 
     AgentApi api(mock);
-    TraceResult tr = api.traceFunction(0x0200);
+    auto trResult = api.traceFunction(0x0200);
+    CHECK(trResult.success, "trace succeeds");
+    TraceResult tr = trResult.value;
 
     // The function should execute PUSH H, MVI H, MVI L, MOV M,A, POP H, RET
     // MOV M,A writes A=0x55 to (HL)=0xC000, which is VRAM
@@ -547,7 +559,9 @@ static void test_stack_tracking()
     mock.setMemory(0xF7FE, retAddr);
 
     AgentApi api(mock);
-    TraceResult tr = api.traceFunction(0x0200);
+    auto trResult = api.traceFunction(0x0200);
+    CHECK(trResult.success, "trace succeeds");
+    TraceResult tr = trResult.value;
 
     CHECK_EQ(0xF7FEu, (unsigned)tr.entrySp, "entrySp correct");
     // After RET, SP is restored: POP H brings SP back to 0xF7FE, then RET pops
@@ -599,7 +613,9 @@ static void test_unrelated_events_excluded()
     mock.setMemory(0xF7FE, retAddr);
 
     AgentApi api(mock);
-    TraceResult tr = api.traceFunction(0x0200);
+    auto trResult = api.traceFunction(0x0200);
+    CHECK(trResult.success, "trace succeeds");
+    TraceResult tr = trResult.value;
 
     // The old and future events should NOT appear in the trace
     for (const auto &mw : tr.memoryWrites) {
@@ -622,7 +638,9 @@ static void test_function_context_relevance()
 
     // getFunctionContext should provide disassembly + xrefs (static),
     // with dynamic fields set to Unknown (no trace correlation).
-    FunctionContext ctx = api.getFunctionContext(0x0200);
+    auto ctxResult = api.getFunctionContext(0x0200);
+    CHECK(ctxResult.success, "getFunctionContext succeeds");
+    FunctionContext ctx = ctxResult.value;
 
     CHECK_EQ(0x0200u, (unsigned)ctx.address, "correct address");
     CHECK(ctx.instructions.size() >= 6, "disassembly present");
@@ -641,7 +659,9 @@ static void test_function_context_relevance()
 
     // Callees should be found from static analysis
     // Main at 0x0100 has CALL 0x0200
-    FunctionContext mainCtx = api.getFunctionContext(0x0100);
+    auto mainCtxResult = api.getFunctionContext(0x0100);
+    CHECK(mainCtxResult.success, "getFunctionContext for main succeeds");
+    FunctionContext mainCtx = mainCtxResult.value;
     bool foundCallee = false;
     for (uint16_t addr : mainCtx.callees) {
         if (addr == 0x0200) foundCallee = true;

@@ -207,17 +207,21 @@ static void test_full_scenario()
     // ===================================================================
     printf("\n  --- Phase 1: OBSERVE ---\n");
 
-    CpuState initial = api.getCpuState();
+    auto initialR = api.getCpuState();
+    CHECK(initialR.success, "getCpuState succeeds");
+    CpuState initial = initialR.value;
     CHECK_EQ(0x0000u, (unsigned)initial.pc, "PC at 0x0000");
 
-    auto romData = api.readMemory(MAIN_ADDR, sizeof(main_program));
-    CHECK_EQ(0x31u, (unsigned)romData[0], "LXI SP opcode");
-    CHECK_EQ(0xCDu, (unsigned)romData[5], "CALL opcode");
-    CHECK_EQ(0x76u, (unsigned)romData[12], "HLT opcode");
+    auto romDataR = api.readMemory(MAIN_ADDR, sizeof(main_program));
+    CHECK(romDataR.success, "readMemory main succeeds");
+    CHECK_EQ(0x31u, (unsigned)romDataR.value[0], "LXI SP opcode");
+    CHECK_EQ(0xCDu, (unsigned)romDataR.value[5], "CALL opcode");
+    CHECK_EQ(0x76u, (unsigned)romDataR.value[12], "HLT opcode");
 
-    auto subData = api.readMemory(SUB_ADDR, sizeof(subroutine));
-    CHECK_EQ(0xE5u, (unsigned)subData[0], "PUSH H opcode");
-    CHECK_EQ(0xC9u, (unsigned)subData[7], "RET opcode");
+    auto subDataR = api.readMemory(SUB_ADDR, sizeof(subroutine));
+    CHECK(subDataR.success, "readMemory sub succeeds");
+    CHECK_EQ(0xE5u, (unsigned)subDataR.value[0], "PUSH H opcode");
+    CHECK_EQ(0xC9u, (unsigned)subDataR.value[7], "RET opcode");
 
     // ===================================================================
     // PHASE 2: EXPERIMENT — step through instructions
@@ -226,18 +230,18 @@ static void test_full_scenario()
 
     // Step 1: LXI SP, 0xC100
     api.step();
-    CpuState after1 = api.getCpuState();
+    auto after1R = api.getCpuState(); CpuState after1 = after1R.value;
     CHECK_EQ(0x0003u, (unsigned)after1.pc, "after LXI SP: PC=0003");
 
     // Step 2: MVI A, 0x05
     api.step();
-    CpuState after2 = api.getCpuState();
+    auto after2R = api.getCpuState(); CpuState after2 = after2R.value;
     CHECK_EQ(0x0005u, (unsigned)after2.pc, "after MVI A: PC=0005");
     CHECK_EQ(0x05u, (unsigned)after2.a, "after MVI A: A=0x05");
 
     // Step 3: CALL 0x0200 — should jump to subroutine
     api.step();
-    CpuState after3 = api.getCpuState();
+    auto after3R = api.getCpuState(); CpuState after3 = after3R.value;
     CHECK_EQ(0x0200u, (unsigned)after3.pc, "after CALL: PC=0200");
 
     // Step through subroutine: PUSH H, MVI H, MVI L, MOV M, POP H, RET
@@ -248,7 +252,7 @@ static void test_full_scenario()
     api.step(); // POP H     at 0206
     api.step(); // RET       at 0207 — should return to 0x0008
 
-    CpuState afterRet = api.getCpuState();
+    auto afterRetR = api.getCpuState(); CpuState afterRet = afterRetR.value;
     CHECK_EQ(DCR_ADDR, (unsigned)afterRet.pc, "after RET: PC=0008");
 
     // ===================================================================
@@ -256,18 +260,19 @@ static void test_full_scenario()
     // ===================================================================
     printf("\n  --- Phase 3: OBSERVE (trace analysis) ---\n");
 
-    auto trace = api.getExecutionTrace(1000);
-    CHECK(trace.size() >= 9, "trace has at least 9 instructions");
-    CHECK_EQ(0x0000u, (unsigned)trace[0].pcBefore, "trace[0] = 0000 (LXI SP)");
-    CHECK_EQ(0x0005u, (unsigned)trace[2].pcBefore, "trace[2] = 0005 (CALL instr)");
-    CHECK_EQ(SUB_ADDR, (unsigned)trace[3].pcBefore, "trace[3] = 0200 (CALL target)");
+    auto traceR = api.getExecutionTrace(1000);
+    CHECK(traceR.success, "getExecutionTrace succeeds");
+    CHECK(traceR.value.size() >= 9, "trace has at least 9 instructions");
+    CHECK_EQ(0x0000u, (unsigned)traceR.value[0].pcBefore, "trace[0] = 0000 (LXI SP)");
+    CHECK_EQ(0x0005u, (unsigned)traceR.value[2].pcBefore, "trace[2] = 0005 (CALL instr)");
+    CHECK_EQ(SUB_ADDR, (unsigned)traceR.value[3].pcBefore, "trace[3] = 0200 (CALL target)");
 
     // Check VRAM write — MOV M,A wrote A=0x05 to C000
     // Verify by reading memory directly (activity counters cleared)
     uint8_t vramByte = backend.readMemory(0xC000);
     CHECK_EQ(0x05u, (unsigned)vramByte, "VRAM write at C000 detected");
 
-    printf("  Trace entries: %zu\n", trace.size());
+    printf("  Trace entries: %zu\n", traceR.value.size());
 
     // ===================================================================
     // PHASE 4: HYPOTHESIS — analyze function context
@@ -275,7 +280,9 @@ static void test_full_scenario()
     printf("\n  --- Phase 4: HYPOTHESIS (function analysis) ---\n");
 
     // Analyze the subroutine at 0x0200
-    FunctionContext subCtx = api.getFunctionContext(SUB_ADDR);
+    auto subCtxR = api.getFunctionContext(SUB_ADDR);
+    CHECK(subCtxR.success, "getFunctionContext succeeds");
+    FunctionContext subCtx = subCtxR.value;
     CHECK_EQ(SUB_ADDR, (unsigned)subCtx.address, "function at 0200");
     CHECK(subCtx.instructions.size() >= 6, "subroutine has >= 6 instructions");
     CHECK(subCtx.size > 0, "function size > 0");
@@ -285,7 +292,9 @@ static void test_full_scenario()
     CHECK(subCtx.vramSource == DataSource::Unknown, "VRAM source unknown without trace");
 
     // Analyze the main program at 0x0000
-    FunctionContext mainCtx = api.getFunctionContext(MAIN_ADDR);
+    auto mainCtxR = api.getFunctionContext(MAIN_ADDR);
+    CHECK(mainCtxR.success, "getFunctionContext main succeeds");
+    FunctionContext mainCtx = mainCtxR.value;
     CHECK_EQ(MAIN_ADDR, (unsigned)mainCtx.address, "main at 0000");
 
     // Main should have CALL 0x0200 as a callee
@@ -322,7 +331,9 @@ static void test_full_scenario()
     CHECK(labelR.success, "VRAM_BASE label created");
 
     // Verify annotations via getFunctionContext
-    FunctionContext annotated = api.getFunctionContext(SUB_ADDR);
+    auto annotatedR = api.getFunctionContext(SUB_ADDR);
+    CHECK(annotatedR.success, "getFunctionContext annotated succeeds");
+    FunctionContext annotated = annotatedR.value;
     CHECK_STR("DrawPixel", annotated.name, "name persisted");
     CHECK_STR("Writes A to VRAM C000", annotated.comment, "comment persisted");
 
@@ -364,12 +375,13 @@ static void test_full_scenario()
 
     // List breakpoints
     auto bps = api.listBreakpoints();
-    CHECK_EQ(1u, (unsigned)bps.size(), "1 breakpoint listed");
+    CHECK_EQ(1u, (unsigned)bps.value.size(), "1 breakpoint listed");
 
     // Run — should stop at breakpoint (executes LXI SP, MVI A, then hits CALL 0200)
     backend.run();
 
-    CpuState atBp = api.getCpuState();
+    auto atBpR = api.getCpuState();
+    CpuState atBp = atBpR.value;
     printf("  Stopped at PC=%04X\n", atBp.pc);
     CHECK_EQ(SUB_ADDR, (unsigned)atBp.pc, "stopped at 0200 (breakpoint)");
     CHECK_EQ((int)StopReason::Breakpoint, (int)backend.getStopReason(),
@@ -378,7 +390,7 @@ static void test_full_scenario()
     // Clear breakpoint
     api.clearBreakpoint(SUB_ADDR);
     auto bpsAfter = api.listBreakpoints();
-    CHECK_EQ(0u, (unsigned)bpsAfter.size(), "breakpoints cleared");
+    CHECK_EQ(0u, (unsigned)bpsAfter.value.size(), "breakpoints cleared");
 
     // ===================================================================
     // PHASE 8: Test executeTrace (real execution experiment)

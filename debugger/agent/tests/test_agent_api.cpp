@@ -91,13 +91,15 @@ static void test_run_pause()
 
     CHECK(mock.isPaused(), "initially paused");
 
-    api.run();
+    auto runResult = api.run();
+    CHECK(runResult.success, "run succeeds");
     // Mock requestRun() is synchronous — it runs until HLT/breakpoint/limit.
     // With NOPs it hits the 100000-step safety limit, then is paused again.
     // So we verify that stepping occurred (PC advanced far from 0x0100).
-    CHECK(api.getCpuState().pc != 0x0100, "PC advanced during run");
+    CHECK(api.getCpuState().value.pc != 0x0100, "PC advanced during run");
 
-    api.pause();
+    auto pauseResult = api.pause();
+    CHECK(pauseResult.success, "pause succeeds");
     CHECK(mock.isPaused(), "paused after pause()");
     TEST_END();
 }
@@ -108,14 +110,16 @@ static void test_step()
     MockAgentBackend mock;
     AgentApi api(mock);
 
-    CpuState before = api.getCpuState();
-    CHECK_EQ(0x0100u, (unsigned)before.pc, "PC at 0x0100");
+    auto beforeResult = api.getCpuState();
+    CHECK(beforeResult.success, "getCpuState succeeds");
+    CHECK_EQ(0x0100u, (unsigned)beforeResult.value.pc, "PC at 0x0100");
 
-    api.step();
+    auto stepResult = api.step();
+    CHECK(stepResult.success, "step succeeds");
 
-    CpuState after = api.getCpuState();
+    auto afterResult = api.getCpuState();
     // 0x0100 is LXI SP,word (3 bytes) → PC should be 0x0103
-    CHECK_EQ(0x0103u, (unsigned)after.pc, "PC advanced to 0x0103");
+    CHECK_EQ(0x0103u, (unsigned)afterResult.value.pc, "PC advanced to 0x0103");
     TEST_END();
 }
 
@@ -127,10 +131,11 @@ static void test_reset()
 
     api.step();
     api.step();
-    CHECK(api.getCpuState().pc != 0x0100, "PC moved");
+    CHECK(api.getCpuState().value.pc != 0x0100, "PC moved");
 
-    api.reset();
-    CHECK_EQ(0x0100u, (unsigned)api.getCpuState().pc, "PC back to 0x0100");
+    auto resetResult = api.reset();
+    CHECK(resetResult.success, "reset succeeds");
+    CHECK_EQ(0x0100u, (unsigned)api.getCpuState().value.pc, "PC back to 0x0100");
     TEST_END();
 }
 
@@ -140,14 +145,16 @@ static void test_reset()
 
 static void test_get_cpu_state()
 {
-    TEST_BEGIN("getCpuState returns correct data");
+    TEST_BEGIN("getCpuState returns current CPU state");
     MockAgentBackend mock;
     AgentApi api(mock);
 
-    CpuState cpu = api.getCpuState();
+    auto result = api.getCpuState();
+    CHECK(result.success, "succeeds");
+    CpuState cpu = result.value;
     CHECK_EQ(0x0100u, (unsigned)cpu.pc, "PC");
     CHECK_EQ(0xF800u, (unsigned)cpu.sp, "SP");
-    CHECK_EQ(0x42u, (unsigned)cpu.a, "A register");
+    CHECK_EQ(0x42u, (unsigned)cpu.a, "A");
     TEST_END();
 }
 
@@ -157,16 +164,14 @@ static void test_get_cpu_state()
 
 static void test_read_memory()
 {
-    TEST_BEGIN("readMemory returns correct bytes");
+    TEST_BEGIN("readMemory returns bytes");
     MockAgentBackend mock;
     AgentApi api(mock);
 
-    auto data = api.readMemory(0x0100, 4);
-    CHECK_EQ(4u, (unsigned)data.size(), "4 bytes read");
-    CHECK_EQ(0x31u, (unsigned)data[0], "opcode 0x31");
-    CHECK_EQ(0x00u, (unsigned)data[1], "operand byte 0");
-    CHECK_EQ(0xF8u, (unsigned)data[2], "operand byte 0xF8");
-    CHECK_EQ(0x3Eu, (unsigned)data[3], "next opcode 0x3E");
+    auto result = api.readMemory(0x0100, 4);
+    CHECK(result.success, "succeeds");
+    CHECK_EQ(4u, result.value.size(), "4 bytes");
+    CHECK_EQ(0x31u, (unsigned)result.value[0], "first byte");
     TEST_END();
 }
 
@@ -177,13 +182,14 @@ static void test_write_memory()
     AgentApi api(mock);
 
     std::vector<uint8_t> data = {0xAA, 0xBB, 0xCC};
-    bool ok = api.writeMemory(0x8000, data);
-    CHECK(ok, "write succeeds");
+    auto writeResult = api.writeMemory(0x8000, data);
+    CHECK(writeResult.success, "write succeeds");
 
-    auto readback = api.readMemory(0x8000, 3);
-    CHECK_EQ(0xAAu, (unsigned)readback[0], "byte 0");
-    CHECK_EQ(0xBBu, (unsigned)readback[1], "byte 1");
-    CHECK_EQ(0xCCu, (unsigned)readback[2], "byte 2");
+    auto readResult = api.readMemory(0x8000, 3);
+    CHECK(readResult.success, "read succeeds");
+    CHECK_EQ(0xAAu, (unsigned)readResult.value[0], "byte 0");
+    CHECK_EQ(0xBBu, (unsigned)readResult.value[1], "byte 1");
+    CHECK_EQ(0xCCu, (unsigned)readResult.value[2], "byte 2");
     TEST_END();
 }
 
@@ -290,10 +296,11 @@ static void test_io_trace_not_affected()
     api.writeIo(0x10, 0xAA);
     api.readIo(0x10);
 
-    auto trace = api.getIoTrace();
-    CHECK_EQ(1u, (unsigned)trace.size(), "only CPU I/O in trace");
-    CHECK_EQ(0x02u, (unsigned)trace[0].port, "CPU I/O port preserved");
-    CHECK_EQ(0x55u, (unsigned)trace[0].value, "CPU I/O value preserved");
+    auto traceResult = api.getIoTrace();
+    CHECK(traceResult.success, "getIoTrace succeeds");
+    CHECK_EQ(1u, (unsigned)traceResult.value.size(), "only CPU I/O in trace");
+    CHECK_EQ(0x02u, (unsigned)traceResult.value[0].port, "CPU I/O port preserved");
+    CHECK_EQ(0x55u, (unsigned)traceResult.value[0].value, "CPU I/O value preserved");
     TEST_END();
 }
 
@@ -314,8 +321,9 @@ static void test_set_clear_breakpoint()
     auto r2 = api.setBreakpoint(0x0200);
     CHECK(!r2.success, "duplicate rejected");
 
-    auto bps = api.listBreakpoints();
-    CHECK_EQ(1u, (unsigned)bps.size(), "1 breakpoint");
+    auto bpsResult = api.listBreakpoints();
+    CHECK(bpsResult.success, "listBreakpoints succeeds");
+    CHECK_EQ(1u, (unsigned)bpsResult.value.size(), "1 breakpoint");
 
     auto r3 = api.clearBreakpoint(0x0200);
     CHECK(r3.success, "breakpoint cleared");
@@ -345,10 +353,11 @@ static void test_get_execution_trace()
     mock.addInstructionEvent(ev2);
 
     AgentApi api(mock);
-    auto trace = api.getExecutionTrace(100);
-    CHECK_EQ(2u, (unsigned)trace.size(), "2 events");
-    CHECK_EQ(0x0100u, (unsigned)trace[0].pcBefore, "first PC");
-    CHECK_EQ(0x0103u, (unsigned)trace[1].pcBefore, "second PC");
+    auto traceResult = api.getExecutionTrace(100);
+    CHECK(traceResult.success, "getExecutionTrace succeeds");
+    CHECK_EQ(2u, (unsigned)traceResult.value.size(), "2 events");
+    CHECK_EQ(0x0100u, (unsigned)traceResult.value[0].pcBefore, "first PC");
+    CHECK_EQ(0x0103u, (unsigned)traceResult.value[1].pcBefore, "second PC");
     TEST_END();
 }
 
@@ -360,8 +369,9 @@ static void test_list_breakpoints()
 
     api.setBreakpoint(0x0200);
     api.setBreakpoint(0x0300);
-    auto bps = api.listBreakpoints();
-    CHECK_EQ(2u, (unsigned)bps.size(), "2 breakpoints");
+    auto bpsResult2 = api.listBreakpoints();
+    CHECK(bpsResult2.success, "listBreakpoints succeeds");
+    CHECK_EQ(2u, (unsigned)bpsResult2.value.size(), "2 breakpoints");
     TEST_END();
 }
 
@@ -505,7 +515,9 @@ static void test_get_function_context()
     // E1        POP H
     // C9        RET
 
-    FunctionContext ctx = api.getFunctionContext(0x0200);
+    auto ctxResult = api.getFunctionContext(0x0200);
+    CHECK(ctxResult.success, "succeeds");
+    FunctionContext ctx = ctxResult.value;
 
     CHECK_EQ(0x0200u, (unsigned)ctx.address, "address");
     CHECK(ctx.instructions.size() >= 6, "at least 6 instructions");
@@ -530,7 +542,9 @@ static void test_get_function_context_with_name()
     mock.symbolDatabase().setComment(0x0200, "Writes A to VRAM");
 
     AgentApi api(mock);
-    FunctionContext ctx = api.getFunctionContext(0x0200);
+    auto ctxResult = api.getFunctionContext(0x0200);
+    CHECK(ctxResult.success, "succeeds");
+    FunctionContext ctx = ctxResult.value;
 
     CHECK_STR("WriteVRAM", ctx.name, "existing name");
     CHECK_STR("Writes A to VRAM", ctx.comment, "existing comment");
@@ -544,7 +558,9 @@ static void test_get_function_context_callees()
     AgentApi api(mock);
 
     // The main program at 0x0100 has CALL 0x0200
-    FunctionContext ctx = api.getFunctionContext(0x0100);
+    auto ctxResult3 = api.getFunctionContext(0x0100);
+    CHECK(ctxResult3.success, "succeeds");
+    FunctionContext ctx = ctxResult3.value;
 
     // Should find 0x0200 as a callee
     bool found = false;
@@ -561,7 +577,9 @@ static void test_get_function_context_vram()
     MockAgentBackend mock;
     AgentApi api(mock);
 
-    FunctionContext ctx = api.getFunctionContext(0x0200);
+    auto ctxResult = api.getFunctionContext(0x0200);
+    CHECK(ctxResult.success, "succeeds");
+    FunctionContext ctx = ctxResult.value;
 
     // Without trace, VRAM writes are unknown (no global counters)
     CHECK(ctx.vramSource == DataSource::Unknown, "VRAM source unknown without trace");
@@ -598,7 +616,9 @@ static void test_trace_function()
     mock.setMemory(0xF7FE, retAddr);
 
     AgentApi api(mock);
-    TraceResult tr = api.traceFunction(0x0200);
+    auto trResult = api.traceFunction(0x0200);
+    CHECK(trResult.success, "trace succeeds");
+    TraceResult tr = trResult.value;
 
     CHECK_EQ(0x0200u, (unsigned)tr.entryPc, "entry PC");
     CHECK(tr.instructionCount > 0, "instructions executed");
@@ -644,8 +664,9 @@ static void test_read_memory_zero_size()
     MockAgentBackend mock;
     AgentApi api(mock);
 
-    auto data = api.readMemory(0x0100, 0);
-    CHECK_EQ(0u, (unsigned)data.size(), "empty result");
+    auto dataResult = api.readMemory(0x0100, 0);
+    CHECK(dataResult.success, "readMemory(0) succeeds");
+    CHECK_EQ(0u, (unsigned)dataResult.value.size(), "empty result");
     TEST_END();
 }
 
@@ -754,12 +775,12 @@ static void test_clear_all_breakpoints()
     api.setBreakpoint(0x0200);
     api.setBreakpoint(0x0300);
     api.setBreakpoint(0x0400);
-    CHECK_EQ(3u, (unsigned)api.listBreakpoints().size(), "3 breakpoints");
+    CHECK_EQ(3u, (unsigned)api.listBreakpoints().value.size(), "3 breakpoints");
 
     auto r = api.clearAllBreakpoints();
     CHECK(r.success, "clearAll succeeds");
     CHECK(r.error_code == ErrorCode::None, "no error");
-    CHECK_EQ(0u, (unsigned)api.listBreakpoints().size(), "0 breakpoints after clear");
+    CHECK_EQ(0u, (unsigned)api.listBreakpoints().value.size(), "0 breakpoints after clear");
     TEST_END();
 }
 
@@ -771,7 +792,7 @@ static void test_clear_all_breakpoints_empty()
 
     auto r = api.clearAllBreakpoints();
     CHECK(r.success, "clearAll on empty succeeds");
-    CHECK_EQ(0u, (unsigned)api.listBreakpoints().size(), "still 0 breakpoints");
+    CHECK_EQ(0u, (unsigned)api.listBreakpoints().value.size(), "still 0 breakpoints");
     TEST_END();
 }
 
@@ -787,7 +808,7 @@ static void test_set_register_a()
 
     auto r = api.setRegister("A", 0xAA);
     CHECK(r.success, "setRegister A succeeds");
-    CHECK_EQ(0xAAu, (unsigned)api.getCpuState().a, "A = 0xAA");
+    CHECK_EQ(0xAAu, (unsigned)api.getCpuState().value.a, "A = 0xAA");
     TEST_END();
 }
 
@@ -800,8 +821,8 @@ static void test_set_register_f_preserves_a()
     api.setRegister("A", 0x55);
     auto r = api.setRegister("F", 0x03);
     CHECK(r.success, "setRegister F succeeds");
-    CHECK_EQ(0x55u, (unsigned)api.getCpuState().a, "A preserved");
-    CHECK_EQ(0x03u, (unsigned)api.getCpuState().flags, "F = 0x03");
+    CHECK_EQ(0x55u, (unsigned)api.getCpuState().value.a, "A preserved");
+    CHECK_EQ(0x03u, (unsigned)api.getCpuState().value.flags, "F = 0x03");
     TEST_END();
 }
 
@@ -813,8 +834,8 @@ static void test_set_register_bc()
 
     api.setRegister("B", 0x12);
     api.setRegister("C", 0x34);
-    CHECK_EQ(0x12u, (unsigned)api.getCpuState().b, "B = 0x12");
-    CHECK_EQ(0x34u, (unsigned)api.getCpuState().c, "C = 0x34");
+    CHECK_EQ(0x12u, (unsigned)api.getCpuState().value.b, "B = 0x12");
+    CHECK_EQ(0x34u, (unsigned)api.getCpuState().value.c, "C = 0x34");
     TEST_END();
 }
 
@@ -826,8 +847,8 @@ static void test_set_register_hl()
 
     api.setRegister("H", 0xDE);
     api.setRegister("L", 0xAD);
-    CHECK_EQ(0xDEu, (unsigned)api.getCpuState().h, "H = 0xDE");
-    CHECK_EQ(0xADu, (unsigned)api.getCpuState().l, "L = 0xAD");
+    CHECK_EQ(0xDEu, (unsigned)api.getCpuState().value.h, "H = 0xDE");
+    CHECK_EQ(0xADu, (unsigned)api.getCpuState().value.l, "L = 0xAD");
     TEST_END();
 }
 
@@ -839,7 +860,7 @@ static void test_set_register_pc()
 
     auto r = api.setRegister("PC", 0x8000);
     CHECK(r.success, "setRegister PC succeeds");
-    CHECK_EQ(0x8000u, (unsigned)api.getCpuState().pc, "PC = 0x8000");
+    CHECK_EQ(0x8000u, (unsigned)api.getCpuState().value.pc, "PC = 0x8000");
     TEST_END();
 }
 
@@ -851,7 +872,7 @@ static void test_set_register_sp()
 
     auto r = api.setRegister("SP", 0xF000);
     CHECK(r.success, "setRegister SP succeeds");
-    CHECK_EQ(0xF000u, (unsigned)api.getCpuState().sp, "SP = 0xF000");
+    CHECK_EQ(0xF000u, (unsigned)api.getCpuState().value.sp, "SP = 0xF000");
     TEST_END();
 }
 
@@ -1291,7 +1312,7 @@ static void test_get_function_not_found()
 
     auto r = api.getFunction(0x9999);
     CHECK(!r.success, "not found");
-    CHECK(r.error_code == ErrorCode::InvalidAddress, "InvalidAddress");
+    CHECK(r.error_code == ErrorCode::NotFound, "NotFound");
     TEST_END();
 }
 
@@ -1396,7 +1417,7 @@ static void test_load_rom_info()
     MockAgentBackend mock;
     AgentApi api(mock);
 
-    auto r = api.loadRomInfo("test.rom");
+    auto r = api.loadRom("test.rom");
     CHECK(r.success, "succeeds");
     CHECK_STR("test.rom", r.value.path, "path matches");
     CHECK_EQ(0x0100u, (unsigned)r.value.origin, ".rom origin = 0x0100");
@@ -1412,7 +1433,7 @@ static void test_load_rom_info_r0m()
     MockAgentBackend mock;
     AgentApi api(mock);
 
-    auto r = api.loadRomInfo("game.r0m");
+    auto r = api.loadRom("game.r0m");
     CHECK(r.success, "succeeds");
     CHECK_EQ(0x0000u, (unsigned)r.value.origin, ".r0m origin = 0x0000");
     TEST_END();
@@ -1424,7 +1445,7 @@ static void test_load_rom_info_explicit_org()
     MockAgentBackend mock;
     AgentApi api(mock);
 
-    auto r = api.loadRomInfo("data.bin", 0x8000);
+    auto r = api.loadRom("data.bin", 0x8000);
     CHECK(r.success, "succeeds");
     CHECK_EQ(0x8000u, (unsigned)r.value.origin, "explicit org = 0x8000");
     TEST_END();

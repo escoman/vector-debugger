@@ -11,11 +11,12 @@
 #include <thread>
 
 // ---------------------------------------------------------------------------
-// AgentApi implementation — Stage 5.3.1 / Stage 6.1
+// AgentApi implementation — Stage 6.3
 //
 // All operations delegate to IDebugBackend.  No direct access to Board,
 // Memory, CPU, IO, TV, or any emulator internals.
 //
+// All public operations that can fail return AgentApiResult<T>.
 // State-changing operations go through the Backend command protocol.
 // ---------------------------------------------------------------------------
 
@@ -35,29 +36,37 @@ double AgentApi::elapsedMs(std::chrono::steady_clock::time_point start)
 }
 
 // ---------------------------------------------------------------------------
-// Execution control
+// Execution control (Stage 6.3: AgentApiResult<void>)
 // ---------------------------------------------------------------------------
 
-void AgentApi::run()
+AgentApiResult<void> AgentApi::run()
 {
     auto t0 = std::chrono::steady_clock::now();
     backend_.requestRun();
-    log_.record("run", "", backend_.isPaused() ? "paused" : "running",
-                elapsedMs(t0));
+    bool running = !backend_.isPaused();
+    log_.record("run", "", running ? "running" : "still paused", elapsedMs(t0));
+    return AgentApiResult<void>::ok();
 }
 
-void AgentApi::pause()
+AgentApiResult<void> AgentApi::pause()
 {
     auto t0 = std::chrono::steady_clock::now();
     backend_.requestPause();
-    log_.record("pause", "",
-                backend_.isPaused() ? "paused" : "still running",
-                elapsedMs(t0));
+    bool paused = backend_.isPaused();
+    log_.record("pause", "", paused ? "paused" : "still running", elapsedMs(t0));
+    return AgentApiResult<void>::ok();
 }
 
-void AgentApi::step()
+AgentApiResult<void> AgentApi::step()
 {
     auto t0 = std::chrono::steady_clock::now();
+
+    if (!backend_.isPaused()) {
+        log_.record("step", "", "not paused", elapsedMs(t0), false, "emulation is not paused");
+        return AgentApiResult<void>::fail(
+            ErrorCode::NotPaused, "Cannot step: emulation is not paused");
+    }
+
     auto cpuBefore = backend_.getCpuState();
     backend_.stepInstruction();
     auto cpuAfter = backend_.getCpuState();
@@ -65,13 +74,15 @@ void AgentApi::step()
     std::ostringstream oss;
     oss << "PC: " << std::hex << cpuBefore.pc << " -> " << cpuAfter.pc;
     log_.record("step", "", oss.str(), elapsedMs(t0));
+    return AgentApiResult<void>::ok();
 }
 
-void AgentApi::reset()
+AgentApiResult<void> AgentApi::reset()
 {
     auto t0 = std::chrono::steady_clock::now();
     backend_.requestReset();
     log_.record("reset", "", "done", elapsedMs(t0));
+    return AgentApiResult<void>::ok();
 }
 
 bool AgentApi::isRunning() const
@@ -80,10 +91,10 @@ bool AgentApi::isRunning() const
 }
 
 // ---------------------------------------------------------------------------
-// CPU state
+// CPU state (Stage 6.3: AgentApiResult<CpuState>)
 // ---------------------------------------------------------------------------
 
-CpuState AgentApi::getCpuState()
+AgentApiResult<CpuState> AgentApi::getCpuState()
 {
     auto t0 = std::chrono::steady_clock::now();
     CpuState cpu = backend_.getCpuState();
@@ -92,16 +103,26 @@ CpuState AgentApi::getCpuState()
     oss << "PC=" << std::hex << cpu.pc << " SP=" << cpu.sp
         << " A=" << (int)cpu.a;
     log_.record("getCpuState", "", oss.str(), elapsedMs(t0));
-    return cpu;
+    return AgentApiResult<CpuState>::ok(std::move(cpu));
 }
 
 // ---------------------------------------------------------------------------
-// Memory access
+// Memory access (Stage 6.3: AgentApiResult + overflow checks)
 // ---------------------------------------------------------------------------
 
-std::vector<uint8_t> AgentApi::readMemory(uint16_t address, size_t size)
+AgentApiResult<std::vector<uint8_t>> AgentApi::readMemory(uint16_t address, size_t size)
 {
     auto t0 = std::chrono::steady_clock::now();
+
+    // Stage 6.3: overflow check
+    uint32_t endAddr = static_cast<uint32_t>(address) + size;
+    if (endAddr > 0x10000) {
+        log_.record("readMemory", "addr=" + std::to_string(address) + " size=" + std::to_string(size),
+                    "range overflow", elapsedMs(t0), false, "address + size exceeds 64K");
+        return AgentApiResult<std::vector<uint8_t>>::fail(
+            ErrorCode::InvalidRange, "address + size exceeds 64K address space");
+    }
+
     auto snap = backend_.readMemorySnapshot(address, size);
 
     std::ostringstream oss;
@@ -109,18 +130,33 @@ std::vector<uint8_t> AgentApi::readMemory(uint16_t address, size_t size)
     log_.record("readMemory", oss.str(),
                 std::to_string(snap.data.size()) + " bytes",
                 elapsedMs(t0));
-    return snap.data;
+    return AgentApiResult<std::vector<uint8_t>>::ok(std::move(snap.data));
 }
 
-bool AgentApi::writeMemory(uint16_t address, const std::vector<uint8_t> &data)
+AgentApiResult<void> AgentApi::writeMemory(uint16_t address, const std::vector<uint8_t> &data)
 {
     auto t0 = std::chrono::steady_clock::now();
+
+    // Stage 6.3: overflow check
+    uint32_t endAddr = static_cast<uint32_t>(address) + data.size();
+    if (endAddr > 0x10000) {
+        log_.record("writeMemory", "addr=" + std::to_string(address) + " size=" + std::to_string(data.size()),
+                    "range overflow", elapsedMs(t0), false, "address + size exceeds 64K");
+        return AgentApiResult<void>::fail(
+            ErrorCode::InvalidRange, "address + size exceeds 64K address space");
+    }
+
     bool ok = backend_.writeMemory(address, data.data(), data.size());
 
     std::ostringstream oss;
     oss << "addr=" << std::hex << address << " size=" << std::dec << data.size();
-    log_.record("writeMemory", oss.str(), ok ? "ok" : "failed", elapsedMs(t0));
-    return ok;
+    log_.record("writeMemory", oss.str(), ok ? "ok" : "failed", elapsedMs(t0), ok, ok ? "" : "write failed");
+
+    if (!ok) {
+        return AgentApiResult<void>::fail(
+            ErrorCode::OperationFailed, "Memory write failed");
+    }
+    return AgentApiResult<void>::ok();
 }
 
 // ---------------------------------------------------------------------------
@@ -140,7 +176,7 @@ AgentApiResult<uint8_t> AgentApi::readIo(uint8_t port)
     return AgentApiResult<uint8_t>::ok(value);
 }
 
-CommandResult AgentApi::writeIo(uint8_t port, uint8_t value)
+AgentApiResult<void> AgentApi::writeIo(uint8_t port, uint8_t value)
 {
     auto t0 = std::chrono::steady_clock::now();
     auto result = backend_.writeIoPort(port, value);
@@ -151,14 +187,19 @@ CommandResult AgentApi::writeIo(uint8_t port, uint8_t value)
     log_.record("writeIo", oss.str(),
                 result.success ? "ok" : result.error, elapsedMs(t0),
                 result.success, result.error);
-    return result;
+
+    if (!result.success) {
+        return AgentApiResult<void>::fail(
+            ErrorCode::OperationFailed, result.error);
+    }
+    return AgentApiResult<void>::ok();
 }
 
 // ---------------------------------------------------------------------------
 // Breakpoints (through command protocol)
 // ---------------------------------------------------------------------------
 
-CommandResult AgentApi::setBreakpoint(uint16_t address)
+AgentApiResult<void> AgentApi::setBreakpoint(uint16_t address)
 {
     auto t0 = std::chrono::steady_clock::now();
     auto result = backend_.requestAddBreakpoint(address);
@@ -168,10 +209,15 @@ CommandResult AgentApi::setBreakpoint(uint16_t address)
     log_.record("setBreakpoint", oss.str(),
                 result.success ? "ok" : result.error, elapsedMs(t0),
                 result.success, result.error);
-    return result;
+
+    if (!result.success) {
+        return AgentApiResult<void>::fail(
+            ErrorCode::OperationFailed, result.error);
+    }
+    return AgentApiResult<void>::ok();
 }
 
-CommandResult AgentApi::clearBreakpoint(uint16_t address)
+AgentApiResult<void> AgentApi::clearBreakpoint(uint16_t address)
 {
     auto t0 = std::chrono::steady_clock::now();
     auto result = backend_.requestRemoveBreakpoint(address);
@@ -181,10 +227,15 @@ CommandResult AgentApi::clearBreakpoint(uint16_t address)
     log_.record("clearBreakpoint", oss.str(),
                 result.success ? "removed" : result.error, elapsedMs(t0),
                 result.success, result.error);
-    return result;
+
+    if (!result.success) {
+        return AgentApiResult<void>::fail(
+            ErrorCode::NotFound, result.error);
+    }
+    return AgentApiResult<void>::ok();
 }
 
-CommandResult AgentApi::setBreakpointEnabled(uint16_t address, bool enabled)
+AgentApiResult<void> AgentApi::setBreakpointEnabled(uint16_t address, bool enabled)
 {
     auto t0 = std::chrono::steady_clock::now();
     auto result = backend_.requestSetBreakpointEnabled(address, enabled);
@@ -194,17 +245,22 @@ CommandResult AgentApi::setBreakpointEnabled(uint16_t address, bool enabled)
     log_.record("setBreakpointEnabled", oss.str(),
                 result.success ? "ok" : result.error, elapsedMs(t0),
                 result.success, result.error);
-    return result;
+
+    if (!result.success) {
+        return AgentApiResult<void>::fail(
+            ErrorCode::NotFound, result.error);
+    }
+    return AgentApiResult<void>::ok();
 }
 
-std::vector<DebuggerBreakpoint> AgentApi::listBreakpoints()
+AgentApiResult<std::vector<DebuggerBreakpoint>> AgentApi::listBreakpoints()
 {
     auto t0 = std::chrono::steady_clock::now();
     auto bps = backend_.getBreakpoints();
     log_.record("listBreakpoints", "",
                 std::to_string(bps.size()) + " breakpoints",
                 elapsedMs(t0));
-    return bps;
+    return AgentApiResult<std::vector<DebuggerBreakpoint>>::ok(std::move(bps));
 }
 
 AgentApiResult<void> AgentApi::clearAllBreakpoints()
@@ -311,6 +367,11 @@ AgentApi::disassemble(uint16_t address, size_t count)
             ErrorCode::InvalidArgument, "count must be > 0");
     }
 
+    // Stage 6.3: safe maximum
+    if (count > AgentLimits::MAX_DISASSEMBLY_COUNT) {
+        count = AgentLimits::MAX_DISASSEMBLY_COUNT;
+    }
+
     auto readByte = [this](uint16_t addr) -> uint8_t {
         return backend_.readMemory(addr);
     };
@@ -362,6 +423,11 @@ AgentApi::getInstructionHistory(size_t count)
             ErrorCode::InvalidArgument, "count must be > 0");
     }
 
+    // Stage 6.3: safe maximum
+    if (count > AgentLimits::MAX_HISTORY_ENTRIES) {
+        count = AgentLimits::MAX_HISTORY_ENTRIES;
+    }
+
     auto all = backend_.instructionHistorySnapshot();
 
     // Take last 'count' entries
@@ -407,12 +473,25 @@ AgentApi::getInstructionHistory(size_t count)
 }
 
 // ---------------------------------------------------------------------------
-// Trace / I/O
+// Trace / I/O (Stage 6.3: AgentApiResult)
 // ---------------------------------------------------------------------------
 
-std::vector<InstructionEvent> AgentApi::getExecutionTrace(size_t maxEntries)
+AgentApiResult<std::vector<InstructionEvent>> AgentApi::getExecutionTrace(size_t maxEntries)
 {
     auto t0 = std::chrono::steady_clock::now();
+
+    if (maxEntries == 0) {
+        log_.record("getExecutionTrace", "maxEntries=0", "invalid",
+                    elapsedMs(t0), false, "maxEntries must be > 0");
+        return AgentApiResult<std::vector<InstructionEvent>>::fail(
+            ErrorCode::InvalidArgument, "maxEntries must be > 0");
+    }
+
+    // Stage 6.3: safe maximum
+    if (maxEntries > AgentLimits::MAX_TRACE_ENTRIES) {
+        maxEntries = AgentLimits::MAX_TRACE_ENTRIES;
+    }
+
     auto all = backend_.instructionHistorySnapshot();
 
     if (all.size() > maxEntries) {
@@ -423,12 +502,25 @@ std::vector<InstructionEvent> AgentApi::getExecutionTrace(size_t maxEntries)
                 "max=" + std::to_string(maxEntries),
                 std::to_string(all.size()) + " events",
                 elapsedMs(t0));
-    return all;
+    return AgentApiResult<std::vector<InstructionEvent>>::ok(std::move(all));
 }
 
-std::vector<IoAccessEvent> AgentApi::getIoTrace(size_t maxEntries)
+AgentApiResult<std::vector<IoAccessEvent>> AgentApi::getIoTrace(size_t maxEntries)
 {
     auto t0 = std::chrono::steady_clock::now();
+
+    if (maxEntries == 0) {
+        log_.record("getIoTrace", "maxEntries=0", "invalid",
+                    elapsedMs(t0), false, "maxEntries must be > 0");
+        return AgentApiResult<std::vector<IoAccessEvent>>::fail(
+            ErrorCode::InvalidArgument, "maxEntries must be > 0");
+    }
+
+    // Stage 6.3: safe maximum
+    if (maxEntries > AgentLimits::MAX_TRACE_ENTRIES) {
+        maxEntries = AgentLimits::MAX_TRACE_ENTRIES;
+    }
+
     auto all = backend_.ioHistorySnapshot();
 
     if (all.size() > maxEntries) {
@@ -439,29 +531,34 @@ std::vector<IoAccessEvent> AgentApi::getIoTrace(size_t maxEntries)
                 "max=" + std::to_string(maxEntries),
                 std::to_string(all.size()) + " events",
                 elapsedMs(t0));
-    return all;
+    return AgentApiResult<std::vector<IoAccessEvent>>::ok(std::move(all));
 }
 
 // ---------------------------------------------------------------------------
-// Screen
+// Screen (Stage 6.3: AgentScreenSnapshot, no IDebugBackend types)
 // ---------------------------------------------------------------------------
 
-IDebugBackend::ScreenSnapshot AgentApi::getScreen()
+AgentApiResult<AgentScreenSnapshot> AgentApi::getScreen()
 {
     auto t0 = std::chrono::steady_clock::now();
     auto snap = backend_.screenSnapshot();
 
+    AgentScreenSnapshot result;
+    result.pixels = std::move(snap.pixels);
+    result.width  = snap.width;
+    result.height = snap.height;
+
     std::ostringstream oss;
-    oss << snap.width << "x" << snap.height;
+    oss << result.width << "x" << result.height;
     log_.record("getScreen", "", oss.str(), elapsedMs(t0));
-    return snap;
+    return AgentApiResult<AgentScreenSnapshot>::ok(std::move(result));
 }
 
 // ---------------------------------------------------------------------------
-// Annotations — through Backend command protocol
+// Annotations — through Backend command protocol (Stage 6.3: AgentApiResult<void>)
 // ---------------------------------------------------------------------------
 
-CommandResult AgentApi::createFunction(uint16_t address, uint16_t /*size*/)
+AgentApiResult<void> AgentApi::createFunction(uint16_t address, uint16_t /*size*/)
 {
     auto t0 = std::chrono::steady_clock::now();
     std::string name = SymbolDatabase::autoName(address);
@@ -472,10 +569,14 @@ CommandResult AgentApi::createFunction(uint16_t address, uint16_t /*size*/)
     log_.record("createFunction", oss.str(),
                 result.success ? "created" : result.error, elapsedMs(t0),
                 result.success, result.error);
-    return result;
+
+    if (!result.success) {
+        return AgentApiResult<void>::fail(ErrorCode::OperationFailed, result.error);
+    }
+    return AgentApiResult<void>::ok();
 }
 
-CommandResult AgentApi::renameFunction(uint16_t address, const std::string &name)
+AgentApiResult<void> AgentApi::renameFunction(uint16_t address, const std::string &name)
 {
     auto t0 = std::chrono::steady_clock::now();
     auto result = backend_.requestRenameSymbol(address, name);
@@ -485,10 +586,14 @@ CommandResult AgentApi::renameFunction(uint16_t address, const std::string &name
     log_.record("renameFunction", oss.str(),
                 result.success ? "renamed" : result.error, elapsedMs(t0),
                 result.success, result.error);
-    return result;
+
+    if (!result.success) {
+        return AgentApiResult<void>::fail(ErrorCode::NotFound, result.error);
+    }
+    return AgentApiResult<void>::ok();
 }
 
-CommandResult AgentApi::setFunctionComment(uint16_t address, const std::string &comment)
+AgentApiResult<void> AgentApi::setFunctionComment(uint16_t address, const std::string &comment)
 {
     auto t0 = std::chrono::steady_clock::now();
     auto result = backend_.requestSetComment(address, comment);
@@ -498,10 +603,14 @@ CommandResult AgentApi::setFunctionComment(uint16_t address, const std::string &
     log_.record("setFunctionComment", oss.str(),
                 result.success ? "ok" : result.error, elapsedMs(t0),
                 result.success, result.error);
-    return result;
+
+    if (!result.success) {
+        return AgentApiResult<void>::fail(ErrorCode::NotFound, result.error);
+    }
+    return AgentApiResult<void>::ok();
 }
 
-CommandResult AgentApi::deleteFunction(uint16_t address)
+AgentApiResult<void> AgentApi::deleteFunction(uint16_t address)
 {
     auto t0 = std::chrono::steady_clock::now();
     auto result = backend_.requestRemoveSymbol(address);
@@ -511,10 +620,14 @@ CommandResult AgentApi::deleteFunction(uint16_t address)
     log_.record("deleteFunction", oss.str(),
                 result.success ? "deleted" : result.error, elapsedMs(t0),
                 result.success, result.error);
-    return result;
+
+    if (!result.success) {
+        return AgentApiResult<void>::fail(ErrorCode::NotFound, result.error);
+    }
+    return AgentApiResult<void>::ok();
 }
 
-CommandResult AgentApi::addLabel(uint16_t address, const std::string &name)
+AgentApiResult<void> AgentApi::addLabel(uint16_t address, const std::string &name)
 {
     auto t0 = std::chrono::steady_clock::now();
     auto result = backend_.requestAddLabel(address, name);
@@ -524,18 +637,22 @@ CommandResult AgentApi::addLabel(uint16_t address, const std::string &name)
     log_.record("addLabel", oss.str(),
                 result.success ? "created" : result.error, elapsedMs(t0),
                 result.success, result.error);
-    return result;
+
+    if (!result.success) {
+        return AgentApiResult<void>::fail(ErrorCode::OperationFailed, result.error);
+    }
+    return AgentApiResult<void>::ok();
 }
 
-CommandResult AgentApi::setComment(uint16_t address, const std::string &comment)
+AgentApiResult<void> AgentApi::setComment(uint16_t address, const std::string &comment)
 {
     return setFunctionComment(address, comment);
 }
 
-CommandResult AgentApi::applyAnnotation(const Annotation &annotation)
+AgentApiResult<void> AgentApi::applyAnnotation(const Annotation &annotation)
 {
     auto t0 = std::chrono::steady_clock::now();
-    CommandResult result;
+    AgentApiResult<void> result = AgentApiResult<void>::ok();
 
     switch (annotation.type) {
     case Annotation::Function:
@@ -567,24 +684,16 @@ CommandResult AgentApi::applyAnnotation(const Annotation &annotation)
         << " confidence=" << std::fixed << std::setprecision(2)
         << annotation.confidence;
     log_.record("applyAnnotation", oss.str(),
-                result.success ? "applied" : result.error, elapsedMs(t0),
-                result.success, result.error);
+                result.success ? "applied" : result.error_message, elapsedMs(t0),
+                result.success, result.error_message);
     return result;
 }
 
 // ---------------------------------------------------------------------------
-// ROM
+// ROM (Stage 6.3: single loadRom method)
 // ---------------------------------------------------------------------------
 
-bool AgentApi::loadRom(const std::string &path, uint32_t org)
-{
-    auto t0 = std::chrono::steady_clock::now();
-    bool ok = backend_.loadRom(path, org);
-    log_.record("loadRom", path, ok ? "loaded" : "failed", elapsedMs(t0));
-    return ok;
-}
-
-AgentApiResult<LoadRomResult> AgentApi::loadRomInfo(const std::string &path, uint32_t org)
+AgentApiResult<LoadRomResult> AgentApi::loadRom(const std::string &path, uint32_t org)
 {
     auto t0 = std::chrono::steady_clock::now();
 
@@ -596,7 +705,7 @@ AgentApiResult<LoadRomResult> AgentApi::loadRomInfo(const std::string &path, uin
 
     bool ok = backend_.loadRom(path, org);
     if (!ok) {
-        log_.record("loadRomInfo", path, "failed", elapsedMs(t0), false, "load failed");
+        log_.record("loadRom", path, "failed", elapsedMs(t0), false, "load failed");
         return AgentApiResult<LoadRomResult>::fail(
             ErrorCode::OperationFailed, "Failed to load ROM: " + path);
     }
@@ -609,7 +718,7 @@ AgentApiResult<LoadRomResult> AgentApi::loadRomInfo(const std::string &path, uin
     std::ostringstream oss;
     oss << "path=" << path << " origin=" << std::hex << origin
         << " pc=" << result.pc;
-    log_.record("loadRomInfo", "", oss.str(), elapsedMs(t0));
+    log_.record("loadRom", "", oss.str(), elapsedMs(t0));
 
     return AgentApiResult<LoadRomResult>::ok(std::move(result));
 }
@@ -630,6 +739,11 @@ AgentApi::getStack(size_t limit)
             ErrorCode::InvalidArgument, "limit must be > 0");
     }
 
+    // Stage 6.3: safe maximum
+    if (limit > AgentLimits::MAX_STACK_LIMIT) {
+        limit = AgentLimits::MAX_STACK_LIMIT;
+    }
+
     uint16_t sp = backend_.getCpuState().sp;
     const auto &db = backend_.symbolDatabase();
 
@@ -637,14 +751,19 @@ AgentApi::getStack(size_t limit)
     result.reserve(limit);
 
     for (size_t i = 0; i < limit; ++i) {
-        uint16_t addr = sp + static_cast<uint16_t>(i * 2);
+        // Stage 6.3: overflow-safe address arithmetic
+        uint32_t fullAddr = static_cast<uint32_t>(sp) + static_cast<uint32_t>(i) * 2;
+        if (fullAddr > 0xFFFF) break;  // stop at memory boundary
+        uint16_t addr = static_cast<uint16_t>(fullAddr);
 
         StackEntry entry;
         entry.address = addr;
 
         // Read 16-bit value (little-endian)
         uint8_t lo = backend_.readMemory(addr);
-        uint8_t hi = backend_.readMemory(static_cast<uint16_t>(addr + 1));
+        // Check if hi byte address is still within bounds
+        uint32_t hiAddr = fullAddr + 1;
+        uint8_t hi = (hiAddr <= 0xFFFF) ? backend_.readMemory(static_cast<uint16_t>(hiAddr)) : 0;
         entry.value = static_cast<uint16_t>(lo | (hi << 8));
 
         // Look up symbol for this value
@@ -820,7 +939,13 @@ AgentApi::getSymbols(size_t limit)
     auto all = db.allSymbols();
 
     std::vector<SymbolInfo> result;
-    size_t count = (limit > 0 && limit < all.size()) ? limit : all.size();
+    // Stage 6.3: limit=0 means "all" with safe maximum
+    size_t count;
+    if (limit == 0) {
+        count = std::min(all.size(), AgentLimits::MAX_SYMBOLS_LIMIT);
+    } else {
+        count = std::min(limit, all.size());
+    }
     result.reserve(count);
 
     for (size_t i = 0; i < count; ++i) {
@@ -851,7 +976,7 @@ AgentApiResult<SymbolInfo> AgentApi::getFunction(uint16_t address)
         log_.record("getFunction", "addr=" + std::to_string(address),
                     "not found", elapsedMs(t0), false, "symbol not found");
         return AgentApiResult<SymbolInfo>::fail(
-            ErrorCode::InvalidAddress, "No symbol at address");
+            ErrorCode::NotFound, "No symbol at address");
     }
 
     SymbolInfo info;
@@ -909,11 +1034,11 @@ AgentApi::getXrefs(uint16_t address)
 }
 
 // ---------------------------------------------------------------------------
-// Call Graph (Stage 6.1 §17)
+// Call Graph (Stage 6.3: std::optional<uint16_t> — no $0000 ambiguity)
 // ---------------------------------------------------------------------------
 
 AgentApiResult<std::vector<CallGraphEdge>>
-AgentApi::getCallGraph(uint16_t address, size_t limit)
+AgentApi::getCallGraph(std::optional<uint16_t> address, size_t limit)
 {
     auto t0 = std::chrono::steady_clock::now();
     const auto &db = backend_.symbolDatabase();
@@ -921,10 +1046,11 @@ AgentApi::getCallGraph(uint16_t address, size_t limit)
 
     std::vector<CallGraphEdge> result;
 
-    if (address != 0) {
+    if (address.has_value()) {
         // Filter edges involving the given address (as caller or callee)
+        uint16_t addr = address.value();
         for (const auto &e : allEdges) {
-            if (e.from == address || e.to == address) {
+            if (e.from == addr || e.to == addr) {
                 CallGraphEdge edge;
                 edge.from = e.from;
                 edge.to = e.to;
@@ -941,13 +1067,20 @@ AgentApi::getCallGraph(uint16_t address, size_t limit)
         }
     }
 
-    // Apply limit
+    // Stage 6.3: safe maximum for limit=0 (means "all")
     if (limit > 0 && result.size() > limit) {
         result.resize(limit);
+    } else if (limit == 0 && result.size() > AgentLimits::MAX_CALL_GRAPH_LIMIT) {
+        result.resize(AgentLimits::MAX_CALL_GRAPH_LIMIT);
     }
 
     std::ostringstream oss;
-    oss << "addr=" << std::hex << address << " limit=" << std::dec << limit;
+    if (address.has_value()) {
+        oss << "addr=" << std::hex << address.value();
+    } else {
+        oss << "addr=all";
+    }
+    oss << " limit=" << std::dec << limit;
     log_.record("getCallGraph", oss.str(),
                 std::to_string(result.size()) + " edges", elapsedMs(t0));
 
@@ -1163,10 +1296,10 @@ void AgentApi::collectTraceEvents(
 }
 
 // ---------------------------------------------------------------------------
-// High-level: getFunctionContext
+// High-level: getFunctionContext (Stage 6.3: AgentApiResult)
 // ---------------------------------------------------------------------------
 
-FunctionContext AgentApi::getFunctionContext(uint16_t address)
+AgentApiResult<FunctionContext> AgentApi::getFunctionContext(uint16_t address)
 {
     auto t0 = std::chrono::steady_clock::now();
     FunctionContext ctx;
@@ -1245,20 +1378,14 @@ FunctionContext AgentApi::getFunctionContext(uint16_t address)
         << " callees=" << ctx.callees.size();
     log_.record("getFunctionContext", oss.str(), ctx.name, elapsedMs(t0));
 
-    return ctx;
+    return AgentApiResult<FunctionContext>::ok(std::move(ctx));
 }
 
 // ---------------------------------------------------------------------------
-// High-level: traceFunction — REAL execution experiment (Section 8)
-//
-// 1. Set temporary breakpoint at function entry
-// 2. Run until breakpoint hit (function entry)
-// 3. Execute trace (step through function, collect events)
-// 4. Remove temporary breakpoint
-// 5. Build TraceResult with attributed events
+// High-level: traceFunction — REAL execution experiment (Stage 6.3: AgentApiResult)
 // ---------------------------------------------------------------------------
 
-TraceResult AgentApi::traceFunction(uint16_t address)
+AgentApiResult<TraceResult> AgentApi::traceFunction(uint16_t address)
 {
     auto t0 = std::chrono::steady_clock::now();
     TraceResult result;
@@ -1282,7 +1409,8 @@ TraceResult AgentApi::traceFunction(uint16_t address)
         result.exitReason = ExitReason::Timeout;
         log_.record("traceFunction", "addr=" + std::to_string(address),
                      "failed to reach function entry", elapsedMs(t0));
-        return result;
+        return AgentApiResult<TraceResult>::fail(
+            ErrorCode::Timeout, "Failed to reach function entry");
     }
 
     // 3. Execute trace — step through function collecting events
@@ -1450,5 +1578,5 @@ TraceResult AgentApi::traceFunction(uint16_t address)
         << " callees=" << result.calledFunctions.size();
     log_.record("traceFunction", oss.str(), "done", elapsedMs(t0));
 
-    return result;
+    return AgentApiResult<TraceResult>::ok(std::move(result));
 }

@@ -527,6 +527,24 @@ if(ENABLE_AI_AGENT)
         ${Boost_LIBRARIES}
         pthread
     )
+
+    # Agent API contract tests (Stage 6.3 — verify public API contract)
+    add_executable(test_agent_contract
+        ${AGENT_DIR}/tests/test_agent_contract.cpp
+    )
+
+    target_include_directories(test_agent_contract PRIVATE
+        ${AGENT_DIR}
+        ${DBG_SRC_DIR}
+        ${SRC_DIR}
+    )
+
+    target_link_libraries(test_agent_contract
+        debugger_agent
+        debugger_core
+        ${Boost_LIBRARIES}
+        pthread
+    )
 endif()
 
 include_directories(${SDL2_INCLUDE_DIR})

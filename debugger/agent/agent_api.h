@@ -6,28 +6,25 @@
 #include "events.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
 // ---------------------------------------------------------------------------
-// AgentApi — Stage 5.3.1 / Stage 6.1
+// AgentApi — Stage 6.3
 //
 // AI Agent interface to the Vector-06C Debugger.
 //
 // All operations go through IDebugBackend — no direct access to Board,
 // Memory, CPU, IO, TV, or any emulator internals.
 //
-// State-changing operations use the Backend command protocol:
-//   - Breakpoint mutations: requestAddBreakpoint / requestRemoveBreakpoint
-//   - Annotation mutations: requestCreateFunction / requestRenameSymbol etc.
-//
-// Read-only operations (getCpuState, readMemory, symbolDatabase() const)
-// are safe snapshot queries.
-//
-// Stage 6.1 additions:
-//   - AgentApiResult<T> uniform error model
-//   - isRunning(), clearBreakpoints(), setRegister(), disassemble(),
-//     getInstructionHistory()
+// Stage 6.3 Contract:
+//   - All public operations that can fail return AgentApiResult<T>
+//   - ErrorCode is used consistently (including NotFound)
+//   - No CommandResult exposed in public API
+//   - No IDebugBackend types in public result structures
+//   - std::optional<uint16_t> for getCallGraph (no $0000 ambiguity)
+//   - Single loadRom() method (no loadRomInfo duplication)
 // ---------------------------------------------------------------------------
 
 class AgentApi
@@ -35,122 +32,114 @@ class AgentApi
 public:
     explicit AgentApi(IDebugBackend &backend);
 
-    // -- Execution control --------------------------------------------------
+    // -- Execution control (Stage 6.3: AgentApiResult<void>) -----------------
 
-    void run();
-    void pause();
-    void step();
-    void reset();
+    AgentApiResult<void> run();
+    AgentApiResult<void> pause();
+    AgentApiResult<void> step();
+    AgentApiResult<void> reset();
     bool isRunning() const;
 
-    // -- CPU state ----------------------------------------------------------
+    // -- CPU state (Stage 6.3: AgentApiResult<CpuState>) ---------------------
 
-    CpuState getCpuState();
+    AgentApiResult<CpuState> getCpuState();
 
-    // -- Memory access ------------------------------------------------------
+    // -- Memory access (Stage 6.3: AgentApiResult + overflow checks) ---------
 
-    std::vector<uint8_t> readMemory(uint16_t address, size_t size);
-    bool writeMemory(uint16_t address, const std::vector<uint8_t> &data);
+    AgentApiResult<std::vector<uint8_t>> readMemory(uint16_t address, size_t size);
+    AgentApiResult<void> writeMemory(uint16_t address, const std::vector<uint8_t> &data);
 
-    // -- I/O ports (Stage 6.1 Iteration 3) ----------------------------------
-    // readIo: read I/O port value. Returns AgentApiResult<uint8_t>.
-    // writeIo: write to I/O port through Command Queue. Returns CommandResult.
+    // -- I/O ports (Stage 6.3: uniform AgentApiResult) -----------------------
 
     AgentApiResult<uint8_t> readIo(uint8_t port);
-    CommandResult writeIo(uint8_t port, uint8_t value);
+    AgentApiResult<void> writeIo(uint8_t port, uint8_t value);
 
-    // -- Breakpoints (through command protocol) -----------------------------
+    // -- Breakpoints (Stage 6.3: AgentApiResult<void>) -----------------------
 
-    CommandResult setBreakpoint(uint16_t address);
-    CommandResult clearBreakpoint(uint16_t address);
-    CommandResult setBreakpointEnabled(uint16_t address, bool enabled);
-    std::vector<DebuggerBreakpoint> listBreakpoints();
+    AgentApiResult<void> setBreakpoint(uint16_t address);
+    AgentApiResult<void> clearBreakpoint(uint16_t address);
+    AgentApiResult<void> setBreakpointEnabled(uint16_t address, bool enabled);
+    AgentApiResult<std::vector<DebuggerBreakpoint>> listBreakpoints();
     AgentApiResult<void> clearAllBreakpoints();
 
-    // -- Registers (Stage 6.1 §8) -------------------------------------------
+    // -- Registers -----------------------------------------------------------
 
-    // setRegister by name: "A","F","B","C","D","E","H","L","PC","SP"
-    // Goes through command queue for state-changing operations.
     AgentApiResult<void> setRegister(const std::string &name, uint16_t value);
 
-    // -- Disassembly (Stage 6.1 §10) ----------------------------------------
+    // -- Disassembly ---------------------------------------------------------
 
     AgentApiResult<std::vector<DisassembledInstructionResult>>
     disassemble(uint16_t address, size_t count);
 
-    // -- Instruction History (Stage 6.1 §11) --------------------------------
+    // -- Instruction History -------------------------------------------------
 
-    // Last N executed instructions. Distinct from getExecutionTrace().
     AgentApiResult<std::vector<InstructionHistoryEntry>>
     getInstructionHistory(size_t count);
 
-    // -- Trace / I/O / VRAM -------------------------------------------------
+    // -- Trace / I/O (Stage 6.3: AgentApiResult) -----------------------------
 
-    std::vector<InstructionEvent> getExecutionTrace(size_t maxEntries = 1000);
-    std::vector<IoAccessEvent>    getIoTrace(size_t maxEntries = 1000);
+    AgentApiResult<std::vector<InstructionEvent>> getExecutionTrace(size_t maxEntries = 1000);
+    AgentApiResult<std::vector<IoAccessEvent>>    getIoTrace(size_t maxEntries = 1000);
 
-    // -- Screen -------------------------------------------------------------
+    // -- Screen (Stage 6.3: AgentScreenSnapshot, no IDebugBackend types) -----
 
-    IDebugBackend::ScreenSnapshot getScreen();
+    AgentApiResult<AgentScreenSnapshot> getScreen();
 
-    // -- Annotations (through command protocol) -----------------------------
+    // -- Annotations (Stage 6.3: AgentApiResult<void>) -----------------------
 
-    CommandResult createFunction(uint16_t address, uint16_t size = 0);
-    CommandResult renameFunction(uint16_t address, const std::string &name);
-    CommandResult setFunctionComment(uint16_t address, const std::string &comment);
-    CommandResult deleteFunction(uint16_t address);
-    CommandResult addLabel(uint16_t address, const std::string &name);
-    CommandResult setComment(uint16_t address, const std::string &comment);
-    CommandResult applyAnnotation(const Annotation &annotation);
+    AgentApiResult<void> createFunction(uint16_t address, uint16_t size = 0);
+    AgentApiResult<void> renameFunction(uint16_t address, const std::string &name);
+    AgentApiResult<void> setFunctionComment(uint16_t address, const std::string &comment);
+    AgentApiResult<void> deleteFunction(uint16_t address);
+    AgentApiResult<void> addLabel(uint16_t address, const std::string &name);
+    AgentApiResult<void> setComment(uint16_t address, const std::string &comment);
+    AgentApiResult<void> applyAnnotation(const Annotation &annotation);
 
-    // -- High-level analysis ------------------------------------------------
+    // -- High-level analysis (Stage 6.3: AgentApiResult) ---------------------
 
-    FunctionContext getFunctionContext(uint16_t address);
-    TraceResult     traceFunction(uint16_t address);
+    AgentApiResult<FunctionContext> getFunctionContext(uint16_t address);
+    AgentApiResult<TraceResult>     traceFunction(uint16_t address);
 
-    // -- Stack (Stage 6.1 §13) -----------------------------------------------
+    // -- Stack ---------------------------------------------------------------
 
     AgentApiResult<std::vector<StackEntry>>
     getStack(size_t limit);
 
-    // -- Memory Map (Stage 6.1 §18) ------------------------------------------
+    // -- Memory Map ----------------------------------------------------------
 
     AgentApiResult<std::vector<MemoryMapBlock>>
     getMemoryMap();
 
-    // -- Screen Info (Stage 6.1 §20) -----------------------------------------
+    // -- Screen Info ---------------------------------------------------------
 
     AgentApiResult<ScreenInfoResult> getScreenInfo();
 
-    // -- VRAM Info (Stage 6.1 §19) -------------------------------------------
+    // -- VRAM Info -----------------------------------------------------------
 
     AgentApiResult<VramInfoResult> getVramInfo();
 
-    // -- Symbols (Stage 6.1 §15) ---------------------------------------------
+    // -- Symbols -------------------------------------------------------------
 
     AgentApiResult<std::vector<SymbolInfo>>
     getSymbols(size_t limit = 0);
 
     AgentApiResult<SymbolInfo> getFunction(uint16_t address);
 
-    // -- Xrefs (Stage 6.1 §16) -----------------------------------------------
+    // -- Xrefs ---------------------------------------------------------------
 
     AgentApiResult<std::vector<XrefResult>>
     getXrefs(uint16_t address);
 
-    // -- Call Graph (Stage 6.1 §17) ------------------------------------------
+    // -- Call Graph (Stage 6.3: std::optional<uint16_t> — no $0000 ambiguity) -
 
     AgentApiResult<std::vector<CallGraphEdge>>
-    getCallGraph(uint16_t address = 0, size_t limit = 0);
+    getCallGraph(std::optional<uint16_t> address = std::nullopt, size_t limit = 0);
 
-    // -- ROM (Stage 6.1 §4) --------------------------------------------------
+    // -- ROM (Stage 6.3: single loadRom method) ------------------------------
 
-    bool loadRom(const std::string &path, uint32_t org = 0);
+    AgentApiResult<LoadRomResult> loadRom(const std::string &path, uint32_t org = 0);
 
-    // Structured ROM load result
-    AgentApiResult<LoadRomResult> loadRomInfo(const std::string &path, uint32_t org = 0);
-
-    // -- Debug State (Stage 6.1 §21) -----------------------------------------
+    // -- Debug State ---------------------------------------------------------
 
     AgentApiResult<DebugStateResult> getDebugState();
 
