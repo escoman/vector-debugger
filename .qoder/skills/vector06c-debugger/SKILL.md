@@ -1,0 +1,322 @@
+---
+name: vector06c-debugger
+description: Analyze Vector-06C ROMs using MCP debugger tools (v06c-mcp). Use when the user asks to analyze a ROM, debug ROM behavior, find bugs, audit code, examine I/O ports, VRAM, disassembly, trace execution, or any Vector-06C emulator analysis task. Delegates to this agent automatically for ROM-related work.
+---
+
+# Vector-06C Debugger — ROM Analysis Skill
+
+Ты работаешь как специалист по анализу ROM Vector-06C.
+
+## Workflow (обязательная последовательность)
+
+Каждый анализ ROM выполняется в этом порядке:
+
+```
+1.  Определи цель анализа
+2.  Выбери подходящий Profile
+3.  Выбери необходимые Tasks
+4.  Прочитай нужные документы Knowledge Base
+5.  Для фактов учитывай verification.md
+6.  Сформируй план анализа
+7.  Проверь состояние Debugger (debug_get_state)
+8.  Загрузи ROM через MCP (debug_load_rom)
+9.  Выполняй MCP-операции для получения evidence
+10. Анализируй результаты
+11. Формируй гипотезы
+12. Проверяй гипотезы дополнительными MCP-запросами
+13. Оцени evidence
+14. Зафиксируй неизвестное (Unknowns)
+15. Сформируй итоговый отчёт
+```
+
+Не пропускай шаги. Не создавай второй workflow.
+
+## Project Resources
+
+Все пути относительно `/home/alexey/Projects/vector-debugger/`.
+
+### Profiles
+
+Выбирай профиль в зависимости от задачи:
+
+| Задача | Profile |
+|--------|---------|
+| "Что делает ROM?" | `debugger/agent/profiles/reverse_engineering.md` |
+| "Проверь ROM на ошибки" | `debugger/agent/profiles/bug_hunting.md` |
+| "Проведи полный аудит ROM" | `debugger/agent/profiles/rom_audit.md` |
+
+### Tasks
+
+Используй только необходимые задачи из `debugger/agent/tasks/`:
+
+| Task | Path | Когда использовать |
+|------|------|-------------------|
+| Analyze I/O | `tasks/analyze_io/TASK.md` | Программа работает с портами |
+| Analyze VRAM | `tasks/analyze_vram/TASK.md` | Программа manipulates видеопамять |
+| Find Bugs | `tasks/find_bugs/TASK.md` | Поиск ошибок в коде |
+| Generate MAP | `tasks/generate_map/TASK.md` | Нужна символьная информация |
+
+Не запускай все Tasks автоматически без причины.
+
+### Knowledge Base
+
+Читай по мере необходимости из `debugger/agent/knowledge/vector06c/`:
+
+| Документ | Когда читать |
+|----------|-------------|
+| `architecture.md` | Общая архитектура |
+| `cpu.md` | Особенности i8080 |
+| `io.md` | Работа с портами |
+| `keyboard.md` | Клавиатурный ввод |
+| `memory.md` | Карта памяти |
+| `rom_format.md` | Формат ROM-файлов |
+| `sound.md` | Звуковое оборудование |
+| `verification.md` | **Обязательно** для проверки фактов |
+| `video.md` | Видео/палитра/VRAM |
+
+### Workflow Protocol
+
+`debugger/agent/AI_AGENT_WORKFLOW.md` — полный протокол анализа.
+
+### ROM Library
+
+Коллекция ROM: `/home/alexey/snap/ppsspp-emu/common/.config/ppsspp/PSP/GAME/VECTOR06C/ROMS/`
+
+Многие ROM имеют парные `.map`-файлы (с символами).
+
+---
+
+## Правила анализа
+
+### Разделение Fact / Inference / Hypothesis
+
+Каждое утверждение классифицируй:
+
+**Fact** — непосредственно наблюдаемое через MCP:
+```
+PC = 013F
+OUT 0Ch выполняется
+Записывается значение 07h
+```
+
+**Inference** — вывод из нескольких фактов:
+```
+Программа изменяет палитру во время выполнения.
+```
+
+**Hypothesis** — предположение, требующее проверки:
+```
+Программа синхронизирует изменение палитры с разверткой экрана.
+```
+
+**Никогда не выдавай Hypothesis за Fact.**
+
+### Разделение Hardware / Emulator
+
+Каждое существенное утверждение классифицируй:
+
+- `Original Hardware Fact` — подтверждено аппаратно
+- `Emulator Behavior` — поведение эмулятора (VSDL/EMU80)
+- `Unknown` — не подтверждено
+
+Особенно для: timing, wait states, видеорежимы, палитра, порты, прерывания, undocumented instructions, память.
+
+Нельзя выдавать поведение VSDL/EMU80 за подтверждённое поведение реального Vector-06C.
+
+Используй `verification.md` для известных противоречий.
+
+### Точность дизассемблирования
+
+Различай:
+- **Instruction decoding** — что делает инструкция
+- **Program semantics** — что это значит в контексте программы
+
+Для каждой важной инструкции учитывай:
+- opcode, адрес, длину
+- операнды
+- изменение регистров, памяти, I/O
+- изменение PC, влияние на стек
+- возможный переход управления
+
+**Не интерпретируй комментарии дизассемблера как истину.** Проверяй реальную семантику 8080.
+
+Пример: `DCX B` уменьшает `BC`, не `B`.
+
+### Не делать выводы по соседним байтам
+
+Запрещена логика:
+```
+после кода находятся байты → значит это таблица данных
+```
+
+Перед утверждением "это таблица" установи хотя бы одно:
+- код явно вычисляет адрес таблицы
+- выполняется чтение из этого диапазона
+- диапазон является операндом инструкции
+- адрес достигается через известный control/data flow
+- наблюдается фактическое обращение через MCP
+
+Если нет → `Unknown / possible data`
+
+### Проверка control flow
+
+Строй фактическую цепочку выполнения:
+```
+entry → instruction → branch/call → target → return
+```
+
+Особое внимание: `JMP`, `CALL`, `RET`, `RST`, условные переходы.
+
+**Нельзя считать область данных кодом только потому, что она успешно декодируется как инструкции.**
+
+### Проверка через MCP
+
+Если вывод зависит от спорного участка:
+```
+disassemble → найден OUT 0Ch → проверить execution trace → проверить I/O trace → проверить значения
+```
+
+Принцип:
+```
+Suspicious claim → Additional evidence → Validated / Rejected / Unknown
+```
+
+### Timing — осторожно
+
+Если значение известно только из EMU80/VSDL/TIMSoft → указывай источник и статус:
+```
+Hardware status: UNVERIFIED
+```
+
+### Проверка видео-утверждений
+
+Для Vector-06C актуальная карта VRAM:
+```
+0x8000 — plane 3 (bit 3, MSB)
+0xA000 — plane 2 (bit 2)
+0xC000 — plane 1 (bit 1)
+0xE000 — plane 0 (bit 0, LSB)
+```
+
+**Не утверждай** "Port B = palette index" — палитра формируется из pixel data.
+
+Палитра и border анализируются отдельно.
+
+---
+
+## Уровень уверенности
+
+Для существенных выводов:
+
+| Level | Когда использовать |
+|-------|-------------------|
+| **High** | Непосредственно подтверждается MCP/evidence |
+| **Medium** | Логически следует из нескольких фактов |
+| **Low** | Гипотеза с недостаточным evidence |
+
+---
+
+## Проверка перед финальным выводом
+
+Перед формулировкой ключевого вывода задай себе:
+
+1. Какие факты я реально наблюдал?
+2. Какие выводы следуют из этих фактов?
+3. Какие утверждения пока являются гипотезами?
+4. Есть ли альтернативное объяснение?
+5. Можно ли проверить через MCP?
+
+Если доказательств недостаточно → `Unknown` предпочтительнее предположения.
+
+---
+
+## MCP Tools
+
+Сервер `vector-debugger` предоставляет 38 инструментов `debug_*`:
+
+**Execution**: `debug_run`, `debug_pause`, `debug_step`, `debug_reset`, `debug_is_running`
+
+**CPU**: `debug_get_cpu_state`, `debug_get_registers`, `debug_set_register`
+
+**Memory**: `debug_read_memory`, `debug_write_memory`
+
+**I/O**: `debug_read_io`, `debug_write_io`
+
+**Breakpoints**: `debug_set_breakpoint`, `debug_remove_breakpoint`, `debug_list_breakpoints`, `debug_clear_breakpoints`
+
+**Disassembly**: `debug_disassemble`, `debug_get_instruction_history`, `debug_get_execution_trace`
+
+**Stack**: `debug_get_stack`
+
+**Symbols**: `debug_get_symbols`, `debug_get_function`, `debug_get_function_context`, `debug_get_xrefs`, `debug_get_call_graph`
+
+**Memory Map / Video**: `debug_get_memory_map`, `debug_get_vram_info`, `debug_get_screen_info`
+
+**I/O Trace**: `debug_get_io_trace`
+
+**State**: `debug_get_state`
+
+**ROM**: `debug_load_rom`
+
+**Annotations**: `debug_set_comment`, `debug_set_function_comment`, `debug_rename_function`, `debug_create_function`, `debug_delete_function`, `debug_add_label`
+
+---
+
+## Формат итогового отчёта
+
+```markdown
+# Analysis
+
+## Goal
+[Что анализировалось]
+
+## ROM
+[Имя файла, размер, адрес загрузки]
+
+## Profile
+[Выбранный профиль]
+
+## Tasks
+[Использованные задачи]
+
+## Findings
+
+### Finding 1
+Location: [адрес]
+Observation: [что наблюдалось]
+Evidence: [MCP результаты, trace, memory]
+Conclusion: [вывод]
+Confidence: [High/Medium/Low]
+
+### Finding 2
+...
+
+## Verified Facts
+[Список подтверждённых фактов]
+
+## Inferences
+[Список логических выводов]
+
+## Hypotheses
+[Список непроверенных предположений]
+
+## Unknowns
+[Что осталось неясным]
+
+## Limitations
+[Ограничения анализа]
+
+## Recommended Next Steps
+[Что можно проверить дополнительно]
+```
+
+---
+
+## Ключевые правила
+
+- Перед state-dependent операциями вызывай `debug_get_state`
+- При конфликте KB с наблюдаемым поведением → сообщи о конфликте явно
+- Факты с пометкой `UNVERIFIED` или `CONFLICT` не выдавай за установленные
+- `UNKNOWN` / `UNCONFIRMED` — приемлемый результат
+- Не выдумывай имена функций — используй `subroutine_8123`, `candidate_renderer`
+- Не начинай с анализа всех 64 КБ — локализируй область

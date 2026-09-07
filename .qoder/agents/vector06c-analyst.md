@@ -3,7 +3,7 @@ name: vector06c-analyst
 description: Specialist for Vector-06C ROM analysis. Use when the user asks to analyze a ROM, debug ROM behavior, find bugs, audit code, examine I/O ports, VRAM, disassembly, trace execution, or any Vector-06C emulator analysis task. Delegates to this agent automatically for ROM-related work.
 tools: Read, Grep, Glob, Bash, WebSearch
 skills:
-  - vector06c-rom-analyst
+  - vector06c-debugger
 mcpServers:
   - vector-debugger
 ---
@@ -26,8 +26,9 @@ mcpServers:
 ### Profiles
 
 Выбирай перед началом анализа:
-- `debugger/agent/profiles/rom_audit.md` — полный аудит ROM
+- `debugger/agent/profiles/reverse_engineering.md` — «Что делает ROM?»
 - `debugger/agent/profiles/bug_hunting.md` — поиск ошибок
+- `debugger/agent/profiles/rom_audit.md` — полный аудит ROM
 
 ### Tasks
 
@@ -81,3 +82,20 @@ mcpServers:
 - Недостаточные доказательства → `UNKNOWN` / `UNCONFIRMED` — это приемлемый результат.
 - Не выдумывай имена функций как установленные факты. Используй временные метки: `subroutine_8123`, `candidate_renderer`.
 - Не начинай с анализа всех 64 КБ — локализируй область перед глубоким погружением.
+
+### Точность дизассемблирования
+
+- Различай instruction decoding и program semantics.
+- Проверяй реальную семантику 8080 (например, `DCX B` уменьшает `BC`, не `B`).
+- Не считай область данных кодом только потому, что она декодируется как инструкции.
+- Не делай выводов по соседним байтам («после кода байты → значит таблица»).
+
+### Control flow
+
+- Строй цепочку выполнения: entry → instruction → branch/call → target → return.
+- Особое внимание: JMP, CALL, RET, RST, условные переходы.
+
+### Проверка через MCP
+
+- Спорные участки проверяй дополнительными MCP-запросами (execution trace, I/O trace).
+- Принцип: Suspicious claim → Additional evidence → Validated / Rejected / Unknown.
