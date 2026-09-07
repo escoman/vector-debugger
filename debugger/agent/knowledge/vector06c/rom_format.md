@@ -35,16 +35,41 @@ including the vector table.
 
 ### MAP files
 
-Z88DK-compatible MAP files provide symbol information:
-- Function names and addresses
-- Label definitions
-- Used by debugger for symbol resolution
+MAP files use the z88dk linker output format. Each line represents a symbol:
+
+```
+symbol_name           = $ADDRESS ; type, visibility, def, module, section, source_location
+```
+
+Fields:
+- `symbol_name` — symbol name (padded with spaces for alignment)
+- `$ADDRESS` — hex address with $ prefix (4 digits, e.g. $0100)
+- `type` — `addr` (code/data label) or `const` (constant)
+- `visibility` — `public` (exported) or `local` (internal)
+- `def` — `def` for exported symbols, empty for local
+- `module` — source module name (e.g., `clrs_code`, `startup_asm`)
+- `section` — section name (e.g., `clrs_code`, `bss_clib`, `vectors`)
+- `source_location` — source file and line (e.g., `clrs.rom:1` or full path)
+
+Standard linker symbols:
+- `__head`, `__size`, `__tail` — program start, size, end
+- `__code_clib_head`, `__code_clib_size`, `__code_clib_tail` — code sections
+
+Example:
+```
+main_init           = $0100 ; addr, public, def, clrs_code, clrs_code, clrs.rom:1
+rst7_handler        = $013F ; addr, public, def, clrs_code, clrs_code, clrs.rom:64
+__head              = $0100 ; const, public, def, , ,
+__size              = $0077 ; const, public, def, , ,
+```
 
 A MAP file is typically paired with a ROM:
 ```
 program.rom
 program.map
 ```
+
+MAP files are stored in the ROM Library alongside their ROMs.
 
 ## Boot Sequence
 

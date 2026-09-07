@@ -73,6 +73,16 @@ generate_map
 
 ## Output
 
+### MAP File Format
+
+При создании MAP-файла использовать формат z88dk (см. `rom_format.md` §MAP files):
+
+```
+symbol_name           = $ADDRESS ; type, visibility, def, module, section, source_location
+```
+
+MAP-файл сохраняется рядом с ROM в ROM Library.
+
 ### Summary
 
 Краткий вывод: количество обнаруженных функций, меток, областей данных.
