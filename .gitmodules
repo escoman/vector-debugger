@@ -1,0 +1,3 @@
+[submodule "debugger/thirdparty/cpp-mcp"]
+	path = debugger/thirdparty/cpp-mcp
+	url = https://github.com/hkr04/cpp-mcp.git
