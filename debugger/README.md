@@ -200,6 +200,55 @@ cd debugger/build
 
 Подробнее см. [mcp/README.md](mcp/README.md).
 
+## Task Library & Knowledge Base (Stage 6.5)
+
+AI Agent может использовать стандартные методики анализа ROM и проверенную базу знаний о Vector-06C.
+
+### Task Library
+
+Методики выполнения задач (не MCP tools, а инструкции для AI Agent):
+
+| Task ID | Описание |
+|---------|----------|
+| `generate_map` | Анализ ROM, создание карты функций и меток |
+| `stack_safety` | Проверка целостности стека (PUSH/POP, CALL/RET) |
+| `find_bugs` | Общий статический/динамический аудит ROM |
+| `analyze_vram` | Анализ видеопамяти, палитры, режимов |
+| `analyze_io` | Анализ I/O портов и последовательностей |
+
+### Knowledge Base
+
+Проверенные технические сведения о Vector-06C (каждый документ имеет metadata: status, source):
+
+| Документ | Тема | Статус |
+|----------|------|--------|
+| `architecture.md` | Общая архитектура | verified |
+| `cpu.md` | КР580ВМ80А, регистры, флаги | verified |
+| `memory.md` | Карта памяти, Bigram paging | verified |
+| `video.md` | Видережимы, VRAM, палитра | verified |
+| `io.md` | Порты ввода-вывода | verified |
+| `keyboard.md` | Клавиатура, матрица 8×8 | verified |
+| `sound.md` | AY-3-8912, Covox | verified |
+| `rom_format.md` | Форматы ROM (.rom, .r0m, .map) | verified |
+
+### Profiles
+
+Типовые наборы задач и знаний:
+
+| Profile | Описание |
+|---------|----------|
+| `rom_audit` | Комплексная проверка ROM |
+| `reverse_engineering` | Реверс-инжиниринг ROM |
+| `bug_hunting` | Поиск ошибок в ROM |
+
+### Validator
+
+```bash
+python3 agent/tests/validate_agent_knowledge.py
+```
+
+Проверяет: ссылки между Tasks/Knowledge/Profiles, уникальность ID, корректность metadata.
+
 ## Структура каталогов
 
 ```
@@ -207,6 +256,9 @@ debugger/
 ├── src/            # DebugBackend, дизассемблер, события
 ├── gui/            # Графический интерфейс (ImGui + SDL2)
 ├── agent/          # AI Agent API (IDebugBackend, AgentApi, типы)
+│   ├── tasks/      # Task Library — методики анализа ROM
+│   ├── knowledge/  # Knowledge Base — сведения о Векторе-06Ц
+│   └── profiles/   # Profiles — типовые наборы задач и знаний
 ├── mcp/            # MCP-сервер v06c-mcp (адаптер над Agent API)
 ├── tests/          # Автоматические тесты
 ├── thirdparty/     # Сторонние библиотеки (Dear ImGui, cpp-mcp)
