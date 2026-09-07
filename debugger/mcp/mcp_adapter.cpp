@@ -43,12 +43,9 @@ McpServer::~McpServer() = default;
 // ---------------------------------------------------------------------------
 
 mcp::json McpServer::textContent(const mcp::json &data) {
-    return {
-        {"content", mcp::json::array({
-            {{"type", "text"}, {"text", data.dump(2)}}
-        })},
-        {"isError", false}
-    };
+    return mcp::json::array({
+        {{"type", "text"}, {"text", data.dump(2)}}
+    });
 }
 
 mcp::json McpServer::errorContent(const std::string &errorCode, const std::string &message) {
@@ -56,12 +53,9 @@ mcp::json McpServer::errorContent(const std::string &errorCode, const std::strin
         {"error_code", errorCode},
         {"message",    message}
     };
-    return {
-        {"content", mcp::json::array({
-            {{"type", "text"}, {"text", errData.dump(2)}}
-        })},
-        {"isError", true}
-    };
+    return mcp::json::array({
+        {{"type", "text"}, {"text", errData.dump(2)}}
+    });
 }
 
 mcp::json McpServer::requireVoidResult(const AgentApiResult<void> &result) {
