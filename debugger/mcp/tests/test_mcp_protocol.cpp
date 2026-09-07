@@ -75,24 +75,26 @@ struct Fixture {
     }
 };
 
-// Helper: get text from MCP content response
+// Helper: get text from MCP CallToolResult content
+// Stage 6.4.1: Result format is {content: [...], isError: bool}
 static std::string getTextFromContent(const mcp::json &result) {
-    if (result.is_array() && !result.empty()) {
-        auto &first = result[0];
-        if (first.contains("text")) {
-            return first["text"].get<std::string>();
+    if (result.is_object() && result.contains("content")) {
+        auto &content = result["content"];
+        if (content.is_array() && !content.empty()) {
+            auto &first = content[0];
+            if (first.contains("text")) {
+                return first["text"].get<std::string>();
+            }
         }
     }
     return "";
 }
 
-// Helper: check if MCP content is an error
+// Helper: check if MCP CallToolResult is an error
+// Stage 6.4.1: isError is at the top level of CallToolResult
 static bool isErrorContent(const mcp::json &result) {
-    if (result.is_array() && !result.empty()) {
-        auto &first = result[0];
-        if (first.contains("isError")) {
-            return first["isError"].get<bool>();
-        }
+    if (result.is_object() && result.contains("isError")) {
+        return result["isError"].get<bool>();
     }
     return false;
 }
@@ -577,6 +579,70 @@ void test_error_propagation_get_function_not_found() {
 }
 
 // ---------------------------------------------------------------------------
+// Wire-Level Error Format Tests (Stage 6.4.1)
+// ---------------------------------------------------------------------------
+
+void test_wire_level_error_format() {
+    TEST_BEGIN("wire-level: CallToolResult has isError at top level");
+    Fixture f;
+    
+    // Trigger an error: read from invalid address (beyond 64K)
+    auto result = f.mcp.callTool("debug_read_memory", {{"address", 0xFFFF}, {"size", 100}});
+    
+    // Verify CallToolResult structure (Stage 6.4.1)
+    CHECK(result.is_object(), "result must be an object");
+    CHECK(result.contains("content"), "result must have 'content' field");
+    CHECK(result.contains("isError"), "result must have 'isError' field at top level");
+    CHECK(result["isError"].get<bool>() == true, "isError must be true for error");
+    
+    // Verify content structure
+    auto &content = result["content"];
+    CHECK(content.is_array(), "content must be an array");
+    CHECK(!content.empty(), "content must not be empty");
+    
+    auto &first = content[0];
+    CHECK(first.contains("type"), "content item must have 'type'");
+    CHECK(first["type"] == "text", "content type must be 'text'");
+    CHECK(first.contains("text"), "content item must have 'text'");
+    
+    // Verify content item does NOT have isError (it's at top level)
+    CHECK(!first.contains("isError"), "content item must NOT have 'isError' (it's at top level)");
+    
+    // Verify error data is in text
+    auto errData = mcp::json::parse(first["text"].get<std::string>());
+    CHECK(errData.contains("error_code"), "error data must have error_code");
+    CHECK(errData.contains("message"), "error data must have message");
+    
+    TEST_END();
+}
+
+void test_wire_level_success_format() {
+    TEST_BEGIN("wire-level: CallToolResult success has isError=false");
+    Fixture f;
+    
+    // Successful call
+    auto result = f.mcp.callTool("debug_is_running");
+    
+    // Verify CallToolResult structure
+    CHECK(result.is_object(), "result must be an object");
+    CHECK(result.contains("content"), "result must have 'content' field");
+    CHECK(result.contains("isError"), "result must have 'isError' field at top level");
+    CHECK(result["isError"].get<bool>() == false, "isError must be false for success");
+    
+    // Verify content structure
+    auto &content = result["content"];
+    CHECK(content.is_array(), "content must be an array");
+    CHECK(!content.empty(), "content must not be empty");
+    
+    auto &first = content[0];
+    CHECK(first.contains("type"), "content item must have 'type'");
+    CHECK(first["type"] == "text", "content type must be 'text'");
+    CHECK(first.contains("text"), "content item must have 'text'");
+    
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // End-to-End Integration Test
 // ---------------------------------------------------------------------------
 
@@ -817,6 +883,10 @@ int main()
     test_error_propagation_missing_param();
     test_error_propagation_tool_not_found();
     test_error_propagation_get_function_not_found();
+
+    // Wire-level format (Stage 6.4.1)
+    test_wire_level_error_format();
+    test_wire_level_success_format();
 
     // E2E
     test_e2e_read_memory_full_path();

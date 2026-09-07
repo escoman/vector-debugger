@@ -598,11 +598,10 @@ if(ENABLE_AI_AGENT)
     )
 
     # v06c-mcp — MCP executable (headless, stdio transport)
+    # Stage 6.4.1: Uses real DebugAdapter/Board instead of NoBoardTarget.
     add_executable(v06c-mcp
         ${MCP_DIR}/mcp_main.cpp
-        ${DBG_SOURCES}
-        ${CORE_SOURCES}
-        ${SRC_DIR}/options.cpp
+        ${BINARY_RESOURCES}
     )
 
     target_include_directories(v06c-mcp PRIVATE
@@ -617,10 +616,19 @@ if(ENABLE_AI_AGENT)
     target_link_libraries(v06c-mcp
         debugger_mcp
         debugger_agent
+        debugger_adapter
         debugger_core
         cpp_mcp
+        ${SDL2_LIBRARY}
         ${Boost_LIBRARIES}
         pthread
+    )
+
+    # Binary resources produce absolute symbols (_binary_*_size) which cannot
+    # be used with position-independent code on x86_64. Disable PIE for this target.
+    set_target_properties(v06c-mcp PROPERTIES
+        LINK_FLAGS "-no-pie"
+        POSITION_INDEPENDENT_CODE OFF
     )
 
     # MCP protocol tests (Stage 6.4)

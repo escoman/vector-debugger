@@ -70,12 +70,12 @@ private:
 
     // -- MCP tool result helpers --------------------------------------------
 
-    // Convert AgentApiResult<void> to MCP content. Throws on failure.
+    // Convert AgentApiResult<void> to MCP CallToolResult. Throws on failure.
     mcp::json requireVoidResult(const AgentApiResult<void> &result);
 
-    // Build MCP tool response content array (success).
+    // Build MCP CallToolResult (success): {content: [...], isError: false}
     static mcp::json textContent(const mcp::json &data);
 
-    // Build MCP tool response content array (error, isError=true).
+    // Build MCP CallToolResult (error): {content: [...], isError: true}
     static mcp::json errorContent(const std::string &errorCode, const std::string &message);
 };

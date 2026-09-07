@@ -33,13 +33,22 @@ McpServer::McpServer(AgentApi &api)
 McpServer::~McpServer() = default;
 
 // ---------------------------------------------------------------------------
-// MCP content helpers
+// MCP CallToolResult helpers (Stage 6.4.1)
+//
+// MCP protocol requires CallToolResult format:
+// {
+//   "content": [{"type": "text", "text": "..."}],
+//   "isError": true/false
+// }
 // ---------------------------------------------------------------------------
 
 mcp::json McpServer::textContent(const mcp::json &data) {
-    return mcp::json::array({
-        {{"type", "text"}, {"text", data.dump(2)}}
-    });
+    return {
+        {"content", mcp::json::array({
+            {{"type", "text"}, {"text", data.dump(2)}}
+        })},
+        {"isError", false}
+    };
 }
 
 mcp::json McpServer::errorContent(const std::string &errorCode, const std::string &message) {
@@ -47,9 +56,12 @@ mcp::json McpServer::errorContent(const std::string &errorCode, const std::strin
         {"error_code", errorCode},
         {"message",    message}
     };
-    return mcp::json::array({
-        {{"type", "text"}, {"text", errData.dump(2)}, {"isError", true}}
-    });
+    return {
+        {"content", mcp::json::array({
+            {{"type", "text"}, {"text", errData.dump(2)}}
+        })},
+        {"isError", true}
+    };
 }
 
 mcp::json McpServer::requireVoidResult(const AgentApiResult<void> &result) {
@@ -103,6 +115,29 @@ mcp::json McpServer::callTool(const std::string &toolName, const mcp::json &para
             "tool not found: " + toolName);
     }
     return it->second(params, "test_session");
+}
+
+// ---------------------------------------------------------------------------
+// Schema enhancement helpers (Stage 6.4.1)
+//
+// cpp-mcp tool_builder doesn't support numeric constraints directly.
+// We manually add minimum/maximum to parameter schemas where appropriate.
+// ---------------------------------------------------------------------------
+
+static void addNumericConstraint(mcp::tool &tool, const std::string &paramName,
+                                  std::optional<int> minimum = std::nullopt,
+                                  std::optional<int> maximum = std::nullopt) {
+    if (!tool.parameters_schema.contains("properties")) return;
+    auto &props = tool.parameters_schema["properties"];
+    if (!props.contains(paramName)) return;
+    
+    auto &paramSchema = props[paramName];
+    if (minimum.has_value()) {
+        paramSchema["minimum"] = minimum.value();
+    }
+    if (maximum.has_value()) {
+        paramSchema["maximum"] = maximum.value();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -288,6 +323,9 @@ void McpServer::registerMemoryTools() {
             .with_number_param("address", "Start address (0..65535)")
             .with_number_param("size", "Number of bytes to read (>= 1)")
             .build();
+        // Stage 6.4.1: Add numeric constraints to schema
+        addNumericConstraint(tool, "address", 0, 65535);
+        addNumericConstraint(tool, "size", 1, std::nullopt);
         registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
             uint16_t addr = getAddress(params);
             size_t size = getCount(params, "size", 1);
@@ -313,6 +351,8 @@ void McpServer::registerMemoryTools() {
             .with_number_param("address", "Start address (0..65535)")
             .with_array_param("data", "Array of byte values (0..255)", "integer")
             .build();
+        // Stage 6.4.1: Add numeric constraints to schema
+        addNumericConstraint(tool, "address", 0, 65535);
         registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
             uint16_t addr = getAddress(params);
             if (!params.contains("data")) {
@@ -347,6 +387,8 @@ void McpServer::registerIoTools() {
             .with_description("Read a value from an I/O port.")
             .with_number_param("port", "I/O port number (0..255)")
             .build();
+        // Stage 6.4.1: Add numeric constraints to schema
+        addNumericConstraint(tool, "port", 0, 255);
         registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
             uint8_t port = getUint8(params, "port");
             auto r = api_.readIo(port);
@@ -365,6 +407,9 @@ void McpServer::registerIoTools() {
             .with_number_param("port", "I/O port number (0..255)")
             .with_number_param("value", "Byte value to write (0..255)")
             .build();
+        // Stage 6.4.1: Add numeric constraints to schema
+        addNumericConstraint(tool, "port", 0, 255);
+        addNumericConstraint(tool, "value", 0, 255);
         registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
             uint8_t port = getUint8(params, "port");
             uint8_t value = getUint8(params, "value");

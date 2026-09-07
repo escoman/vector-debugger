@@ -140,9 +140,9 @@ All tools have the `debug_` prefix. Each is a thin wrapper over an AgentApi meth
 debugger/mcp/
     mcp_adapter.h/cpp    — McpServer class (tool registration, callTool)
     mcp_json.h/cpp       — JSON serialization for Agent API types
-    mcp_main.cpp         — v06c-mcp entry point (headless, stdio)
+    mcp_main.cpp         — v06c-mcp entry point (headless with real Board)
     tests/
-        test_mcp_protocol.cpp — 37 tests
+        test_mcp_protocol.cpp — 39 tests (Stage 6.4.1)
     README.md
 
 debugger/thirdparty/cpp-mcp/ — cpp-mcp library (MIT, hkr04/cpp-mcp)
@@ -154,12 +154,16 @@ debugger/thirdparty/cpp-mcp/ — cpp-mcp library (MIT, hkr04/cpp-mcp)
 v06c-mcp
     → debugger_mcp (MCP adapter)
     → debugger_agent (AgentApi)
+    → debugger_adapter (DebugAdapter + Board)
     → debugger_core (types, DebugBackend)
     → cpp-mcp (MCP protocol)
+    → SDL2 (for headless Board)
     → pthread
 ```
 
-**Does NOT depend on**: SDL, OpenGL, ImGui, Board sources.
+**Stage 6.4.1**: Uses real `DebugAdapter`/`Board` instead of `NoBoardTarget`. Headless mode achieved via `Options.novideo=true` and `Options.nosound=true` — no SDL window or audio device is created, but full Vector-06C hardware emulation is available.
+
+**Does NOT depend on**: OpenGL, ImGui.
 
 ## Limitations
 
@@ -167,7 +171,30 @@ v06c-mcp
 - **No MCP Resources** — not implemented in this stage
 - **No MCP Prompts** — not implemented in this stage
 - **Single client** — one MCP server per debugger session
-- **Headless mode** — uses NoBoardTarget (no video/sound)
+- **Headless mode** — no video/sound (but real Board emulation)
+
+## MCP Protocol Compliance (Stage 6.4.1)
+
+### CallToolResult Format
+
+All tool responses follow the MCP `CallToolResult` format:
+
+```json
+{
+  "content": [{"type": "text", "text": "..."}],
+  "isError": true/false
+}
+```
+
+`isError` is at the **top level** of the result object, not inside content items.
+
+### Numeric Constraints
+
+Tool schemas include numeric constraints where applicable:
+- `address`: `minimum: 0, maximum: 65535` (uint16_t)
+- `port`: `minimum: 0, maximum: 255` (uint8_t)
+- `size`: `minimum: 1` (where applicable)
+- `value`: `minimum: 0, maximum: 255` or `65535` (depending on context)
 
 ## Tests
 
@@ -176,11 +203,12 @@ make test_mcp_protocol
 ./test_mcp_protocol
 ```
 
-37 tests covering:
+39 tests covering (Stage 6.4.1):
 - Tool registration (all 38 tools)
-- Schema validation (types, required params)
+- Schema validation (types, required params, numeric constraints)
 - Tool execution (via MockAgentBackend)
 - Error propagation (AgentApiResult → MCP error)
+- **Wire-level format** (CallToolResult with isError at top level)
 - End-to-end (MCP → AgentApi → Mock → JSON)
 - JSON serialization format
 - I/O port boundaries
@@ -194,5 +222,7 @@ All existing tests must pass:
 ./test_agent_commands     # 15 tests
 ./test_agent_contract     # 49 tests
 ./test_agent_integration  # 46 tests
-./test_mcp_protocol       # 37 tests
+./test_mcp_protocol       # 39 tests (Stage 6.4.1)
 ```
+
+Total: **226 tests** passing.
