@@ -2,18 +2,69 @@
 platform: Vector-06C
 topic: memory
 status: verified
-source: emulator (memory.h, memory.cpp)
+source: multiple
 ---
 
 # Vector-06C Memory System
 
 ## Physical Memory
 
-Total physical memory: 64 KB main RAM + 256 KB expansion = 320 KB.
+Total addressable RAM: 64 KB (0000h–FFFFh).
+
+The screen RAM (32 KB, 8000h–FFFFh) is the **upper half** of the main 64 KB RAM.
+It is NOT additional memory beyond the 64 KB. The CPU accesses it as ordinary memory;
+the video controller reads it as 4 bit planes.
+
+TIMSoft confirms: "В БПЭВМ используется общая оперативная память для микропроцессора
+и контроллера графического дисплея объёмом 64 Кбайта".
+
+### Expansion Memory
+
+Bigram (Квазиск) controller adds up to 256 KB of expansion RAM, managed through
+banking at I/O port 0x10. This is separate from the base 64 KB.
 
 ```c
-#define TOTAL_MEMORY (64 * 1024 + 256 * 1024)  // 327680 bytes
+// VSDL memory.h
+#define TOTAL_MEMORY (64 * 1024 + 256 * 1024)  // 327680 bytes = 64 KB base + 256 KB expansion
 ```
+
+## Memory Map
+
+```
+0000h–00FFh   Interrupt vector table (256 bytes, 64 entries × 4 bytes)
+0100h–7FFFh   Lower RAM — user program space (32 KB)
+8000h–9FFFh   Screen bit plane 3 (8 KB, bit 3 of color)
+A000h–BFFFh   Screen bit plane 2 (8 KB, bit 2 of color)
+C000h–DFFFh   Screen bit plane 1 (8 KB, bit 1 of color)
+E000h–FFFFh   Screen bit plane 0 (8 KB, bit 0 of color)
+```
+
+The upper 32 KB (8000h–FFFFh) serves dual purpose:
+- **CPU perspective**: Ordinary RAM, readable and writable
+- **Video controller perspective**: 4 bit planes for pixel color generation
+
+There is no hardware protection preventing CPU from writing to screen RAM.
+
+## Screen RAM Plane Organization
+
+Each pixel color (0–15) is formed from 4 bits, one from each plane:
+
+| Plane | Address Range | Color Bit | Weight |
+|-------|--------------|-----------|--------|
+| 0 | E000h–FFFFh | bit 0 | 1 |
+| 1 | C000h–DFFFh | bit 1 | 2 |
+| 2 | A000h–BFFFh | bit 2 | 4 |
+| 3 | 8000h–9FFFh | bit 3 | 8 |
+
+Status: VERIFIED_BY_CODE (both VSDL `filler.cpp` and EMU80 `Vector.cpp renderLine()`)
+
+### Plane Numbering Note
+
+Two numbering conventions exist in documentation:
+- **Documentary** (TIMSoft): E000h=plane 0, C000h=plane 1, A000h=plane 2, 8000h=plane 3
+- **Physical memory order**: 8000h is lowest address, E000h is highest
+
+Both emulators (VSDL and EMU80) use the same assignment regardless of naming convention.
 
 ## Address Translation (Bigram Paging)
 
@@ -53,12 +104,16 @@ The `tobank` function interleaves address bits for DRAM banking:
 physical = (addr & 0x78000) | ((addr << 2) & 0x7FFC) | ((addr >> 13) & 3)
 ```
 
+Status: VERIFIED_BY_CODE (VSDL `memory.cpp control_write()`, EMU80 `VectorAddrSpace`)
+
 ## Boot ROM
 
 On reset, a 2 KB boot ROM is mapped at 0x0000–0x07FF:
 - Boot ROM overlays the first bytes of RAM
 - After the boot sequence completes, boot ROM detaches
 - Standard SP after boot: 0xC300
+
+Status: VERIFIED_BY_CODE (VSDL `board.cpp` BLKVVOD/BLKSBR modes, EMU80 `m_romEnabled`)
 
 ## ROM Loading Conventions
 
@@ -68,14 +123,13 @@ On reset, a 2 KB boot ROM is mapped at 0x0000–0x07FF:
 | .r0m | 0x0000 | Raw memory image |
 | .bin | varies | Binary data |
 
-## Memory Map (Typical)
+## Hardware vs Emulator Behavior
 
-```
-0x0000–0x00FF  Interrupt vector table (256 bytes, 64 entries × 4 bytes)
-0x0100–0xBFFF  User program space (up to ~48 KB)
-0xC000–0xCFFF  VRAM Plane A (4 KB, 256×8 mode) or (8 KB, 512×4 mode)
-0xD000–0xDFFF  VRAM Plane B (4 KB, second graphics plane)
-0xE000–0xFFFF  System RAM (8 KB)
-```
+- **Interleaved memory (VSDL)**: VSDL stores pixels in interleaved format (`tobank()`)
+  for rendering optimization. The CPU sees standard linear addresses.
+- **ERAM (EMU80)**: Extended RAM system in EMU80 may be an emulator expansion, not
+  original hardware. Status: UNVERIFIED for original hardware.
+- **Bigram paging**: Both emulators implement it. The `tobank()` interleaving is an
+  emulator optimization for DRAM access patterns.
 
-Note: VRAM occupies the 0xC000–0xFFFF range but the exact split between VRAM and RAM depends on the video mode and Bigram paging configuration.
+See `verification.md` for detailed evidence and source attribution.

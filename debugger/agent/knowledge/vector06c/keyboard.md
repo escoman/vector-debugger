@@ -2,7 +2,7 @@
 platform: Vector-06C
 topic: keyboard
 status: verified
-source: emulator (keyboard.h, vio.h)
+source: multiple
 ---
 
 # Vector-06C Keyboard
@@ -31,11 +31,13 @@ Column names: Russian labels (ПС = Enter, ЗАБ = Backspace, ВК = input, AP
 
 ## Scanning Mechanism
 
-1. CPU writes row select mask to PIA1 Port A (port 0x00, via CW configuration).
+1. CPU writes row select mask to PIA1 Port A (port 0x03).
 2. CPU reads Port B (port 0x02) to get column data.
 3. Each bit in the returned byte corresponds to a column (0 = pressed, active low).
 
-The `keyboard.read(rowbit)` function ORs together all selected rows and returns the inverted result:
+**Note:** Port A (port 0x03) is shared with the vertical scroll register. During keyboard
+scanning, the row mask temporarily replaces the scroll value. The keyboard read function
+in the emulator reads `PA` directly:
 
 ```c
 int read(int rowbit) {
@@ -49,6 +51,8 @@ int read(int rowbit) {
 }
 ```
 
+Status: VERIFIED_BY_CODE (VSDL `keyboard.h`, EMU80 `Vector.h m_keyMatrix[8][8]`)
+
 ## Shift Keys
 
 Shift keys are not part of the matrix. They are read from Port C (port 0x01):
@@ -60,6 +64,8 @@ Shift keys are not part of the matrix. They are read from Port C (port 0x01):
 | Rus | Rus/Lat toggle | Bit 7 | 0 = pressed |
 
 These bits are read when PIA1 CW bit 3 = 1 (Port C upper configured as input).
+
+Status: VERIFIED_BY_CODE (VSDL `vio.h input(0x01)`, EMU80 `Vector.h`)
 
 ## Key Encoding
 
@@ -81,3 +87,16 @@ Example: Space = column 7, bit 0x80 → encoded as 0x780.
 
 - Tape output: PIA1 Port C bit 0
 - Tape input: PIA1 Port C bit 4 (read when CW bit 3 = 1)
+
+Status: VERIFIED_BY_CODE (VSDL `vio.h TapeOut(): PC & 1`, `tape.sample() << 4`)
+
+## Hardware vs Emulator Behavior
+
+- **Keyboard matrix**: Both VSDL (`keyboard.h`) and EMU80 (`Vector.h m_keyMatrix[8][8]`)
+  implement identical 8×8 matrices. Status: VERIFIED_BY_CODE.
+- **Shift keys**: VSDL reads them from Port C bits 5-7. EMU80 places Shift/Ctrl/Lang
+  as separate entries in the matrix. Both approaches produce the same scan results.
+- **Port A sharing**: Port A (0x03) carries both scroll value and keyboard row mask.
+  The emulator models this as a shared register.
+
+See `verification.md` for detailed evidence and source attribution.

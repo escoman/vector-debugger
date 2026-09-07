@@ -13,6 +13,7 @@ analyze_vram
 - vector06c/video
 - vector06c/memory
 - vector06c/io
+- vector06c/verification
 
 ## Required Tools
 

@@ -13,6 +13,7 @@ generate_map
 - vector06c/cpu
 - vector06c/memory
 - vector06c/rom_format
+- vector06c/verification
 
 ## Required Tools
 

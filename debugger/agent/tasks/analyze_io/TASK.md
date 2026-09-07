@@ -15,6 +15,7 @@ analyze_io
 - vector06c/sound
 - vector06c/video
 - vector06c/memory
+- vector06c/verification
 
 ## Required Tools
 

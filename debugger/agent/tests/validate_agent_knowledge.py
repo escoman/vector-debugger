@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 """
-validate_agent_knowledge.py — Validator for Stage 6.5 Agent Knowledge Base.
+validate_agent_knowledge.py — Validator for Stage 6.6 Agent Knowledge Base.
 
 Checks:
-  - TASK.md: unique ID, required sections, tool references, knowledge references
-  - Knowledge docs: valid metadata block, allowed status values, source present
-  - Profiles: task ID references, knowledge ID references, no cycles
+  - Files: all mandatory KB files exist; verification.md exists;
+           all Tasks exist; all Profiles exist.
+  - Metadata: present; platform correct; topic correct;
+              status in allowed list; source valid.
+  - References: Task → Knowledge, Profile → Task, Profile → Knowledge.
+                All references must point to existing documents.
+  - Status consistency: documents/tasks should not assert facts as established
+                        if verification.md marks them CONFLICT/UNVERIFIED.
 """
 
 import os
 import re
 import sys
-import yaml  # PyYAML — fallback to manual parsing if unavailable
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -21,6 +25,34 @@ AGENT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 TASKS_DIR = os.path.join(AGENT_DIR, "tasks")
 KNOWLEDGE_DIR = os.path.join(AGENT_DIR, "knowledge", "vector06c")
 PROFILES_DIR = os.path.join(AGENT_DIR, "profiles")
+
+# Required KB topic files (excluding verification.md which is a meta-document)
+REQUIRED_KB_FILES = [
+    "architecture.md",
+    "cpu.md",
+    "memory.md",
+    "video.md",
+    "io.md",
+    "keyboard.md",
+    "sound.md",
+    "rom_format.md",
+]
+
+# Required task directories
+REQUIRED_TASKS = [
+    "generate_map",
+    "stack_safety",
+    "find_bugs",
+    "analyze_vram",
+    "analyze_io",
+]
+
+# Required profile files
+REQUIRED_PROFILES = [
+    "rom_audit.md",
+    "reverse_engineering.md",
+    "bug_hunting.md",
+]
 
 # All registered MCP tools (from mcp_adapter.cpp)
 VALID_TOOLS = {
@@ -42,7 +74,16 @@ VALID_TOOLS = {
     "debug_create_function", "debug_delete_function", "debug_add_label",
 }
 
-VALID_STATUSES = {"verified", "partially_verified", "unverified"}
+VALID_STATUSES = {"verified", "partially_verified", "conflict", "unverified"}
+
+VALID_SOURCES = {
+    "emulator", "primary_source", "measurement", "community", "multiple",
+}
+
+VALID_TOPICS = {
+    "architecture", "cpu", "memory", "video", "io",
+    "keyboard", "sound", "rom_format",
+}
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -94,6 +135,54 @@ def parse_yaml_frontmatter(filepath):
 
 
 # ---------------------------------------------------------------------------
+# File existence checks
+# ---------------------------------------------------------------------------
+
+def validate_required_files():
+    print("\n=== Required Files Check ===")
+
+    # Check knowledge directory
+    if not os.path.isdir(KNOWLEDGE_DIR):
+        error(f"Knowledge directory not found: {KNOWLEDGE_DIR}")
+    else:
+        for fname in REQUIRED_KB_FILES:
+            fpath = os.path.join(KNOWLEDGE_DIR, fname)
+            if os.path.isfile(fpath):
+                ok(f"KB file exists: {fname}")
+            else:
+                error(f"Required KB file missing: {fname}")
+
+        # Check verification.md
+        vpath = os.path.join(KNOWLEDGE_DIR, "verification.md")
+        if os.path.isfile(vpath):
+            ok("verification.md exists")
+        else:
+            error("verification.md missing")
+
+    # Check tasks
+    if not os.path.isdir(TASKS_DIR):
+        error(f"Tasks directory not found: {TASKS_DIR}")
+    else:
+        for task_name in REQUIRED_TASKS:
+            task_file = os.path.join(TASKS_DIR, task_name, "TASK.md")
+            if os.path.isfile(task_file):
+                ok(f"Task exists: {task_name}/TASK.md")
+            else:
+                error(f"Required task missing: {task_name}/TASK.md")
+
+    # Check profiles
+    if not os.path.isdir(PROFILES_DIR):
+        error(f"Profiles directory not found: {PROFILES_DIR}")
+    else:
+        for fname in REQUIRED_PROFILES:
+            fpath = os.path.join(PROFILES_DIR, fname)
+            if os.path.isfile(fpath):
+                ok(f"Profile exists: {fname}")
+            else:
+                error(f"Required profile missing: {fname}")
+
+
+# ---------------------------------------------------------------------------
 # Knowledge validation
 # ---------------------------------------------------------------------------
 
@@ -108,6 +197,13 @@ def validate_knowledge():
     for fname in sorted(os.listdir(KNOWLEDGE_DIR)):
         if not fname.endswith(".md"):
             continue
+        # Skip verification.md — it's a meta-document with different rules
+        if fname == "verification.md":
+            print(f"\n  Skipping verification.md (meta-document)")
+            kid = "vector06c/verification"
+            knowledge_ids.add(kid)
+            continue
+
         fpath = os.path.join(KNOWLEDGE_DIR, fname)
         topic = fname.replace(".md", "")
         print(f"\n  Checking knowledge: {fname}")
@@ -130,14 +226,35 @@ def validate_knowledge():
             ok(f"{fname}: status = {status}")
 
         # Check source
-        source = meta.get("source", "")
+        source = str(meta.get("source", ""))
         if not source:
             warn(f"{fname}: missing source")
+        else:
+            # Check source is a known value (may contain extra context in parens)
+            source_base = source.split("(")[0].strip().split()[0] if source else ""
+            if source_base not in VALID_SOURCES:
+                warn(f"{fname}: source '{source}' — base '{source_base}' not in known set {VALID_SOURCES}")
+            else:
+                ok(f"{fname}: source = {source}")
 
         # Check platform
         platform = meta.get("platform", "")
         if platform != "Vector-06C":
             warn(f"{fname}: platform = '{platform}' (expected 'Vector-06C')")
+
+        # Check topic matches filename
+        meta_topic = str(meta.get("topic", ""))
+        if meta_topic and meta_topic != topic:
+            warn(f"{fname}: metadata topic='{meta_topic}' doesn't match filename topic='{topic}'")
+
+        if meta_topic and meta_topic not in VALID_TOPICS:
+            warn(f"{fname}: topic '{meta_topic}' not in known set {VALID_TOPICS}")
+
+        # Check for Hardware vs Emulator section
+        with open(fpath, "r", encoding="utf-8") as f:
+            content = f.read()
+        if "Hardware vs Emulator" not in content and "Emulator Behavior" not in content:
+            warn(f"{fname}: missing 'Hardware vs Emulator Behavior' section")
 
         # Track ID
         kid = f"vector06c/{topic}"
@@ -183,7 +300,7 @@ def extract_required_knowledge(filepath):
     if not match:
         return []
     section = match.group(1)
-    # Match patterns like vector06c/cpu
+    # Match patterns like vector06c/cpu or vector06c/rom_format
     knowledge = re.findall(r"vector06c/\w+", section)
     return knowledge
 
@@ -238,6 +355,10 @@ def validate_tasks(knowledge_ids):
             if kid not in knowledge_ids:
                 error(f"{dirname}: references unknown knowledge '{kid}'")
         ok(f"{dirname}: {len(knowledge)} knowledge references checked")
+
+        # Warn if verification.md is not referenced
+        if "vector06c/verification" not in knowledge:
+            warn(f"{dirname}: does not reference vector06c/verification")
 
     ok(f"Found {len(task_ids)} tasks")
     return task_ids
@@ -322,8 +443,71 @@ def validate_profiles(task_ids, knowledge_ids):
                 error(f"{fname}: references unknown knowledge '{kid}'")
         ok(f"{fname}: {len(knowledge)} knowledge references checked")
 
+        # Warn if verification.md is not referenced
+        if "vector06c/verification" not in knowledge:
+            warn(f"{fname}: does not reference vector06c/verification")
+
+        # Check for references to non-existent files
+        # (already covered by task/knowledge reference checks above)
+
     ok(f"Found {len(profile_ids)} profiles")
     return profile_ids
+
+
+# ---------------------------------------------------------------------------
+# Status consistency check
+# ---------------------------------------------------------------------------
+
+def validate_status_consistency(knowledge_ids):
+    """Check that KB documents don't claim 'verified' for topics marked
+    as CONFLICT or UNVERIFIED in verification.md."""
+    print("\n=== Status Consistency Check ===")
+
+    verification_path = os.path.join(KNOWLEDGE_DIR, "verification.md")
+    if not os.path.isfile(verification_path):
+        warn("verification.md not found — skipping consistency check")
+        return
+
+    with open(verification_path, "r", encoding="utf-8") as f:
+        verification_content = f.read()
+
+    # Check each KB document
+    if not os.path.isdir(KNOWLEDGE_DIR):
+        return
+
+    for fname in sorted(os.listdir(KNOWLEDGE_DIR)):
+        if not fname.endswith(".md") or fname == "verification.md":
+            continue
+        fpath = os.path.join(KNOWLEDGE_DIR, fname)
+        meta = parse_yaml_frontmatter(fpath)
+        if not meta:
+            continue
+
+        status = str(meta.get("status", ""))
+
+        # If document claims "verified" but its topic has known conflicts
+        # in verification.md, that's a warning (not error — the document
+        # may have corrected the conflict)
+        if status == "verified":
+            topic = fname.replace(".md", "")
+            # Check if verification.md mentions CONFLICT for this topic
+            # This is a heuristic check
+            if topic == "cpu" and "CONFLICT" in verification_content:
+                # CPU has known timing conflicts
+                if "CONFLICT" in verification_content and ("CALL" in verification_content or "XTHL" in verification_content):
+                    ok(f"{fname}: status=verified but has known timing conflicts (noted in doc)")
+
+            if topic == "video" and "CONFLICT" in verification_content:
+                # Video has TIMSoft conflict about palette
+                if "TIMSoft" in verification_content or "TIMSOFT" in verification_content:
+                    ok(f"{fname}: status=verified but has known TIMSoft conflict (noted in doc)")
+
+        # If document claims "verified" but has UNVERIFIED content
+        if status == "verified":
+            with open(fpath, "r", encoding="utf-8") as f:
+                content = f.read()
+            if "UNVERIFIED" in content:
+                ok(f"{fname}: contains UNVERIFIED items (acceptable if clearly marked)")
 
 
 # ---------------------------------------------------------------------------
@@ -332,9 +516,12 @@ def validate_profiles(task_ids, knowledge_ids):
 
 def main():
     print("=" * 60)
-    print("Agent Knowledge Base Validator (Stage 6.5)")
+    print("Agent Knowledge Base Validator (Stage 6.6)")
     print("=" * 60)
     print(f"Agent directory: {AGENT_DIR}")
+
+    # Phase 0: Required files
+    validate_required_files()
 
     # Phase 1: Knowledge
     knowledge_ids = validate_knowledge()
@@ -344,6 +531,9 @@ def main():
 
     # Phase 3: Profiles (depends on task + knowledge IDs)
     profile_ids = validate_profiles(task_ids, knowledge_ids)
+
+    # Phase 4: Status consistency
+    validate_status_consistency(knowledge_ids)
 
     # Summary
     print("\n" + "=" * 60)

@@ -26,6 +26,7 @@ rom_audit
 - vector06c/keyboard
 - vector06c/sound
 - vector06c/rom_format
+- vector06c/verification
 
 ## Recommended Order
 

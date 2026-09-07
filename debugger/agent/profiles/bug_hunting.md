@@ -22,6 +22,7 @@ bug_hunting
 - vector06c/video
 - vector06c/io
 - vector06c/rom_format
+- vector06c/verification
 
 ## Recommended Order
 
