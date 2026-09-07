@@ -8,6 +8,10 @@ rom_audit
 
 Комплексная проверка ROM: объединяет основные задачи анализа для полной верификации ROM-образа Vector-06C.
 
+## Workflow Reference
+
+- AI_AGENT_WORKFLOW.md
+
 ## Tasks
 
 1. **generate_map** — создание карты функций, меток и областей данных
@@ -45,22 +49,37 @@ AI Agent читает этот профиль, затем последовате
 ```markdown
 # ROM Audit Report
 
-## ROM Info
+## Goal
+Full ROM verification and integrity audit.
+
+## ROM
 - File: <name>
 - Size: <bytes>
-- Load address: 0x????
 
-## Summary
-- Functions found: ???
-- Stack issues: ???
-- I/O anomalies: ???
-- VRAM issues: ???
-- Overall findings: ???
+## Profile
+rom_audit
 
-## Critical Findings
-| Address | Source Task | Severity | Description |
-|---------|------------|----------|-------------|
+## Tasks
+generate_map, stack_safety, find_bugs, analyze_vram, analyze_io
 
-## Recommendations
-- ...
+## Findings
+
+### Finding 1
+Location:
+Observation:
+Evidence:
+Conclusion:
+Confidence: high / medium / low
+
+## Verified Facts
+
+## Inferences
+
+## Hypotheses
+
+## Unknowns
+
+## Limitations
+
+## Recommended Next Steps
 ```

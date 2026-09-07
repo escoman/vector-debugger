@@ -8,6 +8,10 @@ bug_hunting
 
 Профиль для поиска ошибок в ROM Vector-06C: статический и динамический аудит, проверка стека, анализ VRAM и I/O на предмет аномалий.
 
+## Workflow Reference
+
+- AI_AGENT_WORKFLOW.md
+
 ## Tasks
 
 1. **find_bugs** — общий аудит (memory, control flow, I/O, VRAM)
@@ -40,24 +44,38 @@ AI Agent выполняет каждый Task последовательно, а
 ```markdown
 # Bug Hunting Report
 
-## Summary
-- Total findings: ???
-- Critical: ???
-- Probable: ???
-- Suspicious: ???
+## Goal
+Find bugs and anomalies in ROM.
 
-## Critical Findings
-| Address | Category | Evidence | Description |
-|---------|----------|----------|-------------|
+## ROM
+- File: <name>
 
-## Probable Findings
-| Address | Category | Evidence | Description |
-|---------|----------|----------|-------------|
+## Profile
+bug_hunting
 
-## Suspicious Patterns
-| Address | Category | Reason | Description |
-|---------|----------|--------|-------------|
+## Tasks
+find_bugs, stack_safety, analyze_vram, analyze_io
 
-## Recommendations
-- ...
+## Findings
+
+### Finding 1
+Location:
+Observed behavior:
+Expected behavior:
+Evidence:
+Reasoning:
+Confidence: high / medium / low
+Next verification:
+
+## Verified Facts
+
+## Inferences
+
+## Hypotheses
+
+## Unknowns
+
+## Limitations
+
+## Recommended Next Steps
 ```

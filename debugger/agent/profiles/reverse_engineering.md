@@ -8,6 +8,10 @@ reverse_engineering
 
 Профиль для реверс-инжиниринга ROM Vector-06C: построение карты символов, анализ видеоподсистемы и I/O для понимания структуры и поведения программы.
 
+## Workflow Reference
+
+- AI_AGENT_WORKFLOW.md
+
 ## Tasks
 
 1. **generate_map** — построение и уточнение карты функций/меток
@@ -41,22 +45,36 @@ AI Agent начинает с `generate_map` для построения стру
 ```markdown
 # Reverse Engineering Report
 
-## ROM Structure
-- Entry point: 0x????
-- Functions: ???
-- Data regions: ???
+## Goal
+Understand ROM structure and subsystem behavior.
 
-## Key Subsystems
-| Subsystem | Address Range | Description |
-|-----------|--------------|-------------|
-| Video | ? | ... |
-| Keyboard | ? | ... |
-| Sound | ? | ... |
-| I/O | ? | ... |
+## ROM
+- File: <name>
 
-## Call Graph Highlights
-- ...
+## Profile
+reverse_engineering
 
-## Annotated Disassembly
-- ...
+## Tasks
+generate_map, analyze_vram, analyze_io
+
+## Findings
+
+### Finding 1
+Location:
+Observation:
+Evidence:
+Conclusion:
+Confidence: high / medium / low
+
+## Verified Facts
+
+## Inferences
+
+## Hypotheses
+
+## Unknowns
+
+## Limitations
+
+## Recommended Next Steps
 ```

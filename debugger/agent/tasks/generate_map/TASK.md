@@ -15,6 +15,10 @@ generate_map
 - vector06c/rom_format
 - vector06c/verification
 
+## Workflow Reference
+
+- AI_AGENT_WORKFLOW.md
+
 ## Required Tools
 
 - debug_disassemble

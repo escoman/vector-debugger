@@ -17,6 +17,10 @@ analyze_io
 - vector06c/memory
 - vector06c/verification
 
+## Workflow Reference
+
+- AI_AGENT_WORKFLOW.md
+
 ## Required Tools
 
 - debug_read_io

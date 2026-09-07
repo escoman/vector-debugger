@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """
-validate_agent_knowledge.py — Validator for Stage 6.6 Agent Knowledge Base.
+validate_agent_knowledge.py — Validator for Stage 6.7 Agent Knowledge Base & Workflow.
 
 Checks:
   - Files: all mandatory KB files exist; verification.md exists;
-           all Tasks exist; all Profiles exist.
+           all Tasks exist; all Profiles exist;
+           AI_AGENT_WORKFLOW.md exists.
   - Metadata: present; platform correct; topic correct;
               status in allowed list; source valid.
   - References: Task → Knowledge, Profile → Task, Profile → Knowledge.
                 All references must point to existing documents.
   - Status consistency: documents/tasks should not assert facts as established
                         if verification.md marks them CONFLICT/UNVERIFIED.
+  - Workflow: Tasks and Profiles reference AI_AGENT_WORKFLOW.md.
 """
 
 import os
@@ -511,17 +513,66 @@ def validate_status_consistency(knowledge_ids):
 
 
 # ---------------------------------------------------------------------------
+# Workflow document checks
+# ---------------------------------------------------------------------------
+
+def validate_workflow_doc():
+    """Check that AI_AGENT_WORKFLOW.md exists."""
+    print("\n=== Workflow Document Check ===")
+    workflow_path = os.path.join(AGENT_DIR, "AI_AGENT_WORKFLOW.md")
+    if os.path.isfile(workflow_path):
+        ok("AI_AGENT_WORKFLOW.md exists")
+    else:
+        error("AI_AGENT_WORKFLOW.md missing")
+
+
+def validate_workflow_references(task_ids, profile_ids):
+    """Check that Tasks and Profiles reference AI_AGENT_WORKFLOW.md."""
+    print("\n=== Workflow Reference Check ===")
+
+    # Check tasks
+    if os.path.isdir(TASKS_DIR):
+        for dirname in sorted(os.listdir(TASKS_DIR)):
+            task_file = os.path.join(TASKS_DIR, dirname, "TASK.md")
+            if not os.path.isfile(task_file):
+                continue
+            with open(task_file, "r", encoding="utf-8") as f:
+                content = f.read()
+            if "AI_AGENT_WORKFLOW.md" in content:
+                ok(f"Task {dirname} references workflow")
+            else:
+                warn(f"Task {dirname} does not reference AI_AGENT_WORKFLOW.md")
+
+    # Check profiles
+    if os.path.isdir(PROFILES_DIR):
+        for fname in sorted(os.listdir(PROFILES_DIR)):
+            if not fname.endswith(".md"):
+                continue
+            fpath = os.path.join(PROFILES_DIR, fname)
+            pid = fname.replace(".md", "")
+            with open(fpath, "r", encoding="utf-8") as f:
+                content = f.read()
+            if "AI_AGENT_WORKFLOW.md" in content:
+                ok(f"Profile {pid} references workflow")
+            else:
+                warn(f"Profile {pid} does not reference AI_AGENT_WORKFLOW.md")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main():
     print("=" * 60)
-    print("Agent Knowledge Base Validator (Stage 6.6)")
+    print("Agent Knowledge Base Validator (Stage 6.7)")
     print("=" * 60)
     print(f"Agent directory: {AGENT_DIR}")
 
     # Phase 0: Required files
     validate_required_files()
+
+    # Phase 0.5: Workflow document
+    validate_workflow_doc()
 
     # Phase 1: Knowledge
     knowledge_ids = validate_knowledge()
@@ -534,6 +585,9 @@ def main():
 
     # Phase 4: Status consistency
     validate_status_consistency(knowledge_ids)
+
+    # Phase 5: Workflow references
+    validate_workflow_references(task_ids, profile_ids)
 
     # Summary
     print("\n" + "=" * 60)

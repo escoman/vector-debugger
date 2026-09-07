@@ -15,6 +15,10 @@ analyze_vram
 - vector06c/io
 - vector06c/verification
 
+## Workflow Reference
+
+- AI_AGENT_WORKFLOW.md
+
 ## Required Tools
 
 - debug_get_vram_info
@@ -34,12 +38,14 @@ analyze_vram
 
 2. **Анализ VRAM layout**
    - Вызвать `debug_get_vram_info` для получения текущей карты VRAM.
-   - Определить базовый адрес VRAM (обычно 0xC000 для Plane A, 0xD000 для Plane B).
-   - Определить размер VRAM в текущем режиме.
+   - Vector-06C uses 4 bit planes at 8000h / A000h / C000h / E000h.
+   - Screen RAM occupies the upper 32 KB of 64 KB main RAM (8000h–FFFFh).
+   - Determine which planes are active in the current mode.
 
 3. **Чтение содержимого VRAM**
-   - Прочитать VRAM Plane A через `debug_read_memory` (0xC000–0xCFFF или 0xDFFF).
-   - Прочитать VRAM Plane B через `debug_read_memory` (0xD000–0xDFFF).
+   - Прочитать содержимое битовых плоскостей через `debug_read_memory`:
+     - Plane 0: 8000h–9FFFh, Plane 1: A000h–BFFFh
+     - Plane 2: C000h–DFFFh, Plane 3: E000h–FFFFh
    - Определить заполненность (пустые/заполненные блоки).
 
 4. **Анализ палитры**
@@ -80,11 +86,14 @@ analyze_vram
 | Parameter | Value |
 |-----------|-------|
 | Mode | 256-column / 512-column |
-| VRAM Plane A base | 0x???? |
-| VRAM Plane B base | 0x???? |
+| Screen RAM base | 0x8000 |
+| Plane 0 | 0x8000–0x9FFF |
+| Plane 1 | 0xA000–0xBFFF |
+| Plane 2 | 0xC000–0xDFFF |
+| Plane 3 | 0xE000–0xFFFF |
 | Scroll value | ??? |
 | Border color index | ?? |
-| Active planes | A / A+B |
+| Active planes | 0–3 (depends on mode) |
 
 ### Palette
 

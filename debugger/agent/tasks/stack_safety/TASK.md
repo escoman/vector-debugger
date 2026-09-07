@@ -15,6 +15,10 @@ stack_safety
 - vector06c/rom_format
 - vector06c/verification
 
+## Workflow Reference
+
+- AI_AGENT_WORKFLOW.md
+
 ## Required Tools
 
 - debug_get_cpu_state
@@ -55,7 +59,7 @@ stack_safety
    - Сравнить с предполагаемой областью стека.
 
 6. **Проверка пересечений**
-   - Проверить, не пересекается ли стек с областью VRAM (0xC000+).
+   - Проверить, не пересекается ли стек с Screen RAM (0x8000–0xFFFF).
    - Проверить, не пересекается ли стек с данными.
 
 ## Checks
@@ -63,7 +67,7 @@ stack_safety
 - Баланс PUSH/POP = 0 для каждой функции?
 - Каждая CALL имеет парный RET?
 - SP не выходит за пределы RAM?
-- SP не залезает в VRAM (0xC000–0xDFFF)?
+- SP не залезает в Screen RAM (0x8000–0xFFFF)?
 - Нет ли некорректных XTHL (обмен с неинициализированной памятью)?
 - RST-обработчики завершаются RET?
 
