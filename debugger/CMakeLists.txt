@@ -545,6 +545,107 @@ if(ENABLE_AI_AGENT)
         ${Boost_LIBRARIES}
         pthread
     )
+
+    # -----------------------------------------------------------------------
+    # MCP Adapter Module (Stage 6.4)
+    # -----------------------------------------------------------------------
+
+    set(MCP_DIR ${CMAKE_CURRENT_SOURCE_DIR}/mcp)
+    set(CPP_MCP_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/cpp-mcp)
+
+    # cpp-mcp library (from submodule sources)
+    add_library(cpp_mcp STATIC
+        ${CPP_MCP_DIR}/src/mcp_message.cpp
+        ${CPP_MCP_DIR}/src/mcp_tool.cpp
+        ${CPP_MCP_DIR}/src/mcp_server.cpp
+        ${CPP_MCP_DIR}/src/mcp_resource.cpp
+        ${CPP_MCP_DIR}/src/mcp_stdio_client.cpp
+        ${CPP_MCP_DIR}/src/mcp_sse_client.cpp
+    )
+
+    target_include_directories(cpp_mcp PUBLIC
+        ${CPP_MCP_DIR}/include
+        ${CPP_MCP_DIR}/common
+    )
+
+    target_compile_definitions(cpp_mcp PUBLIC
+        MCP_MAX_SESSIONS=10
+        MCP_SESSION_TIMEOUT=30
+    )
+
+    target_link_libraries(cpp_mcp PUBLIC pthread)
+
+    # debugger_mcp — MCP adapter library
+    add_library(debugger_mcp STATIC
+        ${MCP_DIR}/mcp_adapter.cpp
+        ${MCP_DIR}/mcp_json.cpp
+    )
+
+    target_include_directories(debugger_mcp PUBLIC
+        ${MCP_DIR}
+        ${CPP_MCP_DIR}/include
+        ${CPP_MCP_DIR}/common
+        ${AGENT_DIR}
+        ${DBG_SRC_DIR}
+        ${SRC_DIR}
+    )
+
+    target_link_libraries(debugger_mcp
+        debugger_agent
+        debugger_core
+        cpp_mcp
+        pthread
+    )
+
+    # v06c-mcp — MCP executable (headless, stdio transport)
+    add_executable(v06c-mcp
+        ${MCP_DIR}/mcp_main.cpp
+        ${DBG_SOURCES}
+        ${CORE_SOURCES}
+        ${SRC_DIR}/options.cpp
+    )
+
+    target_include_directories(v06c-mcp PRIVATE
+        ${MCP_DIR}
+        ${CPP_MCP_DIR}/include
+        ${CPP_MCP_DIR}/common
+        ${AGENT_DIR}
+        ${DBG_SRC_DIR}
+        ${SRC_DIR}
+    )
+
+    target_link_libraries(v06c-mcp
+        debugger_mcp
+        debugger_agent
+        debugger_core
+        cpp_mcp
+        ${Boost_LIBRARIES}
+        pthread
+    )
+
+    # MCP protocol tests (Stage 6.4)
+    add_executable(test_mcp_protocol
+        ${MCP_DIR}/tests/test_mcp_protocol.cpp
+    )
+
+    target_include_directories(test_mcp_protocol PRIVATE
+        ${MCP_DIR}
+        ${CPP_MCP_DIR}/include
+        ${CPP_MCP_DIR}/common
+        ${AGENT_DIR}
+        ${AGENT_DIR}/tests
+        ${DBG_SRC_DIR}
+        ${SRC_DIR}
+    )
+
+    target_link_libraries(test_mcp_protocol
+        debugger_mcp
+        debugger_agent
+        debugger_core
+        cpp_mcp
+        ${Boost_LIBRARIES}
+        pthread
+    )
 endif()
 
 include_directories(${SDL2_INCLUDE_DIR})

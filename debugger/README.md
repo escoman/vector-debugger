@@ -8,6 +8,8 @@
 
 - **DebugBackend** — библиотека для отладочной эмуляции: пошаговое выполнение, трассировка инструкций, контроль точек останова, дамп памяти.
 - **v06c-debugger** — графический интерфейс на базе Dear ImGui + SDL2 с панелью регистров, дизассемблером, историей инструкций, окном Vector Screen и кнопками управления (Step/Run/Pause/Reset).
+- **AI Agent API** — программный интерфейс для AI-агентов (LLM), предоставляющий 43+ метода отладки: память, регистры, точки останова, дизассемблер, трассировка, символы. Собирается по флагу `-DV06C_ENABLE_AI_AGENT=ON`.
+- **v06c-mcp** — MCP-сервер (Model Context Protocol) для интеграции с AI-агентами через stdio-транспорт. 38 инструментов `debug_*`, тонкая обёртка над Agent API. Собирается вместе с AI Agent.
 - **test_backend** — набор автоматических тестов для проверки корректности работы бэкенда.
 
 ## Зависимости
@@ -43,6 +45,20 @@ sudo dnf install gcc gcc-c++ cmake make boost-devel SDL2-devel mesa-libGL-devel
 
 Эти библиотеки поставляются с основным проектом и не требуют отдельной установки.
 
+### Зависимости AI Agent (опционально)
+
+Для сборки AI Agent и MCP-сервера дополнительно требуется:
+- **nlohmann/json** — библиотека JSON для C++. Устанавливается через `apt`:
+  ```bash
+  sudo apt-get install nlohmann-json3-dev
+  ```
+- **cpp-mcp** — MCP SDK (подмодуль в `thirdparty/cpp-mcp/`, инициализируется автоматически через CMake).
+
+AI Agent и MCP-сервер собираются при включении флага:
+```bash
+cmake .. -DV06C_ENABLE_AI_AGENT=ON
+```
+
 ## Dear ImGui — ветка `docking`
 
 Отладчик использует **докинг** (перетаскиваемые и стыкуемые окна), поэтому требуется ветка **`docking`**, а не релиз из master-ветки.
@@ -77,6 +93,7 @@ make -j$(nproc)
 
 После сборки в каталоге `build/` появятся:
 
+**Основные цели:**
 - `test_backend` — unit-тесты бэкенда (107 тестов)
 - `test_symbol_database` — тесты базы символов (22 теста)
 - `test_board_smoke` — smoke-тест с реальным Board (1 тест)
@@ -84,6 +101,15 @@ make -j$(nproc)
 - `test_workspace` — тесты менеджера рабочих пространств
 - `test_gui_smoke` — smoke-тест запуска GUI
 - `v06c-debugger` — графический отладчик
+
+**AI Agent (при `-DV06C_ENABLE_AI_AGENT=ON`):**
+- `test_agent_api` — тесты API агента (77 тестов)
+- `test_agent_commands` — тесты команд агента (15 тестов)
+- `test_agent_mock` — тесты mock-бэкенда (49 тестов)
+- `test_agent_integration` — интеграционные тесты (46 тестов)
+- `test_agent_contract` — тесты контракта API (49 тестов)
+- `test_mcp_protocol` — тесты MCP-протокола (37 тестов)
+- `v06c-mcp` — MCP-сервер для AI-агентов (stdio-транспорт)
 
 ## Запуск тестов
 
@@ -153,13 +179,36 @@ cd debugger/build
 - `.r0m` — загружаются с адреса `0x0000` (сырой образ памяти)
 - Второй аргумент — явное указание адреса загрузки (hex), переопределяет автоопределение по расширению
 
+## Запуск MCP-сервера
+
+MCP-сервер (`v06c-mcp`) работает через stdio-транспорт и предоставляет 38 инструментов `debug_*` для AI-агентов.
+
+```bash
+cd debugger/build
+
+# Запуск MCP-сервера (общение через stdin/stdout в формате JSON-RPC 2.0)
+./v06c-mcp
+
+# С загрузкой ROM-файла
+./v06c-mcp ../../testroms/clrs.rom
+```
+
+Пример запроса (JSON-RPC 2.0):
+```json
+{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "debug_get_cpu_state", "arguments": {}}}
+```
+
+Подробнее см. [mcp/README.md](mcp/README.md).
+
 ## Структура каталогов
 
 ```
 debugger/
 ├── src/            # DebugBackend, дизассемблер, события
 ├── gui/            # Графический интерфейс (ImGui + SDL2)
+├── agent/          # AI Agent API (IDebugBackend, AgentApi, типы)
+├── mcp/            # MCP-сервер v06c-mcp (адаптер над Agent API)
 ├── tests/          # Автоматические тесты
-├── thirdparty/     # Сторонние библиотеки (Dear ImGui)
+├── thirdparty/     # Сторонние библиотеки (Dear ImGui, cpp-mcp)
 └── CMakeLists.txt  # Конфигурация сборки
 ```
