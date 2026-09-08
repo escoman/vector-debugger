@@ -15,8 +15,10 @@
 #include "debug_adapter.h"
 #include "options.h"
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <thread>
 
 // ---------------------------------------------------------------------------
 // Global backend pointer — used by HAL functions in debug_adapter.cpp
@@ -70,6 +72,15 @@ int main(int argc, char *argv[])
 
     // Log to stderr (stdout is used for MCP protocol)
     fprintf(stderr, "v06c-mcp: %zu tools registered\n", mcp.registeredToolNames().size());
+
+    // Stage 6.15: Start emulation thread.
+    // Without it, the command queue is never processed and all operations
+    // that go through submitAndWait() (annotations, breakpoints, run/step)
+    // would timeout after 5 seconds.
+    std::thread emulationThread([&backend]() {
+        backend.runUntilPause();
+    });
+    fprintf(stderr, "v06c-mcp: emulation thread started\n");
     fprintf(stderr, "v06c-mcp: starting stdio transport (real DebugAdapter/Board)\n");
 
     // Run stdio transport (blocks until stdin closes)
@@ -77,6 +88,10 @@ int main(int argc, char *argv[])
 
     // Cleanup
     fprintf(stderr, "v06c-mcp: shutting down\n");
+    backend.requestQuit();
+    if (emulationThread.joinable()) {
+        emulationThread.join();
+    }
     g_adapter_backend = nullptr;
     adapter.shutdown();
 

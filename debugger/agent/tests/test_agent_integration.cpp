@@ -1830,6 +1830,114 @@ static void test_io_port_write_through_queue()
 }
 
 // ---------------------------------------------------------------------------
+// Stage 6.15 regression test: MCP command queue + RDB workflow
+//
+// Verifies that:
+// 1. Annotation operations (through command queue) work with emulation thread
+// 2. RDB operations (direct) work alongside
+// 3. Full workflow: add RDB object → dirty → save → reload → data preserved
+// ---------------------------------------------------------------------------
+
+static void test_mcp_command_queue_and_rdb_workflow()
+{
+    TEST_BEGIN("stage_6.15_mcp_command_queue_and_rdb_workflow");
+
+    // Use real DebugBackend WITHOUT testSynchronous_ — requires emulation thread
+    Memory mem;
+    NoBoardTarget target(mem);
+    DebugBackend backend(target);
+    backend.reset();
+
+    hal_memory = &mem;
+    hal_dbg = &backend;
+
+    // Write test program
+    writeProgram(mem, test_program, sizeof(test_program), 0x0000);
+    writeProgram(mem, subroutine, sizeof(subroutine), 0x0200);
+
+    // Start emulation thread — this is what mcp_main.cpp was missing
+    std::thread emuThread([&backend]() {
+        backend.runUntilPause();
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+
+    AgentApi api(backend);
+
+    // --- Part 1: Annotation operations through command queue ---
+    // These go through submitAndWait() → commandQueue_ → emulation thread
+    auto r1 = api.createFunction(0x0200, 0);
+    CHECK(r1.success, "createFunction through command queue succeeds");
+
+    auto r2 = api.setComment(0x0200, "test subroutine");
+    CHECK(r2.success, "setComment through command queue succeeds");
+
+    auto r3 = api.addLabel(0x0205, "mov_m_a");
+    CHECK(r3.success, "addLabel through command queue succeeds");
+
+    // --- Part 2: RDB operations (direct, no command queue) ---
+    auto &rdb = backend.rdbController();
+
+    // Initialize RDB
+    rdb.initialize("vector06c", RdbRomIdentity());
+    CHECK(!rdb.isDirty(), "RDB clean after init");
+
+    // Add RDB object
+    auto r4 = api.addRdbObject(0x0000, "start", "function", 0);
+    CHECK(r4.success, "addRdbObject succeeds");
+    CHECK(rdb.isDirty(), "RDB dirty after addRdbObject");
+
+    // Set RDB comment
+    auto r5 = api.setRdbComment(0x0000, "ROM entry point");
+    CHECK(r5.success, "setRdbComment succeeds");
+
+    // Add RDB link
+    auto r6 = api.addRdbLink(0x0000, 0x0200);
+    CHECK(r6.success, "addRdbLink succeeds");
+
+    // Verify RDB state
+    auto r7 = api.getRdbInfo();
+    CHECK(r7.success, "getRdbInfo succeeds");
+    CHECK(r7.value.objectCount >= 1, "RDB has at least 1 object");
+    CHECK(r7.value.dirty, "RDB reports dirty=true");
+
+    // --- Part 3: Save and reload ---
+    std::string testPath = "/tmp/test_stage615.rdb";
+    rdb.saveAs(testPath);
+    CHECK(!rdb.isDirty(), "RDB clean after save");
+
+    // Verify file exists
+    FILE *fp = fopen(testPath.c_str(), "r");
+    CHECK(fp != nullptr, "RDB file exists after save");
+    if (fp) fclose(fp);
+
+    // Reload and verify data preserved
+    auto r8 = api.reloadRdb();
+    CHECK(r8.success, "reloadRdb succeeds");
+
+    auto r9 = api.getRdbObject(0x0000);
+    CHECK(r9.success, "getRdbObject after reload succeeds");
+    if (r9.success) {
+        CHECK(std::string(r9.value.name) == "start", "object name preserved after reload");
+        CHECK(std::string(r9.value.comment) == "ROM entry point", "comment preserved after reload");
+    }
+
+    // Verify links preserved
+    auto r10 = api.getRdbLinks(0x0000);
+    CHECK(r10.success, "getRdbLinks after reload succeeds");
+    CHECK(r10.value.size() >= 1, "link preserved after reload");
+
+    // Cleanup
+    backend.requestQuit();
+    emuThread.join();
+    std::remove(testPath.c_str());
+
+    hal_dbg = nullptr;
+    hal_memory = nullptr;
+
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -1900,6 +2008,9 @@ int main()
 
     // Stage 6.1 Iteration 3 — I/O ports
     test_io_port_write_through_queue();             // 46
+
+    // Stage 6.15 — MCP command queue + RDB workflow
+    test_mcp_command_queue_and_rdb_workflow();      // 47
 
     printf("\n\033[1;33m========================================\033[0m\n");
     printf("  Results: %d/%d passed", tests_passed, tests_run);
