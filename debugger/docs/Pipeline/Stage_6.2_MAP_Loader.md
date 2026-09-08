@@ -67,6 +67,35 @@ check_bugs.ROM
 
 Не искать произвольные MAP-файлы в соседних каталогах.
 
+### Важно при создании MAP-файлов
+
+**MAP-файл ВСЕГДА должен располагаться в том же каталоге, что и соответствующий ROM-файл, и иметь то же базовое имя.**
+
+Примеры корректного размещения:
+
+```text
+/path/to/check_bugs.rom
+/path/to/check_bugs.map        ← правильно
+
+/path/to/fire2.rom
+/path/to/fire2.map             ← правильно
+```
+
+Примеры НЕкорректного размещения:
+
+```text
+/path/to/check_bugs.rom
+/home/user/check_bugs.map      ← НЕПРАВИЛЬНО: другой каталог
+
+/path/to/check_bugs.rom
+/path/to/symbols.map           ← НЕПРАВИЛЬНО: другое имя
+
+/path/to/check_bugs.rom
+/path/to/check_bugs.MAP.txt    ← НЕПРАВИЛЬНО: другое расширение
+```
+
+При создании MAP-файла (вручную или через MCP/Agent) необходимо сразу сохранять его рядом с ROM-файлом. Debugger автоматически находит и загружает MAP только по пути `<rom_path_without_extension>.map`.
+
 ---
 
 # 4. Загрузка MAP
