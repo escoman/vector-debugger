@@ -71,15 +71,18 @@ cmake .. -DV06C_ENABLE_AI_AGENT=ON
 
 ## Сборка
 
-### 1. Клонировать Dear ImGui из ветки `docking`
+### 1. Клонировать Dear ImGui из ветки `docking` и imgui-node-editor
 
 ```bash
 cd debugger
 mkdir -p thirdparty
 git clone --branch docking https://github.com/ocornut/imgui.git thirdparty/imgui
+git clone --depth 1 https://github.com/thedmd/imgui-node-editor.git thirdparty/imgui-node-editor
 ```
 
 > **Примечание:** `--branch docking` клонирует только нужную ветку. Флаг `--depth 1` можно добавить для ускорения, если полная история не нужна.
+
+**imgui-node-editor** — библиотека визуальных node-графов на базе Dear ImGui. Используется в окне Call Graph (Stage 6.12) для отображения графа вызовов из RDB. Поставляется как исходные файлы (copy-paste integration, аналогично Dear ImGui).
 
 ### 2. Конфигурация и сборка
 
@@ -99,6 +102,7 @@ make -j$(nproc)
 - `test_board_smoke` — smoke-тест с реальным Board (1 тест)
 - `test_vram_mapping` — тесты маппинга видеопамяти (17 тестов)
 - `test_workspace` — тесты менеджера рабочих пространств
+- `test_call_graph_model` — тесты модели графа вызовов (19 тестов)
 - `test_gui_smoke` — smoke-тест запуска GUI
 - `v06c-debugger` — графический отладчик
 
@@ -261,6 +265,6 @@ debugger/
 │   └── profiles/   # Profiles — типовые наборы задач и знаний
 ├── mcp/            # MCP-сервер v06c-mcp (адаптер над Agent API)
 ├── tests/          # Автоматические тесты
-├── thirdparty/     # Сторонние библиотеки (Dear ImGui, cpp-mcp)
+├── thirdparty/     # Сторонние библиотеки (Dear ImGui, imgui-node-editor, cpp-mcp)
 └── CMakeLists.txt  # Конфигурация сборки
 ```

@@ -263,7 +263,7 @@ void DebuggerGui::render(IDebugBackend &backend)
             functionsWindow_.requestRefresh();
             romDatabaseWindow_.requestRefresh();
             xrefsWindow_.requestRefresh();
-            callGraphWindow_.requestRefresh();
+            callGraphWindow_.markOutdated();
             histNeedsRefresh_ = true;
         }
     }
@@ -412,6 +412,10 @@ void DebuggerGui::render(IDebugBackend &backend)
     // Stage 4 Enhanced: Vector Screen navigation callbacks
     vectorScreen_.onGoToMemoryInspector = [this](uint16_t a) { gotoMemory(a); };
     vectorScreen_.onGoToDisassembly = [this](uint16_t a) { gotoDisassembly(a); };
+
+    // Stage 6.12: Call Graph navigation callbacks
+    callGraphWindow_.onGoToDisassembly = [this](uint16_t a) { gotoDisassembly(a); };
+    callGraphWindow_.onGoToMemoryInspector = [this](uint16_t a) { gotoMemory(a); };
     
     // --- Apply cascade layout BEFORE rendering windows ---
     if (cascadeRequested_) {
@@ -862,7 +866,7 @@ void DebuggerGui::renderControls(IDebugBackend &backend)
         vectorScreen_.requestRefresh();
         functionsWindow_.requestRefresh();
         xrefsWindow_.requestRefresh();
-        callGraphWindow_.requestRefresh();
+        callGraphWindow_.markOutdated();
         histNeedsRefresh_ = true;
     }
     if (!paused) ImGui::EndDisabled();
@@ -888,7 +892,7 @@ void DebuggerGui::renderControls(IDebugBackend &backend)
         vectorScreen_.requestRefresh();
         functionsWindow_.requestRefresh();
         xrefsWindow_.requestRefresh();
-        callGraphWindow_.requestRefresh();
+        callGraphWindow_.markOutdated();
         histNeedsRefresh_ = true;
     }
     if (!paused) ImGui::EndDisabled();
@@ -906,7 +910,7 @@ void DebuggerGui::renderControls(IDebugBackend &backend)
         vectorScreen_.requestRefresh();
         functionsWindow_.requestRefresh();
         xrefsWindow_.requestRefresh();
-        callGraphWindow_.requestRefresh();
+        callGraphWindow_.markOutdated();
         histNeedsRefresh_ = true;
     }
     if (!running) ImGui::EndDisabled();

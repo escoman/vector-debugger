@@ -15,6 +15,7 @@ set(DBG_TST_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 set(DBG_GUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/gui)
 set(DBG_RDB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/rdb)
 set(IMGUI_DIR   ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/imgui)
+set(NODE_EDITOR_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/imgui-node-editor)
 
 # ---------------------------------------------------------------------------
 # Include paths — we need headers from the main project (memory.h, i8080.h)
@@ -350,6 +351,14 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/imgui_demo.cpp
     ${IMGUI_DIR}/backends/imgui_impl_sdl2.cpp
     ${IMGUI_DIR}/backends/imgui_impl_opengl2.cpp
+)
+
+# imgui-node-editor sources (Stage 6.12)
+set(NODE_EDITOR_SOURCES
+    ${NODE_EDITOR_DIR}/imgui_node_editor.cpp
+    ${NODE_EDITOR_DIR}/imgui_node_editor_api.cpp
+    ${NODE_EDITOR_DIR}/imgui_canvas.cpp
+    ${NODE_EDITOR_DIR}/crude_json.cpp
 )
 
 # ---------------------------------------------------------------------------
@@ -711,6 +720,7 @@ endif()
 include_directories(${SDL2_INCLUDE_DIR})
 include_directories(${IMGUI_DIR})
 include_directories(${IMGUI_DIR}/backends)
+include_directories(${NODE_EDITOR_DIR})
 include_directories(${DBG_GUI_DIR})
 
 set(GUI_SOURCES
@@ -729,6 +739,7 @@ set(GUI_SOURCES
     ${DBG_GUI_DIR}/functions_window.cpp
     ${DBG_GUI_DIR}/xrefs_window.cpp
     ${DBG_GUI_DIR}/call_graph_window.cpp
+    ${DBG_GUI_DIR}/call_graph_model.cpp
     ${DBG_GUI_DIR}/search_window.cpp
     ${DBG_GUI_DIR}/keyboard_window.cpp
     ${DBG_GUI_DIR}/rom_file_dialog.cpp
@@ -747,6 +758,7 @@ find_package(OpenGL REQUIRED)
 add_executable(v06c-debugger
     ${GUI_SOURCES}
     ${IMGUI_SOURCES}
+    ${NODE_EDITOR_SOURCES}
     ${BINARY_RESOURCES}
 )
 
@@ -764,6 +776,22 @@ target_link_libraries(v06c-debugger
 set_target_properties(v06c-debugger PROPERTIES
     LINK_FLAGS "-no-pie"
     POSITION_INDEPENDENT_CODE OFF
+)
+
+# ---------------------------------------------------------------------------
+# Call Graph Model test executable (Stage 6.12)
+# ---------------------------------------------------------------------------
+
+add_executable(test_call_graph_model
+    ${DBG_TST_DIR}/test_call_graph_model.cpp
+    ${DBG_GUI_DIR}/call_graph_model.cpp
+    ${RDB_SOURCES}
+)
+
+target_include_directories(test_call_graph_model PRIVATE
+    ${DBG_GUI_DIR}
+    ${DBG_RDB_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty
 )
 
 # ---------------------------------------------------------------------------
