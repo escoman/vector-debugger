@@ -1,4 +1,5 @@
 #include "call_graph_model.h"
+#include "call_graph_window.h"  // graphPathFromRdbPath
 
 #include <cassert>
 #include <cstdio>
@@ -362,6 +363,32 @@ static void test_duplicate_addresses()
 }
 
 // ---------------------------------------------------------------------------
+// Tests: graphPathFromRdbPath
+// ---------------------------------------------------------------------------
+
+static void test_graph_path_from_rdb()
+{
+    TEST_BEGIN("graphPathFromRdbPath: game.rdb → game.rdb.graph");
+    ASSERT_EQ(graphPathFromRdbPath("game.rdb"), std::string("game.rdb.graph"));
+    TEST_END();
+}
+
+static void test_graph_path_from_rdb_with_dir()
+{
+    TEST_BEGIN("graphPathFromRdbPath: /path/to/game.rdb");
+    ASSERT_EQ(graphPathFromRdbPath("/path/to/game.rdb"),
+              std::string("/path/to/game.rdb.graph"));
+    TEST_END();
+}
+
+static void test_graph_path_empty()
+{
+    TEST_BEGIN("graphPathFromRdbPath: empty → empty");
+    ASSERT_EQ(graphPathFromRdbPath(""), std::string(""));
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -399,6 +426,11 @@ int main()
 
     // Edge cases
     test_duplicate_addresses();
+
+    // Graph path derivation
+    test_graph_path_from_rdb();
+    test_graph_path_from_rdb_with_dir();
+    test_graph_path_empty();
 
     printf("\n=== Results: %d/%d passed ===\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

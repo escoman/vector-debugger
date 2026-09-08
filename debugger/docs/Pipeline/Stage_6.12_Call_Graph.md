@@ -918,7 +918,40 @@ debugger/agent/AI_AGENT_WORKFLOW.md
 
 ---
 
-# 31. Критерий завершения
+# 31. Persistence — файл `.rdb.graph`
+
+Визуальное состояние графа (позиции узлов, zoom, pan) сохраняется `imgui-node-editor` в файл:
+
+```text
+<rom basename>.rdb.graph
+```
+
+Например:
+
+```text
+clrs.rom  →  clrs.rdb  →  clrs.rdb.graph
+```
+
+Разделение ответственности:
+
+```text
+.rdb          — семантическая база данных ROM (objects, links, properties, comments)
+.rdb.graph    — визуальное состояние node editor (positions, zoom, pan, selection)
+```
+
+RDB → objects + links → Graph Model → imgui-node-editor → .rdb.graph
+
+`.rdb.graph` не редактируется нашим кодом вручную. Файл создаётся только когда node editor действительно сохраняет своё состояние.
+
+При смене ROM editor пересоздаётся с новым `.rdb.graph` файлом.
+
+При Build новые узлы получают automatic layout, существующие узлы сохраняют свои позиции.
+
+NodeId = адрес RDB object (стабильный идентификатор).
+
+---
+
+# 32. Критерий завершения
 
 Stage 6.12 считается завершённым, если:
 
@@ -934,6 +967,9 @@ Stage 6.12 считается завершённым, если:
 * после изменения RDB граф помечается outdated;
 * старый граф остаётся доступным до следующего Build;
 * layout не сохраняется в RDB;
+* visual state сохраняется imgui-node-editor в `.rdb.graph`;
+* файл `.rdb.graph` имеет имя `<rom>.rdb.graph`;
+* `.rdb.graph` не редактируется нашим кодом вручную;
 * GUI не обращается к Board для построения графа;
 * Build не выполняется каждый GUI frame;
 * построение имеет сложность порядка O(N + E);

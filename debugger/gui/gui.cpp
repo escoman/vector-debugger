@@ -1165,6 +1165,7 @@ void DebuggerGui::loadRomFile(const std::string &path, IDebugBackend &backend)
         vectorScreen_.requestRefresh();
         functionsWindow_.requestRefresh();
         romDatabaseWindow_.requestRefresh();
+        callGraphWindow_.onRomLoaded(backend);
         histNeedsRefresh_ = true;
     } else {
         snprintf(romErrorBuffer_, sizeof(romErrorBuffer_),

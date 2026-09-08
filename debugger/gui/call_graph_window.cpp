@@ -9,8 +9,8 @@
 #include "imgui.h"
 
 #include <cstdio>
-#include <cmath>
 #include <algorithm>
+#include <set>
 
 namespace ed = ax::NodeEditor;
 
@@ -29,15 +29,55 @@ static constexpr int   NODES_PER_ROW    = 5;
 
 CallGraphWindow::CallGraphWindow()
 {
-    ed::Config config;
-    config.SettingsFile = nullptr;  // no persistent settings (Stage 6.12 §12,13)
-    editorContext_ = ed::CreateEditor(&config);
+    // Editor is created lazily in recreateEditor() when a ROM is loaded
+    // and we know the .rdb.graph file path.
 }
 
 CallGraphWindow::~CallGraphWindow()
 {
     if (editorContext_)
         ed::DestroyEditor(editorContext_);
+}
+
+// ---------------------------------------------------------------------------
+// Recreate editor context with current graphFilePath_
+// ---------------------------------------------------------------------------
+
+void CallGraphWindow::recreateEditor()
+{
+    if (editorContext_)
+    {
+        ed::DestroyEditor(editorContext_);
+        editorContext_ = nullptr;
+    }
+
+    if (graphFilePath_.empty())
+        return;
+
+    ed::Config config;
+    config.SettingsFile = graphFilePath_.c_str();
+    editorContext_ = ed::CreateEditor(&config);
+}
+
+// ---------------------------------------------------------------------------
+// onRomLoaded — derive .rdb.graph path, recreate editor
+// ---------------------------------------------------------------------------
+
+void CallGraphWindow::onRomLoaded(IDebugBackend &backend)
+{
+    const RdbController &rdb = backend.rdbController();
+    std::string rdbPath = rdb.getPath();
+
+    graphFilePath_ = graphPathFromRdbPath(rdbPath);
+
+    // Recreate editor with new persistence file
+    recreateEditor();
+
+    // Reset graph state — old graph is irrelevant for new ROM
+    model_.clear();
+    lastBuiltAddresses_.clear();
+    state_ = State::NotBuilt;
+    outdated_ = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -48,54 +88,75 @@ void CallGraphWindow::build(IDebugBackend &backend)
 {
     state_ = State::Building;
 
+    // Ensure editor exists (might not if no ROM was loaded via onRomLoaded)
+    if (!editorContext_ && !graphFilePath_.empty())
+        recreateEditor();
+
     // Get RDB snapshot (read-only, thread-safe via existing mechanism)
     const RdbController &rdb = backend.rdbController();
     std::vector<RdbObject> objects = rdb.listObjects();
 
+    // Remember previous addresses to detect new nodes
+    std::set<uint16_t> previousAddresses(lastBuiltAddresses_.begin(),
+                                          lastBuiltAddresses_.end());
+
     // Build graph model — O(N + E)
     model_ = buildCallGraphModel(objects);
 
-    // Assign unique node editor IDs (1-based, address → sequential ID)
-    nodeIdMap_.clear();
-    nodeIdMap_.reserve(model_.nodes.size());
-    for (size_t i = 0; i < model_.nodes.size(); i++)
-    {
-        nodeIdMap_[model_.nodes[i].address] = static_cast<uint32_t>(i + 1);
-    }
+    // Track current addresses for next build
+    lastBuiltAddresses_.clear();
+    lastBuiltAddresses_.reserve(model_.nodes.size());
+    for (const auto &node : model_.nodes)
+        lastBuiltAddresses_.push_back(node.address);
 
     outdated_ = false;
     state_ = State::Built;
-}
 
-// ---------------------------------------------------------------------------
-// Deterministic layout — arrange nodes in a grid
-// ---------------------------------------------------------------------------
-
-static void applyGridLayout(const CallGraphModel &model,
-                             const std::unordered_map<uint16_t, uint32_t> &nodeIdMap)
-{
-    // Sort nodes by address for deterministic ordering
-    std::vector<uint16_t> sortedAddresses;
-    sortedAddresses.reserve(model.nodes.size());
-    for (const auto &node : model.nodes)
-        sortedAddresses.push_back(node.address);
-    std::sort(sortedAddresses.begin(), sortedAddresses.end());
-
-    // Place nodes in grid
-    float cellW = NODE_WIDTH + NODE_H_SPACING;
-    float cellH = 120.0f + NODE_V_SPACING;
-
-    for (size_t i = 0; i < sortedAddresses.size(); i++)
+    // Apply grid layout only for NEW nodes (not in previous build).
+    // Existing nodes keep their saved positions from .rdb.graph.
+    // NodeId = address (stable identity).
+    if (editorContext_)
     {
-        int row = static_cast<int>(i) / NODES_PER_ROW;
-        int col = static_cast<int>(i) % NODES_PER_ROW;
+        ed::SetCurrentEditor(editorContext_);
 
-        float x = 50.0f + col * cellW;
-        float y = 50.0f + row * cellH;
+        // Collect new addresses (sorted for deterministic layout)
+        std::vector<uint16_t> newAddresses;
+        for (const auto &node : model_.nodes)
+        {
+            if (previousAddresses.find(node.address) == previousAddresses.end())
+                newAddresses.push_back(node.address);
+        }
+        std::sort(newAddresses.begin(), newAddresses.end());
 
-        // Set node position via imgui-node-editor API
-        ed::SetNodePosition(ed::NodeId(nodeIdMap.at(sortedAddresses[i])),
-                            ImVec2(x, y));
+        // Place new nodes in grid below existing ones
+        float cellW = NODE_WIDTH + NODE_H_SPACING;
+        float cellH = 120.0f + NODE_V_SPACING;
+
+        // Find the Y offset: below all existing nodes
+        float maxY = 50.0f;
+        if (!previousAddresses.empty())
+        {
+            for (uint16_t addr : previousAddresses)
+            {
+                ImVec2 pos = ed::GetNodePosition(ed::NodeId(static_cast<uintptr_t>(addr)));
+                if (pos.y + cellH > maxY)
+                    maxY = pos.y + cellH;
+            }
+        }
+
+        for (size_t i = 0; i < newAddresses.size(); i++)
+        {
+            int row = static_cast<int>(i) / NODES_PER_ROW;
+            int col = static_cast<int>(i) % NODES_PER_ROW;
+
+            float x = 50.0f + col * cellW;
+            float y = maxY + row * cellH;
+
+            ed::SetNodePosition(ed::NodeId(static_cast<uintptr_t>(newAddresses[i])),
+                                ImVec2(x, y));
+        }
+
+        ed::SetCurrentEditor(nullptr);
     }
 }
 
@@ -169,27 +230,32 @@ void CallGraphWindow::renderNodeContextMenu(const CallGraphNode &node)
 
 void CallGraphWindow::renderNodeEditor(IDebugBackend &backend)
 {
+    if (!editorContext_) return;
+
     ed::SetCurrentEditor(editorContext_);
     ed::Begin("Call Graph Editor", ImVec2(0.0f, 0.0f));
 
     // --- Draw nodes -------------------------------------------------------
+    // NodeId = address (stable identity across rebuilds).
+    // PinId  = address * 4 (+ 0 for input, + 1 for output).
+    // LinkId = (source << 16) | target (stable, unique per edge).
 
     for (const auto &node : model_.nodes)
     {
-        uint32_t id = nodeIdMap_.at(node.address);
-        ed::BeginNode(ed::NodeId(id));
+        uintptr_t addr = static_cast<uintptr_t>(node.address);
+        ed::BeginNode(ed::NodeId(addr));
 
         renderNodeContent(node);
 
         // Input pin (for incoming edges)
-        ed::BeginPin(ed::PinId(id * 1000), ed::PinKind::Input);
+        ed::BeginPin(ed::PinId(addr * 4), ed::PinKind::Input);
         ImGui::Text(" in");
         ed::EndPin();
 
         ImGui::SameLine();
 
         // Output pin (for outgoing edges)
-        ed::BeginPin(ed::PinId(id * 1000 + 1), ed::PinKind::Output);
+        ed::BeginPin(ed::PinId(addr * 4 + 1), ed::PinKind::Output);
         ImGui::Text("out ");
         ed::EndPin();
 
@@ -199,17 +265,10 @@ void CallGraphWindow::renderNodeEditor(IDebugBackend &backend)
         ed::NodeId contextNodeId;
         if (ed::ShowNodeContextMenu(&contextNodeId))
         {
-            // Find which node was right-clicked
-            uint32_t clickedId = static_cast<uint32_t>(static_cast<uintptr_t>(contextNodeId));
-            for (const auto &n : model_.nodes)
-            {
-                if (nodeIdMap_.count(n.address) && nodeIdMap_.at(n.address) == clickedId)
-                {
-                    selectedNodeAddress_ = n.address;
-                    ImGui::OpenPopup("node_context");
-                    break;
-                }
-            }
+            // NodeId IS the address (stable identity)
+            selectedNodeAddress_ = static_cast<uint16_t>(
+                static_cast<uintptr_t>(contextNodeId));
+            ImGui::OpenPopup("node_context");
         }
     }
 
@@ -230,22 +289,35 @@ void CallGraphWindow::renderNodeEditor(IDebugBackend &backend)
 
     // --- Draw links -------------------------------------------------------
 
-    for (size_t i = 0; i < model_.edges.size(); i++)
+    for (const auto &edge : model_.edges)
     {
-        const auto &edge = model_.edges[i];
+        uintptr_t srcAddr = static_cast<uintptr_t>(edge.source);
+        uintptr_t tgtAddr = static_cast<uintptr_t>(edge.target);
 
-        auto srcIt = nodeIdMap_.find(edge.source);
-        auto tgtIt = nodeIdMap_.find(edge.target);
-        if (srcIt == nodeIdMap_.end() || tgtIt == nodeIdMap_.end())
-            continue;
-
-        uint32_t srcId = srcIt->second;
-        uint32_t tgtId = tgtIt->second;
+        // Stable LinkId from edge endpoints
+        ed::LinkId linkId(static_cast<uintptr_t>(
+            (static_cast<uint32_t>(edge.source) << 16) | static_cast<uint32_t>(edge.target)));
 
         // Output pin of source → Input pin of target
-        ed::Link(ed::LinkId(static_cast<uint32_t>(i + 1)),
-                 ed::PinId(srcId * 1000 + 1),  // output pin
-                 ed::PinId(tgtId * 1000));      // input pin
+        ed::Link(linkId,
+                 ed::PinId(srcAddr * 4 + 1),  // output pin
+                 ed::PinId(tgtAddr * 4));      // input pin
+    }
+
+    // Cache current zoom for toolbar display
+    currentZoom_ = ed::GetCurrentZoom();
+
+    // --- Deferred navigation actions (after nodes submitted) --------------
+
+    if (navigateToShowAll_)
+    {
+        ed::NavigateToContent(0.3f);
+        navigateToShowAll_ = false;
+    }
+    if (navigateToSelection_)
+    {
+        ed::NavigateToSelection(true, 0.3f);
+        navigateToSelection_ = false;
     }
 
     ed::End();
@@ -286,8 +358,22 @@ void CallGraphWindow::render(IDebugBackend &backend)
     if (ImGui::Button("Build"))
     {
         build(backend);
-        // Apply layout after build
-        applyGridLayout(model_, nodeIdMap_);
+    }
+
+    // Navigation toolbar (only when graph is built)
+    if (state_ == State::Built || state_ == State::Outdated)
+    {
+        ImGui::SameLine();
+        if (ImGui::Button("Show All"))
+        {
+            navigateToShowAll_ = true;
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("Selection"))
+        {
+            navigateToSelection_ = true;
+        }
     }
 
     ImGui::SameLine();
@@ -295,8 +381,9 @@ void CallGraphWindow::render(IDebugBackend &backend)
     // Statistics
     if (state_ == State::Built || state_ == State::Outdated)
     {
-        ImGui::Text("Nodes: %zu  |  Links: %zu  |  Unresolved: %zu",
-                    model_.nodes.size(), model_.edges.size(), model_.unresolvedCount);
+        ImGui::Text("Nodes: %zu  |  Links: %zu  |  Unresolved: %zu  |  Zoom: %.0f%%",
+                    model_.nodes.size(), model_.edges.size(), model_.unresolvedCount,
+                    currentZoom_ * 100.0f);
     }
 
     ImGui::Separator();
