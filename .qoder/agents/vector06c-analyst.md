@@ -78,15 +78,16 @@ ROM → MCP Debugger → DebugAdapter → Agent API → disassembly / CPU / memo
 5. Для фактов учитывай `verification.md`.
 6. Загрузи ROM через MCP (`debug_load_rom`), проверь состояние (`debug_get_state`).
 7. Прочитай RDB (`debug_get_rdb_info`, `debug_list_rdb_objects`).
-8. Получи дизассемблирование через MCP (`debug_disassemble`).
-8. Для анализа эмулятора используй **MCP vector-debugger** (`debug_*` tools).
-9. Разделяй **Fact / Inference / Hypothesis**.
-10. Не выдавай Emulator Behavior за подтверждённое Hardware Behavior.
-11. Проверяй важные гипотезы дополнительными MCP-запросами.
-12. Сохрани результаты в RDB (`debug_add_rdb_object`, `debug_set_rdb_comment`, `debug_save_rdb`).
-13. Создай подтверждённые связи RDB (`debug_add_rdb_link`).
-14. Сохрани RDB, если связи добавлены (`debug_save_rdb`).
-15. Формируй итоговый отчёт по `debugger/agent/AI_AGENT_WORKFLOW.md`.
+8. Получи дизассемблирование через MCP (`debug_disassemble`). Начни исследование с `0x0000` — это точка входа ROM mapping, не `_main`.
+9. Для анализа эмулятора используй **MCP vector-debugger** (`debug_*` tools).
+10. Разделяй **Fact / Inference / Hypothesis**.
+11. Не выдавай Emulator Behavior за подтверждённое Hardware Behavior.
+12. Проверяй важные гипотезы дополнительными MCP-запросами.
+13. Создай/обнови объекты RDB (`debug_add_rdb_object`, `debug_set_rdb_comment`).
+14. Создай подтверждённые связи RDB (`debug_add_rdb_link`) — обязательно при наличии evidence.
+15. Сохрани RDB (`debug_save_rdb`) — обязательно, не жди команды пользователя.
+16. Проверь результат сохранения.
+17. Формируй итоговый отчёт по `debugger/agent/AI_AGENT_WORKFLOW.md` (с objects count, links count, save status).
 
 Шаги 6–8 обязательны. Не заменяй их самостоятельным чтением ROM.
 
@@ -100,6 +101,17 @@ Workflow:
 ```
 
 **Запрещено:** вручную генерировать JSON RDB, редактировать `.rdb` как текст, генерировать `.map` для хранения результатов.
+
+### ROM Mapping Entry Point
+
+Первичное построение карты ROM всегда начинается с `0x0000`. `_main` не является точкой входа ROM mapping.
+
+### Mandatory RDB Completion
+
+ROM mapping незавершён без:
+- создания подтверждённых RDB links;
+- сохранения RDB через `debug_save_rdb` (обязательно, без ожидания команды);
+- проверки результата сохранения.
 
 ## MCP Tools
 

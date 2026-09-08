@@ -186,8 +186,14 @@ Semantic references from one object to target addresses.
 RDB links are **semantic data** created by AI Agent analysis.
 They represent confirmed relationships between objects (e.g. call targets, data references).
 
+Links must be created by the Agent when confirmed control/data flow is discovered
+during analysis (e.g. `CALL target`, `JMP target`, known function references).
+Links should not be created based on address proximity or unverified hypotheses.
+
 `.rdb.graph` files are **visual data** used by Call Graph.
+`.rdb.graph` is **not** a replacement for RDB links.
 Links are never saved to `.rdb.graph` — only to `.rdb`.
+Call Graph visualizes existing RDB links — it does not create them.
 
 ### Object Removal and Links
 
@@ -225,6 +231,9 @@ load → inspect → multiple modifications → verify → save → verify
 ```
 
 Do **not** save after every single operation. Batch modifications, then save.
+
+After modifying objects and/or links, RDB **must** be saved via `debug_save_rdb`.
+The Agent must not consider ROM mapping complete until RDB is saved successfully.
 
 ---
 

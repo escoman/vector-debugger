@@ -107,19 +107,84 @@ Every analysis follows this sequence:
 9.  Load ROM if needed (debug_load_rom)
 10. Read RDB (debug_get_rdb_info, debug_list_rdb_objects)
 11. Obtain disassembly via MCP (debug_disassemble)
-12. Execute MCP operations
-13. Analyze results
-14. Form hypotheses
-15. Verify hypotheses with additional MCP operations
-16. Evaluate evidence
-17. Form result
-18. Save findings to RDB (debug_add_rdb_object, debug_set_rdb_comment, debug_save_rdb)
-19. Create confirmed RDB links (debug_add_rdb_link)
-20. Save RDB if links were added (debug_save_rdb)
-21. Note limitations and unknowns
+12. Set ROM mapping entry point = 0x0000
+13. Execute MCP operations — explore control flow from 0x0000
+14. Analyze results
+15. Form hypotheses
+16. Verify hypotheses with additional MCP operations
+17. Evaluate evidence
+18. Form result
+19. Create/update RDB objects (debug_add_rdb_object, debug_set_rdb_comment)
+20. Create confirmed RDB links (debug_add_rdb_link)
+21. Save RDB (debug_save_rdb) — mandatory, do not wait for user request
+22. Verify save result
+23. Note limitations and unknowns
+24. Produce final report (with objects count, links count, save status)
 ```
 
-Steps 2, 9, 10, and 11 are mandatory. Do not replace them with self-analysis of the ROM binary.
+Steps 2, 9, 10, 11, and 12 are mandatory. Do not replace them with self-analysis of the ROM binary.
+
+---
+
+## ROM Mapping Entry Point
+
+When performing initial ROM mapping, the entry point is:
+
+```
+0x0000
+```
+
+The Agent must begin control flow exploration from `0x0000`.
+
+`_main` is **not** the ROM mapping entry point. For ROMs built with Z88DK or other compilers, `_main` may reside inside user code and be called by startup code. `_main` is an object discovered during analysis, not the starting point of ROM mapping.
+
+Correct:
+```
+Mapping entry point: 0x0000
+Known symbol: _main = 0x....
+```
+
+Incorrect:
+```
+Entry point: _main
+```
+
+If a `.map` file exists, its symbols are used for object identification but do not override the entry point rule.
+
+Typical ROM structure discovered during mapping:
+```
+0x0000
+  ↓
+startup code
+  ↓
+_main
+  ↓
+user code
+```
+
+---
+
+## Mandatory ROM Mapping Completion
+
+A ROM mapping is **incomplete** unless all of the following are done:
+
+1. RDB objects created
+2. Confirmed RDB links created (`debug_add_rdb_link`)
+3. RDB saved (`debug_save_rdb`) — **mandatory, do not wait for user command**
+4. Save result verified
+
+> Creating RDB objects without creating confirmed links is an incomplete ROM mapping.
+
+> Creating or modifying RDB data without saving it is an incomplete ROM mapping.
+
+The final report must include:
+```
+Mapping entry point: 0x0000
+Objects: <count>
+Links: <count>
+RDB: <path>
+RDB save: success / failed
+```
 
 ---
 
@@ -488,9 +553,24 @@ is an acceptable result. Better to report "insufficient evidence" than to make a
 
 ## ROM
 
+## Mapping Entry Point
+0x0000
+
 ## Profile
 
 ## Tasks
+
+## Objects
+<count>
+
+## Links
+<count>
+
+## RDB
+<path>
+
+## RDB Save
+success / failed
 
 ## Findings
 
