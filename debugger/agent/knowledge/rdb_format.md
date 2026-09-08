@@ -221,7 +221,6 @@ For a ROM at `/path/to/game.rom`:
 | `/path/to/game.rom` | ROM binary |
 | `/path/to/game.map` | Z88DK MAP file (optional import source) |
 | `/path/to/game.rdb` | ROM Database (primary store) |
-| `/path/to/game.rom.comments` | User comments sidecar |
 
 ---
 

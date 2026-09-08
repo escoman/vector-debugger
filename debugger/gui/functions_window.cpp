@@ -57,19 +57,12 @@ void FunctionsWindow::render(IDebugBackend &backend)
 
     ImGui::SetNextWindowSize(ImVec2(600, 400), ImGuiCond_FirstUseEver);
 
-    if (!ImGui::Begin("Functions", &visible_)) {
+    if (!ImGui::Begin("MAP-file Info", &visible_)) {
         ImGui::End();
         return;
     }
 
     // Toolbar
-    if (ImGui::Button("Define Function")) {
-        showDefineDialog_ = true;
-        defineAddrBuffer_[0] = '\0';
-        defineNameBuffer_[0] = '\0';
-        defineCommentBuffer_[0] = '\0';
-    }
-    ImGui::SameLine();
     ImGui::Text("Filter:");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(150);
@@ -169,11 +162,11 @@ void FunctionsWindow::render(IDebugBackend &backend)
             snprintf(rowBuf + pos, sizeof(rowBuf) - pos, "; %s", sym.comment.c_str());
         }
 
-        // Selectable row (single item per row — no two-line issue)
+        // Selectable row
         bool isSelected = (contextAddress_ == sym.address);
         ImGui::Selectable(rowBuf, isSelected);
 
-        // Context menu attached to the selectable
+        // Context menu (readonly — breakpoints and navigation only)
         if (ImGui::BeginPopupContextItem("funcctx")) {
             contextAddress_ = sym.address;
             bool hasBpCtx = backend.hasBreakpoint(contextAddress_);
@@ -190,25 +183,6 @@ void FunctionsWindow::render(IDebugBackend &backend)
                 }
             }
             ImGui::Separator();
-            if (ImGui::MenuItem("Rename")) {
-                editingName_ = true;
-                editingAddress_ = contextAddress_;
-                const DebugSymbol *ctxSym = backend.symbolDatabase().findSymbol(contextAddress_);
-                if (ctxSym) {
-                    snprintf(editNameBuffer_, sizeof(editNameBuffer_), "%s", ctxSym->name.c_str());
-                }
-                pendingEditOpen_ = true;
-            }
-            if (ImGui::MenuItem("Edit Comment")) {
-                editingComment_ = true;
-                editingAddress_ = contextAddress_;
-                const DebugSymbol *ctxSym = backend.symbolDatabase().findSymbol(contextAddress_);
-                if (ctxSym) {
-                    snprintf(editCommentBuffer_, sizeof(editCommentBuffer_), "%s", ctxSym->comment.c_str());
-                }
-                pendingEditOpen_ = true;
-            }
-            ImGui::Separator();
             if (ImGui::MenuItem("Go to Disassembly")) {
                 if (onGoToDisassembly) {
                     onGoToDisassembly(contextAddress_);
@@ -219,13 +193,6 @@ void FunctionsWindow::render(IDebugBackend &backend)
                     onGoToMemoryInspector(contextAddress_);
                 }
             }
-            ImGui::Separator();
-            if (ImGui::MenuItem("Delete")) {
-                auto &db = backend.symbolDatabase();
-                db.removeSymbol(contextAddress_);
-                backend.saveComments();
-                needsRefresh_ = true;
-            }
             ImGui::EndPopup();
         }
 
@@ -233,99 +200,6 @@ void FunctionsWindow::render(IDebugBackend &backend)
     }
 
     ImGui::EndChild();
-
-    // Edit Name / Edit Comment popup dialogs (outside BeginChild for visibility)
-    if (pendingEditOpen_) {
-        if (editingName_) {
-            ImGui::OpenPopup("Rename Symbol");
-        } else if (editingComment_) {
-            ImGui::OpenPopup("Edit Comment");
-        }
-        pendingEditOpen_ = false;
-    }
-
-    if (ImGui::BeginPopupModal("Rename Symbol", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("Rename symbol at %04X:", editingAddress_);
-        ImGui::SetNextItemWidth(200);
-        bool enterPressed = ImGui::InputText("##editname", editNameBuffer_,
-            sizeof(editNameBuffer_), ImGuiInputTextFlags_EnterReturnsTrue);
-        if (ImGui::Button("OK", ImVec2(120, 0)) || enterPressed) {
-            if (editNameBuffer_[0] != '\0') {
-                auto &db = backend.symbolDatabase();
-                db.renameSymbol(editingAddress_, editNameBuffer_);
-                backend.saveComments();
-                needsRefresh_ = true;
-            }
-            editingName_ = false;
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(120, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-            editingName_ = false;
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
-    }
-
-    if (ImGui::BeginPopupModal("Edit Comment", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("Edit comment at %04X:", editingAddress_);
-        ImGui::SetNextItemWidth(300);
-        bool enterPressed = ImGui::InputText("##editcomment", editCommentBuffer_,
-            sizeof(editCommentBuffer_), ImGuiInputTextFlags_EnterReturnsTrue);
-        if (ImGui::Button("OK", ImVec2(120, 0)) || enterPressed) {
-            auto &db = backend.symbolDatabase();
-            db.setComment(editingAddress_, editCommentBuffer_);
-            backend.saveComments();
-            needsRefresh_ = true;
-            editingComment_ = false;
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(120, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-            editingComment_ = false;
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
-    }
-
-    // "Define Function" dialog
-    if (showDefineDialog_) {
-        ImGui::OpenPopup("Define Function Dialog");
-        showDefineDialog_ = false;
-    }
-
-    if (ImGui::BeginPopupModal("Define Function Dialog", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("Address (hex):");
-        ImGui::InputText("##addr", defineAddrBuffer_, sizeof(defineAddrBuffer_),
-            ImGuiInputTextFlags_CharsHexadecimal);
-
-        ImGui::Text("Name:");
-        ImGui::InputText("##name", defineNameBuffer_, sizeof(defineNameBuffer_));
-
-        ImGui::Text("Comment:");
-        ImGui::InputText("##comment", defineCommentBuffer_, sizeof(defineCommentBuffer_));
-
-        if (ImGui::Button("OK", ImVec2(120, 0))) {
-            unsigned int addr = 0;
-            if (sscanf(defineAddrBuffer_, "%x", &addr) == 1 && addr <= 0xFFFF) {
-                if (defineNameBuffer_[0] != '\0') {
-                    auto &db = backend.symbolDatabase();
-                    db.addSymbol(static_cast<uint16_t>(addr), defineNameBuffer_, SymbolType::Function);
-                    if (defineCommentBuffer_[0] != '\0') {
-                        db.setComment(static_cast<uint16_t>(addr), defineCommentBuffer_);
-                    }
-                    backend.saveComments();
-                    needsRefresh_ = true;
-                }
-            }
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
-    }
 
     ImGui::End();
 }

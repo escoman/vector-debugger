@@ -4536,79 +4536,6 @@ static void test_func_bp_rom_reload()
 }
 
 // ---------------------------------------------------------------------------
-// Test: Comment persistence (Stage 6.2.1)
-// ---------------------------------------------------------------------------
-
-static void test_comment_persistence()
-{
-    TEST_BEGIN("S6.2.1: comment save/load round-trip");
-
-    const std::string testRom = "/tmp/test_comment_persist.rom";
-    const std::string testComments = "/tmp/test_comment_persist.rom.comments";
-
-    // Create a minimal ROM file
-    {
-        uint8_t rom[] = { 0x00, 0x00, 0x00, 0x00, 0x76 };  // NOP, NOP, NOP, NOP, HLT
-        FILE *f = fopen(testRom.c_str(), "wb");
-        CHECK(f != nullptr, "create test ROM");
-        if (f) { fwrite(rom, 1, sizeof(rom), f); fclose(f); }
-    }
-
-    // Clean up any previous comments file
-    remove(testComments.c_str());
-
-    Memory mem;
-    DebugBackend *dbg;
-    setup(mem, dbg);
-
-    // Load ROM (this sets commentsPath_)
-    dbg->loadRom(testRom);
-
-    // Add symbols and comments
-    auto &db = dbg->symbolDatabase();
-    db.addSymbol(0x0000, "_start", SymbolType::Function);
-    db.setComment(0x0000, "Entry point");
-    db.addSymbol(0x0004, "_halt", SymbolType::Label);
-    db.setComment(0x0004, "CPU stops here");
-
-    // Save comments
-    dbg->saveComments();
-
-    // Verify file was created
-    {
-        FILE *f = fopen(testComments.c_str(), "r");
-        CHECK(f != nullptr, "comments file created");
-        if (f) {
-            char line[256];
-            int count = 0;
-            while (fgets(line, sizeof(line), f)) count++;
-            fclose(f);
-            CHECK_EQ(2, count, "2 comment lines written");
-        }
-    }
-
-    // Clear comments from memory
-    db.setComment(0x0000, "");
-    db.setComment(0x0004, "");
-    CHECK_STR("", db.findSymbol(0x0000)->comment.c_str(), "comment cleared in memory");
-
-    // Reload comments from file
-    dbg->loadComments();
-
-    // Verify comments restored
-    CHECK_STR("Entry point", db.findSymbol(0x0000)->comment.c_str(), "comment restored for _start");
-    CHECK_STR("CPU stops here", db.findSymbol(0x0004)->comment.c_str(), "comment restored for _halt");
-
-    teardown(dbg);
-
-    // Clean up
-    remove(testRom.c_str());
-    remove(testComments.c_str());
-
-    TEST_END();
-}
-
-// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -4772,9 +4699,6 @@ int main()
     test_func_bp_sync();
     test_func_bp_board_sync();
     test_func_bp_rom_reload();
-
-    // Stage 6.2.1 — Comment persistence
-    test_comment_persistence();
 
     printf("\n\033[0;36m=== Results: %d/%d passed", tests_passed, tests_run);
     if (tests_failed > 0) {

@@ -148,68 +148,7 @@ bool DebugBackend::loadRom(const std::string &path, uint32_t org)
         }
     }
 
-    // Stage 6.2.1: Load user comments from sidecar file
-    commentsPath_ = path + ".comments";
-    loadComments();
-
     return true;
-}
-
-// ---------------------------------------------------------------------------
-// Comment persistence (Stage 6.2.1) — sidecar file <rom>.comments
-// ---------------------------------------------------------------------------
-
-void DebugBackend::loadComments()
-{
-    if (commentsPath_.empty()) return;
-
-    std::ifstream f(commentsPath_);
-    if (!f.is_open()) return;
-
-    int loaded = 0;
-    std::string line;
-    while (std::getline(f, line)) {
-        if (line.empty()) continue;
-
-        // Format: ADDR\tTEXT  (ADDR is 4-digit hex uppercase)
-        size_t tab = line.find('\t');
-        if (tab == std::string::npos || tab != 4) continue;
-
-        unsigned int addr = 0;
-        if (sscanf(line.substr(0, 4).c_str(), "%x", &addr) != 1) continue;
-        if (addr > 0xFFFF) continue;
-
-        std::string text = line.substr(5);
-
-        // Apply comment only to existing symbols
-        const DebugSymbol *sym = symbols_.findSymbol(static_cast<uint16_t>(addr));
-        if (sym) {
-            symbols_.setComment(static_cast<uint16_t>(addr), text);
-            loaded++;
-        }
-    }
-
-    if (loaded > 0) {
-        printf("DebugBackend::loadComments(): loaded %d comments from %s\n",
-               loaded, commentsPath_.c_str());
-    }
-}
-
-void DebugBackend::saveComments()
-{
-    if (commentsPath_.empty()) return;
-
-    std::ofstream f(commentsPath_);
-    if (!f.is_open()) return;
-
-    auto all = symbols_.allSymbols();
-    for (const auto &sym : all) {
-        if (!sym.comment.empty()) {
-            char addrBuf[8];
-            snprintf(addrBuf, sizeof(addrBuf), "%04X", sym.address);
-            f << addrBuf << '\t' << sym.comment << '\n';
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -218,7 +157,16 @@ void DebugBackend::saveComments()
 
 std::string DebugBackend::rdbPathFromRom(const std::string &romPath)
 {
-    // .rdb sits next to the ROM: <rom_path>.rdb
+    // .rdb sits next to the ROM: replace extension with .rdb
+    // e.g. "clrs.rom" -> "clrs.rdb"
+    size_t dotPos = romPath.rfind('.');
+    size_t slashPos = romPath.rfind('/');
+    
+    // Only strip if dot is after the last slash (i.e., it's a file extension)
+    if (dotPos != std::string::npos && (slashPos == std::string::npos || dotPos > slashPos)) {
+        return romPath.substr(0, dotPos) + ".rdb";
+    }
+    // No extension — just append
     return romPath + ".rdb";
 }
 
@@ -227,9 +175,14 @@ void DebugBackend::loadRdb(const std::string &romPath)
     // Reset RDB controller to clean state
     rdb_->close();
 
-    // Compute ROM identity: file path, size, SHA-256
+    // Compute ROM identity: filename, size, SHA-256
     RdbRomIdentity identity;
-    identity.file = romPath;
+    
+    // Store only filename (not full path) for portability
+    size_t lastSlash = romPath.rfind('/');
+    identity.file = (lastSlash != std::string::npos) 
+        ? romPath.substr(lastSlash + 1) 
+        : romPath;
 
     // Get file size
     std::ifstream romFile(romPath, std::ios::binary | std::ios::ate);
@@ -261,8 +214,8 @@ void DebugBackend::loadRdb(const std::string &romPath)
                    rdbPath_.c_str());
         }
     } else {
-        // No .rdb file — initialize empty in-memory RDB
-        rdb_->initialize("vector06c", identity);
+        // No .rdb file — initialize empty in-memory RDB with path for future save
+        rdb_->initialize("vector06c", identity, rdbPath_);
         printf("DebugBackend::loadRdb(): no .rdb file, using in-memory RDB\n");
     }
 }
@@ -1181,8 +1134,6 @@ void DebugBackend::executeCommand(Command &cmd)
         if (!ok) {
             result.error = "symbol not found";
             result.status = CommandResult::Failed;
-        } else {
-            saveComments();
         }
         break;
     }
@@ -1192,8 +1143,6 @@ void DebugBackend::executeCommand(Command &cmd)
         if (!ok) {
             result.error = "symbol not found";
             result.status = CommandResult::Failed;
-        } else {
-            saveComments();
         }
         break;
     }

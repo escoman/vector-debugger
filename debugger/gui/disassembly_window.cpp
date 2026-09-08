@@ -372,7 +372,6 @@ void DisassemblyWindow::renderDisassemblyList(IDebugBackend &backend)
                 }
                 if (ImGui::MenuItem("Delete Symbol")) {
                     symbols.removeSymbol(lineAddr);
-                    backend.saveComments();
                     needsRefresh_ = true;
                 }
             }
@@ -449,7 +448,6 @@ void DisassemblyWindow::renderDisassemblyList(IDebugBackend &backend)
                 } else if (editingComment_) {
                     symbols.setComment(editingAddress_, editBuffer_);
                 }
-                backend.saveComments();
                 needsRefresh_ = true;
             }
             editingDefineFunc_ = false;

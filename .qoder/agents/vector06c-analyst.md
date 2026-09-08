@@ -46,7 +46,7 @@ ROM → MCP Debugger → DebugAdapter → Agent API → disassembly / CPU / memo
 - `architecture.md`, `cpu.md`, `io.md`, `keyboard.md`, `memory.md`
 - `rom_format.md`, `sound.md`, `video.md`
 - `verification.md` — для проверки фактов (пометки `UNVERIFIED`, `CONFLICT`)
-- `z88dk_map.md` — **обязательно** при работе с MAP-файлами (формат Z88DK)
+- `z88dk_map.md` (в `debugger/docs/`) — **обязательно** при работе с MAP-файлами (формат Z88DK)
 
 ### Profiles
 

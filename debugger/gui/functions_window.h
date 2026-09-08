@@ -7,10 +7,11 @@
 class IDebugBackend;
 
 // ---------------------------------------------------------------------------
-// Functions Window — Stage 4.5
+// Functions Window — Stage 4.5 (readonly since Stage 6.11 RDB)
 //
-// Table of all user-defined functions and labels.
+// Table of symbols from MAP file (readonly view).
 // Columns: Address | Name | Size | Calls | Comment
+// Title: "MAP-file Info"
 // ---------------------------------------------------------------------------
 
 class FunctionsWindow
@@ -40,22 +41,6 @@ private:
     int sortColumn_ = 0;  // 0=address, 1=name
     bool sortReverse_ = false;
 
-    // "Define Function" dialog state
-    bool showDefineDialog_ = false;
-    char defineAddrBuffer_[8] = "";
-    char defineNameBuffer_[64] = "";
-    char defineCommentBuffer_[128] = "";
-
     // Context menu state
     uint16_t contextAddress_ = 0;
-
-    // Inline editing state
-    bool editingName_ = false;
-    uint16_t editingAddress_ = 0;
-    char editNameBuffer_[64] = "";
-
-    bool editingComment_ = false;
-    char editCommentBuffer_[128] = "";
-
-    bool pendingEditOpen_ = false;  // trigger popup after EndChild
 };

@@ -35,7 +35,7 @@ including the vector table.
 
 ### MAP files
 
-MAP files use the Z88DK linker output format. See `z88dk_map.md` for the complete format specification.
+MAP files use the Z88DK linker output format. See `debugger/docs/z88dk_map.md` for the complete format specification.
 
 Brief summary:
 ```

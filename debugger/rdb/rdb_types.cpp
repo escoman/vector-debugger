@@ -93,8 +93,9 @@ bool RdbPropertyValue::operator==(const RdbPropertyValue &other) const
 
 bool RdbRomIdentity::operator==(const RdbRomIdentity &other) const
 {
-    return file == other.file
-        && size == other.size
+    // Compare only content identifiers, not file path.
+    // This allows moving ROM + RDB to different locations.
+    return size == other.size
         && sha256 == other.sha256;
 }
 

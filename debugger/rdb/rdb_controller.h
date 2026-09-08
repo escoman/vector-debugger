@@ -153,7 +153,9 @@ public:
 
     // Initialize an empty RDB with the given platform and ROM identity.
     // Does NOT write to disk — use save() for that.
-    void initialize(const std::string &platform, const RdbRomIdentity &rom);
+    // If path is provided, save() will write to that location.
+    void initialize(const std::string &platform, const RdbRomIdentity &rom,
+                    const std::string &path = "");
 
     // Internal state — public forward declaration only.
     // Full definition is in rdb_controller.cpp (pimpl pattern).

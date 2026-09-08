@@ -165,7 +165,7 @@ RDB (ROM Database) является **единственным хранилищ�
 | `sound.md` | Звуковое оборудование |
 | `verification.md` | **Обязательно** для проверки фактов |
 | `video.md` | Видео/палитра/VRAM |
-| `z88dk_map.md` | **Обязательно** при работе с MAP-файлами Z88DK |
+| `z88dk_map.md` | **Обязательно** при работе с MAP-файлами Z88DK (перемещён в `debugger/docs/`) |
 
 ### Workflow Protocol
 
@@ -418,16 +418,16 @@ Confidence: [High/Medium/Low]
 
 ### Работа с MAP-файлами Z88DK
 
-При работе с `.map`-файлами **обязательно** используй `z88dk_map.md` как источник формата.
+При работе с `.map`-файлами **обязательно** используй `debugger/docs/z88dk_map.md` как источник формата.
 
-Для запросов: создать MAP, построить MAP, исправить MAP, разобрать MAP, конвертировать MAP — сначала ознакомься с форматом Z88DK в `z88dk_map.md`.
+Для запросов: создать MAP, построить MAP, исправить MAP, разобрать MAP, конвертировать MAP — сначала ознакомься с форматом Z88DK в `debugger/docs/z88dk_map.md`.
 
 **Запрещено:**
 - Придумывать собственный формат MAP.
 - Создавать debugger-specific синтаксис MAP.
 - Считать любой текстовый файл `symbol = value` форматом Z88DK MAP.
 - Использовать JSON/YAML/CSV вместо реального формата Z88DK.
-- Добавлять собственные поля или секции, не описанные в `z88dk_map.md`.
+- Добавлять собственные поля или секции, не описанные в `debugger/docs/z88dk_map.md`.
 
 Если данных недостаточно для корректной генерации — сообщи, какие данные отсутствуют.
 
@@ -450,7 +450,7 @@ Confidence: [High/Medium/Low]
 
 | Задача | Документация для чтения |
 |--------|------------------------|
-| Создать MAP-файл | `debugger/agent/knowledge/vector06c/z88dk_map.md` |
+| Создать MAP-файл | `debugger/docs/z88dk_map.md` |
 | Создать ROM-файл | `debugger/agent/knowledge/vector06c/rom_format.md` |
 | Работать с портами | `debugger/agent/knowledge/vector06c/io.md` |
 | Работать с VRAM | `debugger/agent/knowledge/vector06c/video.md` |

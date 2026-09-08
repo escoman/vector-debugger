@@ -613,11 +613,13 @@ void RdbController::setRomIdentity(const RdbRomIdentity &identity)
 // ---------------------------------------------------------------------------
 
 void RdbController::initialize(const std::string &platform,
-                                const RdbRomIdentity &rom)
+                                const RdbRomIdentity &rom,
+                                const std::string &path)
 {
     close();
     impl_->platform = platform;
     impl_->romIdentity = rom;
+    impl_->path = path;
     impl_->loaded = true;
-    // dirty remains false — in-memory only, no file on disk
+    // dirty remains false — in-memory only until modified
 }

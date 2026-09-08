@@ -450,7 +450,7 @@ void DebuggerGui::render(IDebugBackend &backend)
             {"Breakpoints", &breakpointsWindow_.getVisibleRef()},
             {"Execution Trace", &executionTrace_.getVisibleRef()},
             {"I/O & Hardware Inspector", &ioInspector_.getVisibleRef()},
-            {"Functions", &functionsWindow_.getVisibleRef()},
+            {"MAP-file Info", &functionsWindow_.getVisibleRef()},
             {"ROM Database", &romDatabaseWindow_.getVisibleRef()},
             {"Cross References", &xrefsWindow_.getVisibleRef()},
             {"Call Graph", &callGraphWindow_.getVisibleRef()},
@@ -778,7 +778,7 @@ void DebuggerGui::renderToolbar(IDebugBackend &backend)
             ImGui::MenuItem("Breakpoints", nullptr, &breakpointsWindow_.getVisibleRef());
             ImGui::MenuItem("Execution Trace", nullptr, &executionTrace_.getVisibleRef());
             ImGui::MenuItem("I/O & Hardware Inspector", nullptr, &ioInspector_.getVisibleRef());
-            ImGui::MenuItem("Functions", nullptr, &functionsWindow_.getVisibleRef());
+            ImGui::MenuItem("MAP-file Info", nullptr, &functionsWindow_.getVisibleRef());
             ImGui::MenuItem("ROM Database", nullptr, &romDatabaseWindow_.getVisibleRef());
             ImGui::MenuItem("Cross References", nullptr, &xrefsWindow_.getVisibleRef());
             ImGui::MenuItem("Call Graph", nullptr, &callGraphWindow_.getVisibleRef());
@@ -959,7 +959,7 @@ void DebuggerGui::layoutCascade()
         {"Breakpoints", &breakpointsWindow_.getVisibleRef()},
         {"Execution Trace", &executionTrace_.getVisibleRef()},
         {"I/O & Hardware Inspector", &ioInspector_.getVisibleRef()},
-        {"Functions", &functionsWindow_.getVisibleRef()},
+        {"MAP-file Info", &functionsWindow_.getVisibleRef()},
         {"Cross References", &xrefsWindow_.getVisibleRef()},
         {"Call Graph", &callGraphWindow_.getVisibleRef()},
         {"Search", &searchWindow_.getVisibleRef()},
@@ -997,7 +997,7 @@ void DebuggerGui::applyCascade()
         {"Breakpoints", &breakpointsWindow_.getVisibleRef()},
         {"Execution Trace", &executionTrace_.getVisibleRef()},
         {"I/O & Hardware Inspector", &ioInspector_.getVisibleRef()},
-        {"Functions", &functionsWindow_.getVisibleRef()},
+        {"MAP-file Info", &functionsWindow_.getVisibleRef()},
         {"Cross References", &xrefsWindow_.getVisibleRef()},
         {"Call Graph", &callGraphWindow_.getVisibleRef()},
         {"Search", &searchWindow_.getVisibleRef()},
@@ -1040,7 +1040,7 @@ void DebuggerGui::layoutTile()
         {"Breakpoints", &breakpointsWindow_.getVisibleRef()},
         {"Execution Trace", &executionTrace_.getVisibleRef()},
         {"I/O & Hardware Inspector", &ioInspector_.getVisibleRef()},
-        {"Functions", &functionsWindow_.getVisibleRef()},
+        {"MAP-file Info", &functionsWindow_.getVisibleRef()},
         {"Cross References", &xrefsWindow_.getVisibleRef()},
         {"Call Graph", &callGraphWindow_.getVisibleRef()},
         {"Search", &searchWindow_.getVisibleRef()},

@@ -374,10 +374,6 @@ private:
 
     SymbolDatabase symbols_;
 
-    // -- Comment persistence (Stage 6.2.1) ----------------------------------
-
-    std::string commentsPath_;  // sidecar file: <rom_path>.comments
-
     // -- ROM Database (Stage 6.11) ------------------------------------------
 
     RdbController *rdb_;
@@ -388,13 +384,6 @@ private:
 
     // Load .rdb file if it exists; create empty in-memory RDB otherwise
     void loadRdb(const std::string &romPath);
-
-public:
-    // Load comments from sidecar file and apply to existing symbols.
-    void loadComments();
-
-    // Save all non-empty comments to sidecar file.
-    void saveComments() override;
 
 private:
 
