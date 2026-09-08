@@ -1116,6 +1116,15 @@ void DebugBackend::executeCommand(Command &cmd)
         if (!ok) {
             result.error = "symbol already exists at this address";
             result.status = CommandResult::Failed;
+        } else {
+            // Stage 6.15 Iter2: Also create RDB object so the function
+            // appears in RDB queries (get_rdb_info, list_rdb_objects, save).
+            RdbObject rdbObj;
+            rdbObj.address = cmd.address;
+            rdbObj.type    = RdbObjectType::Function;
+            rdbObj.name    = cmd.name;
+            rdbObj.hasSize = false;
+            rdb_->addObject(rdbObj);  // ignore duplicate — symbol was created
         }
         break;
     }
@@ -1152,6 +1161,14 @@ void DebugBackend::executeCommand(Command &cmd)
         if (!ok) {
             result.error = "symbol already exists at this address";
             result.status = CommandResult::Failed;
+        } else {
+            // Stage 6.15 Iter2: Also create RDB object for the label.
+            RdbObject rdbObj;
+            rdbObj.address = cmd.address;
+            rdbObj.type    = RdbObjectType::Label;
+            rdbObj.name    = cmd.name;
+            rdbObj.hasSize = false;
+            rdb_->addObject(rdbObj);  // ignore duplicate — symbol was created
         }
         break;
     }

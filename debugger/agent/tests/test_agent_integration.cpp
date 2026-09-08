@@ -1938,6 +1938,91 @@ static void test_mcp_command_queue_and_rdb_workflow()
 }
 
 // ---------------------------------------------------------------------------
+// Stage 6.15 Iter2 regression test: createFunction creates RDB object
+//
+// Verifies that debug_create_function:
+// 1. Goes through command queue (requires emulation thread)
+// 2. Creates both SymbolDatabase entry AND RDB object
+// 3. RDB becomes dirty, save works, reload preserves data
+// ---------------------------------------------------------------------------
+
+static void test_create_function_creates_rdb_object()
+{
+    TEST_BEGIN("stage_6.15_iter2_create_function_creates_rdb_object");
+
+    // Real DebugBackend WITHOUT testSynchronous_ — requires emulation thread
+    Memory mem;
+    NoBoardTarget target(mem);
+    DebugBackend backend(target);
+    backend.reset();
+
+    hal_memory = &mem;
+    hal_dbg = &backend;
+
+    writeProgram(mem, test_program, sizeof(test_program), 0x0000);
+    writeProgram(mem, subroutine, sizeof(subroutine), 0x0200);
+
+    // Start emulation thread
+    std::thread emuThread([&backend]() {
+        backend.runUntilPause();
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+
+    AgentApi api(backend);
+    auto &rdb = backend.rdbController();
+    rdb.initialize("vector06c", RdbRomIdentity());
+
+    // --- createFunction should create both symbol AND RDB object ---
+    auto r1 = api.createFunction(0x0200, 0);
+    CHECK(r1.success, "createFunction succeeds through command queue");
+
+    // Verify RDB object was created
+    auto r2 = api.getRdbInfo();
+    CHECK(r2.success, "getRdbInfo succeeds");
+    CHECK(r2.value.objectCount == 1, "RDB has 1 object after createFunction");
+    CHECK(r2.value.dirty, "RDB is dirty after createFunction");
+
+    // Verify RDB object details
+    auto r3 = api.getRdbObject(0x0200);
+    CHECK(r3.success, "getRdbObject(0x0200) succeeds");
+    if (r3.success) {
+        CHECK(std::string(r3.value.type) == "function", "RDB object type is function");
+        CHECK(!r3.value.name.empty(), "RDB object has a name");
+    }
+
+    // --- addLabel should also create RDB object ---
+    auto r4 = api.addLabel(0x0003, "loop_entry");
+    CHECK(r4.success, "addLabel succeeds through command queue");
+
+    auto r5 = api.getRdbInfo();
+    CHECK(r5.value.objectCount == 2, "RDB has 2 objects after createFunction + addLabel");
+
+    // --- Save and reload ---
+    std::string testPath = "/tmp/test_stage615_iter2.rdb";
+    rdb.saveAs(testPath);
+    CHECK(!rdb.isDirty(), "RDB clean after save");
+
+    auto r6 = api.reloadRdb();
+    CHECK(r6.success, "reloadRdb succeeds");
+
+    auto r7 = api.getRdbObject(0x0200);
+    CHECK(r7.success, "function object survives reload");
+
+    auto r8 = api.getRdbObject(0x0003);
+    CHECK(r8.success, "label object survives reload");
+
+    // Cleanup
+    backend.requestQuit();
+    emuThread.join();
+    std::remove(testPath.c_str());
+
+    hal_dbg = nullptr;
+    hal_memory = nullptr;
+
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -2011,6 +2096,9 @@ int main()
 
     // Stage 6.15 — MCP command queue + RDB workflow
     test_mcp_command_queue_and_rdb_workflow();      // 47
+
+    // Stage 6.15 Iter2 — createFunction creates RDB object
+    test_create_function_creates_rdb_object();       // 48
 
     printf("\n\033[1;33m========================================\033[0m\n");
     printf("  Results: %d/%d passed", tests_passed, tests_run);
