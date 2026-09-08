@@ -95,6 +95,11 @@ public:
     virtual void requestQuit()   = 0;
     virtual void stepInstruction() = 0;
 
+    // Skip current instruction: run full emulation until PC reaches the next
+    // instruction address (current PC + instruction length).  Useful for
+    // jumping over HLT, CALL, etc. without manual breakpoint management.
+    virtual void requestSkipInstruction() = 0;
+
     // -- Memory access ------------------------------------------------------
 
     virtual uint8_t        readMemory(uint16_t address) = 0;

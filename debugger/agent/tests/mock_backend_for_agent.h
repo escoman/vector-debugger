@@ -153,6 +153,10 @@ public:
         simulateStep();
     }
 
+    void requestSkipInstruction() override {
+        simulateStep();
+    }
+
     // -- Memory access ------------------------------------------------------
 
     uint8_t readMemory(uint16_t address) override {

@@ -51,6 +51,8 @@ void DisassemblyWindow::render(IDebugBackend &backend)
         viewAddress_ = cpu.pc;
         pcInitialized_ = true;
     } else if (followPc_ && cpu.pc != lastPc_) {
+        viewAddress_ = cpu.pc;
+        snprintf(addressInput_, sizeof(addressInput_), "%04X", cpu.pc);
         needsRefresh_ = true;
     }
     lastPc_ = cpu.pc;
@@ -73,7 +75,7 @@ void DisassemblyWindow::render(IDebugBackend &backend)
 void DisassemblyWindow::renderToolbar(IDebugBackend &backend)
 {
     // Address input
-    ImGui::SetNextItemWidth(80);
+    ImGui::SetNextItemWidth(60);
     bool enterPressed = ImGui::InputText("##dasmaddr", addressInput_, sizeof(addressInput_),
         ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_EnterReturnsTrue);
     
@@ -100,19 +102,48 @@ void DisassemblyWindow::renderToolbar(IDebugBackend &backend)
         if (followPc_) {
             CpuState cpu = backend.getCpuState();
             viewAddress_ = cpu.pc;
+            snprintf(addressInput_, sizeof(addressInput_), "%04X", cpu.pc);
             needsRefresh_ = true;
         }
+    }
+    
+    // Context before current address (applies to both Follow PC ON and OFF modes)
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(40);
+    if (ImGui::InputInt("##ctxBefore", &contextBeforePc_, 0, 0)) {
+        if (contextBeforePc_ < 0) contextBeforePc_ = 0;
+        if (contextBeforePc_ > 30) contextBeforePc_ = 30;
+        needsRefresh_ = true;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Instructions before PC");
     }
     
     // Step button
     ImGui::SameLine();
     bool paused = backend.isPaused();
     if (!paused) ImGui::BeginDisabled();
-    if (ImGui::Button("\xe2\x96\xba Step")) {  // ► Step
+    if (ImGui::Button("Step (F4)")) {
         backend.stepInstruction();
         needsRefresh_ = true;
     }
+    
+    // Skip button (F6) — run until next instruction
+    ImGui::SameLine();
+    if (ImGui::Button("Skip (F6)")) {
+        backend.requestSkipInstruction();
+        needsRefresh_ = true;
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("Run until next instruction (F6)");
+    }
     if (!paused) ImGui::EndDisabled();
+    
+    // F6 shortcut — works when paused, checked outside disabled block
+    if (paused && ImGui::IsKeyPressed(ImGuiKey_F6)) {
+        backend.requestSkipInstruction();
+        needsRefresh_ = true;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -127,13 +158,18 @@ void DisassemblyWindow::renderDisassemblyList(IDebugBackend &backend)
     // Get symbol database for name resolution
     auto &symbols = backend.symbolDatabase();
     
-    // Determine the start address for decoding
-    uint16_t startAddr;
+    // Determine the anchor address and start address for decoding
+    uint16_t anchorAddr = followPc_ ? pc : viewAddress_;
+    
+    // Go back enough bytes to cover contextBeforePc_ instructions
+    // (max i8080 instruction length is 3 bytes)
+    int backBytes = contextBeforePc_ * 3;
+    if (backBytes > anchorAddr) backBytes = anchorAddr;  // don't wrap below 0
+    uint16_t startAddr = static_cast<uint16_t>(anchorAddr - backBytes);
+    
     if (followPc_) {
-        // Go back ~60 bytes from PC for context above
-        startAddr = static_cast<uint16_t>(pc - 60);
-    } else {
-        startAddr = viewAddress_;
+        // Keep viewAddress_ in sync with PC so the address field stays correct
+        viewAddress_ = pc;
     }
     
     // Read function: uses IDebugBackend::readMemory() which goes through
@@ -144,15 +180,10 @@ void DisassemblyWindow::renderDisassemblyList(IDebugBackend &backend)
     
     // Decode instructions forward from startAddr.
     // We collect enough lines to fill the visible area (~40 lines).
-    // In Follow PC mode, we skip lines before (pc - 60) to ensure
-    // correct alignment at the display start.
     
     const int maxLines = 50;
     const int displayLines = 40;
     
-    // For Follow PC mode, the first visible address is (pc - 60).
-    // We start decoding from there but instructions might not align,
-    // so we decode and skip until we reach the display start.
     uint16_t displayStartAddr = startAddr;
     
     // Decode all instructions into a temporary array
@@ -160,12 +191,11 @@ void DisassemblyWindow::renderDisassemblyList(IDebugBackend &backend)
         uint16_t addr;
         DisassembledInstruction instr;
     };
-    Line lines[60];  // extra capacity for skip region
+    Line lines[80];  // extra capacity for context region
     int lineCount = 0;
     
     uint16_t addr = startAddr;
-    // Decode up to 60 instructions (enough for skip region + display)
-    for (int i = 0; i < 60; ++i) {
+    for (int i = 0; i < 80; ++i) {
         lines[lineCount].addr = addr;
         lines[lineCount].instr = disassemble(addr, readFn);
         lineCount++;
@@ -177,14 +207,11 @@ void DisassemblyWindow::renderDisassemblyList(IDebugBackend &backend)
         if (nextAddr <= addr) break;
         addr = nextAddr;
         
-        // Stop if we've gone far enough past the display area
+        // Stop if we've decoded enough lines
         if (followPc_) {
-            // We want to show displayLines past the PC
-            // Stop when addr > pc + displayLines * 3 (max instruction size)
-            if (lineCount >= 60) break;
-            // Check if we've gone far enough past PC
-            int distFromPc = static_cast<int>(static_cast<uint16_t>(addr - pc));
-            if (distFromPc > displayLines * 3 && lineCount > 20) break;
+            // Show enough lines past PC to fill the display
+            if (lineCount > displayLines + contextBeforePc_ && 
+                static_cast<int>(static_cast<uint16_t>(addr - pc)) > displayLines * 3) break;
         } else {
             if (lineCount >= maxLines) break;
         }
@@ -192,23 +219,18 @@ void DisassemblyWindow::renderDisassemblyList(IDebugBackend &backend)
     
     // Determine which lines to display
     int firstVisible = 0;
-    if (followPc_) {
-        // Skip lines that start before displayStartAddr
-        for (int i = 0; i < lineCount; ++i) {
-            // A line is visible if its address >= displayStartAddr
-            // or if it contains the displayStartAddr (straddling)
-            if (lines[i].addr >= displayStartAddr || 
-                lines[i].addr + lines[i].instr.length > displayStartAddr) {
-                // But only if it starts at or after displayStartAddr
-                // (we don't show partial instructions from before the window)
-                if (lines[i].addr >= displayStartAddr) {
-                    firstVisible = i;
-                    break;
-                }
-            }
-            firstVisible = i + 1;
+    // Find instructions that start before anchorAddr — show the last contextBeforePc_ of them
+    int lastBeforeAnchor = -1;
+    for (int i = 0; i < lineCount; ++i) {
+        if (lines[i].addr >= anchorAddr) {
+            lastBeforeAnchor = i;
+            break;
         }
+        lastBeforeAnchor = i + 1;
     }
+    // Show the last contextBeforePc_ instructions before anchor
+    firstVisible = lastBeforeAnchor - contextBeforePc_;
+    if (firstVisible < 0) firstVisible = 0;
     
     // Child window for scrolling
     ImGui::BeginChild("DasmScroll", ImVec2(0, 0), ImGuiChildFlags_None,

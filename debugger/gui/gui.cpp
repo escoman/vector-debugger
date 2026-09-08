@@ -869,6 +869,24 @@ void DebuggerGui::renderControls(IDebugBackend &backend)
     if (!paused) ImGui::EndDisabled();
     ImGui::SameLine();
 
+    // Skip: enabled only when paused — run until next instruction
+    if (!paused) ImGui::BeginDisabled();
+    if (ImGui::Button("\xe2\x8f\xad Skip (F6)")) {  // ⏭ Skip (F6)
+        backend.requestSkipInstruction();
+        memoryInspector_.requestRefresh();
+        stackView_.requestRefresh();
+        disassemblyView_.requestRefresh();
+        executionTrace_.requestRefresh();
+        ioInspector_.requestRefresh();
+        vectorScreen_.requestRefresh();
+        functionsWindow_.requestRefresh();
+        xrefsWindow_.requestRefresh();
+        callGraphWindow_.requestRefresh();
+        histNeedsRefresh_ = true;
+    }
+    if (!paused) ImGui::EndDisabled();
+    ImGui::SameLine();
+
     // Pause: enabled only when running
     if (!running) ImGui::BeginDisabled();
     if (ImGui::Button("\xe2\x80\x96 Pause (F3)")) {  // ‖ Pause (F3)

@@ -513,6 +513,41 @@ StepResult DebugBackend::stepInstructionDetailed()
     return r;
 }
 
+void DebugBackend::requestSkipInstruction()
+{
+    if (!target_) return;
+
+    // Calculate the address of the next instruction
+    uint16_t pc = target_->getCpuState().pc;
+    uint8_t opcode = target_->peekMemory(pc);
+    uint8_t len = opcode_info::get_length(opcode);
+    uint16_t nextAddr = static_cast<uint16_t>(pc + len);
+
+    // Use a temporary breakpoint at the next instruction address.
+    // This is thread-safe (goes through the command queue) and works
+    // at instruction granularity — no risk of missing the target.
+    skipTempBreakpoint_ = nextAddr;
+    skipTempBreakpointAdded_ = false;
+
+    // Only add if no breakpoint already exists there
+    if (!hasBreakpoint(nextAddr)) {
+        requestAddBreakpoint(nextAddr);
+        skipTempBreakpointAdded_ = true;
+    }
+
+    // Run emulation — will stop at the breakpoint
+    requestRun();
+
+    // Remove the temporary breakpoint after run stops
+    if (skipTempBreakpointAdded_) {
+        requestRemoveBreakpoint(nextAddr);
+        skipTempBreakpointAdded_ = false;
+    }
+    skipTempBreakpoint_ = 0;
+
+    stopReason_ = StopReason::Skip;
+}
+
 void DebugBackend::run()
 {
     {

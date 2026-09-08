@@ -116,7 +116,8 @@ enum class StopReason
     Breakpoint,
     UserPause,
     Step,
-    Reset
+    Reset,
+    Skip            // stopped after Skip (run until next instruction)
 };
 
 // ---------------------------------------------------------------------------

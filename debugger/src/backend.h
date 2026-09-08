@@ -103,6 +103,7 @@ public:
     void requestRestart()  override;  // BLK+ВВОД: attach boot ROM, PC=0
     void requestQuit()     override;
     void stepInstruction() override;  // IDebugBackend: execute 1 instruction (void)
+    void requestSkipInstruction() override;  // run until PC == next instruction
 
     // Extended step that returns detailed result (for tests/tracing)
     StepResult stepInstructionDetailed();
@@ -304,6 +305,10 @@ private:
 
     StopReason stopReason_ = StopReason::None;
     bool       skipBreakpoint_ = false;
+
+    // Skip: temporary breakpoint tracking
+    uint16_t skipTempBreakpoint_ = 0;
+    bool     skipTempBreakpointAdded_ = false;
 
     bool checkBreakpoint();
     void syncBreakpointsToTarget();

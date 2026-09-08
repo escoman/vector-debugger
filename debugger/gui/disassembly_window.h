@@ -60,8 +60,10 @@ private:
     uint16_t viewAddress_ = 0;          // top of the disassembly view
     uint16_t lastPc_ = 0;               // previous PC for change detection
     bool     pcInitialized_ = false;     // first frame flag
+    int      contextBeforePc_ = 10;      // number of instructions to show before PC
     
     char addressInput_[8] = "0000";
+    char contextInput_[4] = "10";         // text buffer for context count
     
     // Stage 4.6: inline editing for symbols/comments
     bool editingDefineFunc_ = false;
