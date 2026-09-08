@@ -35,33 +35,16 @@ including the vector table.
 
 ### MAP files
 
-MAP files use the z88dk linker output format. Each line represents a symbol:
+MAP files use the Z88DK linker output format. See `z88dk_map.md` for the complete format specification.
 
+Brief summary:
 ```
 symbol_name           = $ADDRESS ; type, visibility, def, module, section, source_location
 ```
 
-Fields:
-- `symbol_name` — symbol name (padded with spaces for alignment)
-- `$ADDRESS` — hex address with $ prefix (4 digits, e.g. $0100)
-- `type` — `addr` (code/data label) or `const` (constant)
+- `$ADDRESS` — hex address with `$` prefix (4 uppercase digits, e.g. `$0100`)
+- `type` — `addr` (code/data label) or `const` (compile-time constant, NOT a memory address)
 - `visibility` — `public` (exported) or `local` (internal)
-- `def` — `def` for exported symbols, empty for local
-- `module` — source module name (e.g., `clrs_code`, `startup_asm`)
-- `section` — section name (e.g., `clrs_code`, `bss_clib`, `vectors`)
-- `source_location` — source file and line (e.g., `clrs.rom:1` or full path)
-
-Standard linker symbols:
-- `__head`, `__size`, `__tail` — program start, size, end
-- `__code_clib_head`, `__code_clib_size`, `__code_clib_tail` — code sections
-
-Example:
-```
-main_init           = $0100 ; addr, public, def, clrs_code, clrs_code, clrs.rom:1
-rst7_handler        = $013F ; addr, public, def, clrs_code, clrs_code, clrs.rom:64
-__head              = $0100 ; const, public, def, , ,
-__size              = $0077 ; const, public, def, , ,
-```
 
 A MAP file is typically paired with a ROM:
 ```
@@ -70,6 +53,8 @@ program.map
 ```
 
 MAP files are stored in the ROM Library alongside their ROMs.
+
+**Important:** `const` entries are link-time constants, not memory addresses. Loading them as addresses would be incorrect. For example, `__head = $0100 ; const` does not mean there is code at 0x0100 — it means the program starts at 0x0100.
 
 ## Boot Sequence
 
