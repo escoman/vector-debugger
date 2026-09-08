@@ -17,6 +17,66 @@ The debugger does **not** contain LLM runtime, analysis state, or reasoning engi
 
 ---
 
+## MCP-First Analysis Rule
+
+When analyzing Vector-06C ROMs, the **MCP Debugger is the primary analysis tool**.
+
+The AI Agent must **not** independently:
+
+- read ROM as raw bytes and disassemble it on its own;
+- decode instructions by opcode;
+- manually build control flow instead of using MCP;
+- interpret hex dumps as programs on its own;
+- replace MCP results with its own disassembly.
+
+Correct data flow:
+
+```
+ROM → MCP Debugger → DebugAdapter → Agent API → disassembly / CPU / memory / I/O / trace → Agent analysis
+```
+
+Forbidden data flow:
+
+```
+ROM → Agent → self-made disassembler
+```
+
+### MCP must be connected before analysis
+
+Before analyzing a ROM, ensure the MCP Debugger is available. If the MCP server is not running, start it using the project-provided method. Do not fall back to self-disassembly just because MCP was not yet started.
+
+If MCP cannot be started, report explicitly:
+
+```
+MCP Debugger is not available; reliable ROM analysis cannot be performed.
+```
+
+### Disassembly via MCP only
+
+Use `debug_disassemble` to obtain instructions. The MCP result is the authoritative source of disassembly. The Agent analyzes address, opcode/instruction, operands, and control flow as returned by the Debugger — not by re-decoding opcodes independently.
+
+### Priority of MCP over own computation
+
+If the Agent can obtain information via MCP, it must use MCP. Self-computation is allowed **only as a check** on already-obtained MCP data — for correlation and reasoning, not as a replacement for the Debugger. If the Agent’s reasoning contradicts an MCP result, the MCP result takes priority.
+
+### Forbidden fallback
+
+Do not use this fallback:
+
+```
+MCP unavailable → take hex dump → self-disassemble ROM → analyze
+```
+
+Correct behavior:
+
+```
+MCP unavailable → report lack of Debugger evidence → do not present speculative ROM analysis as factual
+```
+
+> **The AI Agent is not a Vector-06C disassembler. The Agent is an analyst that uses the Debugger as its source of factual data.**
+
+---
+
 ## Component Roles
 
 | Component | Responsibility |
@@ -37,21 +97,25 @@ Every analysis follows this sequence:
 
 ```
 1.  Define the task
-2.  Select Profile
-3.  Load Profile
-4.  Determine Tasks
-5.  Load required Knowledge
-6.  Form Analysis Plan
-7.  Check Debugger state
-8.  Load ROM if needed
-9.  Execute MCP operations
-10. Analyze results
-11. Form hypotheses
-12. Verify hypotheses with additional MCP operations
-13. Evaluate evidence
-14. Form result
-15. Note limitations and unknowns
+2.  Ensure MCP Debugger is available (if not, report and stop)
+3.  Select Profile
+4.  Load Profile
+5.  Determine Tasks
+6.  Load required Knowledge
+7.  Form Analysis Plan
+8.  Check Debugger state
+9.  Load ROM if needed (debug_load_rom)
+10. Obtain disassembly via MCP (debug_disassemble)
+11. Execute MCP operations
+12. Analyze results
+13. Form hypotheses
+14. Verify hypotheses with additional MCP operations
+15. Evaluate evidence
+16. Form result
+17. Note limitations and unknowns
 ```
+
+Steps 2, 9, and 10 are mandatory. Do not replace them with self-analysis of the ROM binary.
 
 ---
 
@@ -426,6 +490,11 @@ Unless confirmed by Knowledge Base, MCP observation, or another explicitly cited
 ```
 You are analyzing a Vector-06C ROM.
 
+MCP Debugger is your primary analysis tool.
+Do not disassemble ROM independently — use debug_disassemble.
+Do not decode opcodes on your own — use MCP results.
+If MCP is unavailable, report this and do not perform speculative analysis.
+
 Use the provided Profile, Tasks and Knowledge Base.
 
 Use MCP tools to obtain evidence.
@@ -440,6 +509,7 @@ Distinguish:
 - unknown
 
 When sources conflict, report the conflict.
+If your reasoning contradicts MCP, MCP takes priority.
 
 Do not treat an unverified claim as established fact.
 
