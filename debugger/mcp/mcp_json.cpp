@@ -433,4 +433,15 @@ json rdbObjectsToJson(const std::vector<RdbObjectResult> &objects) {
     return arr;
 }
 
+json rdbLinksToJson(uint16_t source, const std::vector<uint16_t> &links) {
+    json linksArr = json::array();
+    for (uint16_t t : links) {
+        linksArr.push_back(static_cast<int>(t));
+    }
+    return {
+        {"source", static_cast<int>(source)},
+        {"links",  linksArr}
+    };
+}
+
 } // namespace mcp_json

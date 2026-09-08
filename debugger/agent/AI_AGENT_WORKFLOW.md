@@ -114,7 +114,9 @@ Every analysis follows this sequence:
 16. Evaluate evidence
 17. Form result
 18. Save findings to RDB (debug_add_rdb_object, debug_set_rdb_comment, debug_save_rdb)
-19. Note limitations and unknowns
+19. Create confirmed RDB links (debug_add_rdb_link)
+20. Save RDB if links were added (debug_save_rdb)
+21. Note limitations and unknowns
 ```
 
 Steps 2, 9, 10, and 11 are mandatory. Do not replace them with self-analysis of the ROM binary.
@@ -303,6 +305,32 @@ save RDB (debug_save_rdb)
 - Save RDB after completing a batch of changes, not after every single operation.
 - RDB is loaded automatically when a ROM is opened. If `.rdb` exists, it takes priority over `.map`.
 
+### RDB Links
+
+Links represent confirmed semantic relationships between RDB objects.
+
+```
+Analysis → Evidence → Create/update RDB objects → Create confirmed RDB links → Save RDB → Build Call Graph → Review
+```
+
+Rules:
+- Use `debug_add_rdb_link` / `debug_remove_rdb_link` / `debug_get_rdb_links` for link management.
+- Target object may not exist (unresolved link is allowed).
+- Do not create links based on address proximity alone.
+- Links require evidence from disassembly, trace, or confirmed control flow.
+- Call Graph is a visualization of RDB links — it does not create them.
+- `.rdb.graph` is visual data; `.rdb` contains semantic links.
+
+Evidence levels for links:
+
+```
+Fact:       0100 contains CALL 0120.
+Inference:  0100 references routine at 0120.
+RDB:        debug_add_rdb_link(source=0x0100, target=0x0120)
+```
+
+A hypothesis should not automatically become a link. Verify first via MCP.
+
 ### Available RDB MCP Tools
 
 | Tool | Purpose |
@@ -318,6 +346,9 @@ save RDB (debug_save_rdb)
 | `debug_set_rdb_property` | Set property on object |
 | `debug_save_rdb` | Save RDB to disk |
 | `debug_reload_rdb` | Reload from disk (discard unsaved changes) |
+| `debug_add_rdb_link` | Add directed link from source to target |
+| `debug_remove_rdb_link` | Remove directed link |
+| `debug_get_rdb_links` | Get links from source object |
 
 ---
 

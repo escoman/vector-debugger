@@ -150,6 +150,19 @@ static uint16_t getAddress(const mcp::json &params) {
     return static_cast<uint16_t>(addr);
 }
 
+static uint16_t getAddress(const mcp::json &params, const char *key) {
+    if (!params.contains(key)) {
+        throw mcp::mcp_exception(mcp::error_code::invalid_params,
+            std::string("missing required parameter: ") + key);
+    }
+    int addr = params[key].get<int>();
+    if (addr < 0 || addr > 0xFFFF) {
+        throw mcp::mcp_exception(mcp::error_code::invalid_params,
+            std::string(key) + " out of range 0x0000..0xFFFF");
+    }
+    return static_cast<uint16_t>(addr);
+}
+
 static size_t getCount(const mcp::json &params, const char *name, size_t defaultVal) {
     if (!params.contains(name)) return defaultVal;
     int v = params[name].get<int>();
@@ -1103,6 +1116,52 @@ void McpServer::registerRdbTools() {
             auto r = api_.reloadRdb();
             if (!r.success) return errorContent("reload_rdb_failed", r.error_message);
             return textContent(mcp_json::successVoidResult());
+        });
+    }
+
+    // debug_add_rdb_link (Stage 6.13)
+    {
+        auto tool = mcp::tool_builder("debug_add_rdb_link")
+            .with_description("Add a directed link from source RDB object to target address.")
+            .with_number_param("source", "Source object address (0..65535)")
+            .with_number_param("target", "Target address (0..65535)")
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            uint16_t source = getAddress(params, "source");
+            uint16_t target = getAddress(params, "target");
+            auto r = api_.addRdbLink(source, target);
+            if (!r.success) return errorContent("add_rdb_link_failed", r.error_message);
+            return textContent(mcp_json::successVoidResult());
+        });
+    }
+
+    // debug_remove_rdb_link (Stage 6.13)
+    {
+        auto tool = mcp::tool_builder("debug_remove_rdb_link")
+            .with_description("Remove a directed link from source RDB object to target address.")
+            .with_number_param("source", "Source object address (0..65535)")
+            .with_number_param("target", "Target address (0..65535)")
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            uint16_t source = getAddress(params, "source");
+            uint16_t target = getAddress(params, "target");
+            auto r = api_.removeRdbLink(source, target);
+            if (!r.success) return errorContent("remove_rdb_link_failed", r.error_message);
+            return textContent(mcp_json::successVoidResult());
+        });
+    }
+
+    // debug_get_rdb_links (Stage 6.13)
+    {
+        auto tool = mcp::tool_builder("debug_get_rdb_links")
+            .with_description("Get links from a source RDB object (list of target addresses).")
+            .with_number_param("source", "Source object address (0..65535)")
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            uint16_t source = getAddress(params, "source");
+            auto r = api_.getRdbLinks(source);
+            if (!r.success) return errorContent("get_rdb_links_failed", r.error_message);
+            return textContent(mcp_json::rdbLinksToJson(source, r.value));
         });
     }
 }

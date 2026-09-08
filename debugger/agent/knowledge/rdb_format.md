@@ -57,7 +57,7 @@ Identifies the ROM file this database belongs to.
 ```json
 {
   "rom": {
-    "file": "/path/to/rom.rom",
+    "file": "rom.rom",
     "size": 16384,
     "sha256": "e3b0c44298fc1c14..."
   }
@@ -66,11 +66,12 @@ Identifies the ROM file this database belongs to.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `file` | string | Path to the ROM file |
+| `file` | string | ROM filename (name only, not full path) |
 | `size` | integer | File size in bytes |
 | `sha256` | string | SHA-256 hex digest of the ROM file |
 
-Used to verify that the RDB matches the currently loaded ROM. If identity mismatches, the RDB is not loaded.
+Used to verify that the RDB matches the currently loaded ROM.
+Identity comparison uses only `size` and `sha256` (not `file`), so ROM+RDB can be moved freely between directories and computers.
 
 ---
 
@@ -160,7 +161,7 @@ Arbitrary key-value pairs attached to an object.
 
 ## Links
 
-References from one object to other objects by address.
+Semantic references from one object to target addresses.
 
 ```json
 "links": [
@@ -177,6 +178,21 @@ References from one object to other objects by address.
 4. Links are **directed**: `A → B` does not imply `B → A`.
 5. Target object may not exist yet (unresolved link is allowed).
 6. No duplicate links: `A → B` appears at most once.
+7. Self-links are allowed: `A → A`.
+8. Cyclic links are allowed: `A → B → C → A`.
+
+### Link Semantics
+
+RDB links are **semantic data** created by AI Agent analysis.
+They represent confirmed relationships between objects (e.g. call targets, data references).
+
+`.rdb.graph` files are **visual data** used by Call Graph.
+Links are never saved to `.rdb.graph` — only to `.rdb`.
+
+### Object Removal and Links
+
+- Removing source object: outgoing links are removed with it.
+- Removing target object: incoming links from other objects are **preserved** (become unresolved).
 
 ### Example
 
@@ -261,3 +277,6 @@ GUI / Agent API / MCP → RDB Controller → .rdb file
 | `debug_set_rdb_property` | Set property |
 | `debug_save_rdb` | Save to disk |
 | `debug_reload_rdb` | Reload from disk |
+| `debug_add_rdb_link` | Add directed link from source to target |
+| `debug_remove_rdb_link` | Remove directed link |
+| `debug_get_rdb_links` | Get links from source object |

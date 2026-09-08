@@ -127,6 +127,7 @@ json traceResultToJson(const TraceResult &result);
 json rdbInfoToJson(const RdbInfoResult &info);
 json rdbObjectToJson(const RdbObjectResult &obj);
 json rdbObjectsToJson(const std::vector<RdbObjectResult> &objects);
+json rdbLinksToJson(uint16_t source, const std::vector<uint16_t> &links);
 
 // -- Error response ----------------------------------------------------------
 

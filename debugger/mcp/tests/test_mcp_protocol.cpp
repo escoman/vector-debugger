@@ -119,11 +119,11 @@ static mcp::json parseTextAsJson(const mcp::json &result) {
 // Tool Registration Tests
 // ---------------------------------------------------------------------------
 
-void test_all_49_tools_registered() {
-    TEST_BEGIN("all 49 tools registered");
+void test_all_52_tools_registered() {
+    TEST_BEGIN("all 52 tools registered");
     Fixture f;
     auto names = f.mcp.registeredToolNames();
-    CHECK_EQ(static_cast<int>(names.size()), 49, "should have 49 tools");
+    CHECK_EQ(static_cast<int>(names.size()), 52, "should have 52 tools");
     TEST_END();
 }
 
@@ -169,7 +169,9 @@ void test_expected_tools_exist() {
         "debug_get_rdb_info", "debug_list_rdb_objects", "debug_get_rdb_object",
         "debug_find_rdb_object", "debug_add_rdb_object", "debug_update_rdb_object",
         "debug_remove_rdb_object", "debug_set_rdb_comment", "debug_set_rdb_property",
-        "debug_save_rdb", "debug_reload_rdb"
+        "debug_save_rdb", "debug_reload_rdb",
+        // Stage 6.13: RDB Links
+        "debug_add_rdb_link", "debug_remove_rdb_link", "debug_get_rdb_links"
     };
 
     for (auto &e : expected) {
@@ -828,6 +830,118 @@ void test_debug_set_register() {
 }
 
 // ---------------------------------------------------------------------------
+// RDB Links Tests (Stage 6.13)
+// ---------------------------------------------------------------------------
+
+void test_rdb_link_lifecycle() {
+    TEST_BEGIN("RDB link add/get/remove lifecycle");
+    Fixture f;
+
+    // Create source and target objects
+    auto addSrc = f.mcp.callTool("debug_add_rdb_object",
+        {{"address", 0x0100}, {"name", "src"}, {"type", "Function"}});
+    CHECK(!isErrorContent(addSrc), "add source succeeds");
+
+    auto addTgt = f.mcp.callTool("debug_add_rdb_object",
+        {{"address", 0x0200}, {"name", "tgt"}, {"type", "Function"}});
+    CHECK(!isErrorContent(addTgt), "add target succeeds");
+
+    // Add link
+    auto addLink = f.mcp.callTool("debug_add_rdb_link",
+        {{"source", 0x0100}, {"target", 0x0200}});
+    CHECK(!isErrorContent(addLink), "add link succeeds");
+
+    // Get links
+    auto getLinks = f.mcp.callTool("debug_get_rdb_links", {{"source", 0x0100}});
+    CHECK(!isErrorContent(getLinks), "get links succeeds");
+    auto data = parseTextAsJson(getLinks);
+    CHECK(data.contains("links"), "has links array");
+    CHECK_EQ(1, static_cast<int>(data["links"].size()), "1 link");
+    CHECK(data["links"][0] == 0x0200, "target is 0x0200");
+
+    // Remove link
+    auto rmLink = f.mcp.callTool("debug_remove_rdb_link",
+        {{"source", 0x0100}, {"target", 0x0200}});
+    CHECK(!isErrorContent(rmLink), "remove link succeeds");
+
+    // Verify empty
+    auto getLinks2 = f.mcp.callTool("debug_get_rdb_links", {{"source", 0x0100}});
+    auto data2 = parseTextAsJson(getLinks2);
+    CHECK_EQ(0, static_cast<int>(data2["links"].size()), "0 links after remove");
+    TEST_END();
+}
+
+void test_rdb_link_invalid_source() {
+    TEST_BEGIN("RDB link — invalid source");
+    Fixture f;
+
+    // Add link with no source object
+    auto r = f.mcp.callTool("debug_add_rdb_link",
+        {{"source", 0x9999}, {"target", 0x0100}});
+    CHECK(isErrorContent(r), "add link fails with no source");
+
+    // Get links with no source object
+    auto r2 = f.mcp.callTool("debug_get_rdb_links", {{"source", 0x9999}});
+    CHECK(isErrorContent(r2), "get links fails with no source");
+    TEST_END();
+}
+
+void test_rdb_link_unresolved_target() {
+    TEST_BEGIN("RDB link — unresolved target");
+    Fixture f;
+
+    // Create source only
+    f.mcp.callTool("debug_add_rdb_object",
+        {{"address", 0x0100}, {"name", "src"}, {"type", "Function"}});
+
+    // Link to non-existent target
+    auto r = f.mcp.callTool("debug_add_rdb_link",
+        {{"source", 0x0100}, {"target", 0x0345}});
+    CHECK(!isErrorContent(r), "link to unresolved target succeeds");
+
+    // Verify
+    auto links = f.mcp.callTool("debug_get_rdb_links", {{"source", 0x0100}});
+    auto data = parseTextAsJson(links);
+    CHECK_EQ(1, static_cast<int>(data["links"].size()), "1 link");
+    CHECK(data["links"][0] == 0x0345, "unresolved target stored");
+    TEST_END();
+}
+
+void test_rdb_link_duplicate() {
+    TEST_BEGIN("RDB link — duplicate is idempotent");
+    Fixture f;
+
+    f.mcp.callTool("debug_add_rdb_object",
+        {{"address", 0x0100}, {"name", "src"}, {"type", "Function"}});
+
+    auto r1 = f.mcp.callTool("debug_add_rdb_link",
+        {{"source", 0x0100}, {"target", 0x0200}});
+    CHECK(!isErrorContent(r1), "first add succeeds");
+
+    auto r2 = f.mcp.callTool("debug_add_rdb_link",
+        {{"source", 0x0100}, {"target", 0x0200}});
+    CHECK(!isErrorContent(r2), "duplicate add succeeds");
+
+    auto links = f.mcp.callTool("debug_get_rdb_links", {{"source", 0x0100}});
+    auto data = parseTextAsJson(links);
+    CHECK_EQ(1, static_cast<int>(data["links"].size()), "still 1 link");
+    TEST_END();
+}
+
+void test_rdb_link_remove_missing() {
+    TEST_BEGIN("RDB link — remove missing fails");
+    Fixture f;
+
+    f.mcp.callTool("debug_add_rdb_object",
+        {{"address", 0x0100}, {"name", "src"}, {"type", "Function"}});
+
+    auto r = f.mcp.callTool("debug_remove_rdb_link",
+        {{"source", 0x0100}, {"target", 0x0200}});
+    CHECK(isErrorContent(r), "remove non-existent link fails");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -840,7 +954,7 @@ int main()
     printf("\033[1;33m========================================\033[0m\n\n");
 
     // Registration
-    test_all_49_tools_registered();
+    test_all_52_tools_registered();
     test_tool_names_have_debug_prefix();
     test_expected_tools_exist();
 
@@ -892,6 +1006,13 @@ int main()
 
     // Set register
     test_debug_set_register();
+
+    // RDB Links (Stage 6.13)
+    test_rdb_link_lifecycle();
+    test_rdb_link_invalid_source();
+    test_rdb_link_unresolved_target();
+    test_rdb_link_duplicate();
+    test_rdb_link_remove_missing();
 
     // Error propagation
     test_error_propagation_invalid_address();

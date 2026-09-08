@@ -92,7 +92,9 @@ MCP недоступен → сообщить об отсутствии Debugger
 14. Оцени evidence
 15. Зафиксируй неизвестное (Unknowns)
 16. Сохрани результаты в RDB (debug_add_rdb_object, debug_set_rdb_comment, debug_save_rdb)
-17. Сформируй итоговый отчёт
+17. Создай подтверждённые связи RDB (debug_add_rdb_link)
+18. Сохрани RDB, если связи добавлены (debug_save_rdb)
+19. Сформируй итоговый отчёт
 ```
 
 Не пропускай шаги. Не создавай второй workflow.
@@ -122,6 +124,27 @@ RDB (ROM Database) является **единственным хранилищ�
 - Редактировать `.rdb` как текстовый файл.
 - Вручную генерировать `.map` для хранения результатов анализа.
 - Сохранять результаты анализа вне RDB.
+
+### RDB Links — связи между объектами
+
+Связи представляют подтверждённые семантические отношения между объектами RDB.
+
+Правила:
+- Используй `debug_add_rdb_link` / `debug_remove_rdb_link` / `debug_get_rdb_links`.
+- Target может не существовать (unresolved link допустим).
+- Не создавай связи только по близости адресов.
+- Связи требуют evidence из дизассемблирования, trace или подтверждённого control flow.
+- Call Graph визуализирует связи RDB, но не создаёт их.
+- `.rdb.graph` — визуальные данные; `.rdb` — семантические связи.
+
+Уровни evidence для связей:
+```
+Fact:       0100 содержит CALL 0120.
+Inference:  0100 ссылается на routine по адресу 0120.
+RDB:        debug_add_rdb_link(source=0x0100, target=0x0120)
+```
+
+Гипотеза не должна автоматически становиться связью. Сначала проверь через MCP.
 
 ## Project Resources
 
@@ -325,7 +348,7 @@ Hardware status: UNVERIFIED
 
 ## MCP Tools
 
-Сервер `vector-debugger` предоставляет 49 инструментов `debug_*`:
+Сервер `vector-debugger` предоставляет 52 инструмента `debug_*`:
 
 **Execution**: `debug_run`, `debug_pause`, `debug_step`, `debug_reset`, `debug_is_running`
 
@@ -354,6 +377,8 @@ Hardware status: UNVERIFIED
 **Annotations**: `debug_set_comment`, `debug_set_function_comment`, `debug_rename_function`, `debug_create_function`, `debug_delete_function`, `debug_add_label`
 
 **ROM Database (RDB)**: `debug_get_rdb_info`, `debug_list_rdb_objects`, `debug_get_rdb_object`, `debug_find_rdb_object`, `debug_add_rdb_object`, `debug_update_rdb_object`, `debug_remove_rdb_object`, `debug_set_rdb_comment`, `debug_set_rdb_property`, `debug_save_rdb`, `debug_reload_rdb`
+
+**RDB Links**: `debug_add_rdb_link`, `debug_remove_rdb_link`, `debug_get_rdb_links`
 
 ---
 

@@ -84,7 +84,9 @@ ROM → MCP Debugger → DebugAdapter → Agent API → disassembly / CPU / memo
 10. Не выдавай Emulator Behavior за подтверждённое Hardware Behavior.
 11. Проверяй важные гипотезы дополнительными MCP-запросами.
 12. Сохрани результаты в RDB (`debug_add_rdb_object`, `debug_set_rdb_comment`, `debug_save_rdb`).
-13. Формируй итоговый отчёт по `debugger/agent/AI_AGENT_WORKFLOW.md`.
+13. Создай подтверждённые связи RDB (`debug_add_rdb_link`).
+14. Сохрани RDB, если связи добавлены (`debug_save_rdb`).
+15. Формируй итоговый отчёт по `debugger/agent/AI_AGENT_WORKFLOW.md`.
 
 Шаги 6–8 обязательны. Не заменяй их самостоятельным чтением ROM.
 
@@ -101,7 +103,7 @@ Workflow:
 
 ## MCP Tools
 
-Сервер `vector-debugger` предоставляет 49 инструментов `debug_*`:
+Сервер `vector-debugger` предоставляет 52 инструмента `debug_*`:
 
 - **Execution**: `debug_run`, `debug_pause`, `debug_step`, `debug_reset`, `debug_is_running`
 - **CPU**: `debug_get_cpu_state`, `debug_get_registers`, `debug_set_register`
@@ -117,6 +119,7 @@ Workflow:
 - **ROM**: `debug_load_rom`
 - **Annotations**: `debug_set_comment`, `debug_set_function_comment`, `debug_rename_function`, `debug_create_function`, `debug_delete_function`, `debug_add_label`
 - **ROM Database (RDB)**: `debug_get_rdb_info`, `debug_list_rdb_objects`, `debug_get_rdb_object`, `debug_find_rdb_object`, `debug_add_rdb_object`, `debug_update_rdb_object`, `debug_remove_rdb_object`, `debug_set_rdb_comment`, `debug_set_rdb_property`, `debug_save_rdb`, `debug_reload_rdb`
+- **RDB Links**: `debug_add_rdb_link`, `debug_remove_rdb_link`, `debug_get_rdb_links`
 
 ## Правила
 

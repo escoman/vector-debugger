@@ -173,6 +173,14 @@ public:
 
     AgentApiResult<void> reloadRdb();
 
+    // -- RDB Links (Stage 6.13) -----------------------------------------------
+
+    AgentApiResult<void> addRdbLink(uint16_t sourceAddress, uint16_t targetAddress);
+
+    AgentApiResult<void> removeRdbLink(uint16_t sourceAddress, uint16_t targetAddress);
+
+    AgentApiResult<std::vector<uint16_t>> getRdbLinks(uint16_t sourceAddress);
+
     // -- Agent log -----------------------------------------------------------
 
     const AgentLog &log() const;

@@ -1419,6 +1419,95 @@ AgentApiResult<void> AgentApi::reloadRdb()
 }
 
 // ---------------------------------------------------------------------------
+// RDB Links (Stage 6.13)
+// ---------------------------------------------------------------------------
+
+AgentApiResult<void> AgentApi::addRdbLink(uint16_t sourceAddress, uint16_t targetAddress)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    auto &rdb = backend_.rdbController();
+
+    // Check source object exists
+    if (!rdb.getObject(sourceAddress)) {
+        std::ostringstream oss;
+        oss << "source=" << std::hex << sourceAddress;
+        log_.record("addRdbLink", oss.str(), "not found", elapsedMs(t0),
+                    false, "source object not found");
+        return AgentApiResult<void>::fail(
+            ErrorCode::NotFound, "No RDB object at source address");
+    }
+
+    // addLink is idempotent — returns false only if source not found
+    rdb.addLink(sourceAddress, targetAddress);
+
+    std::ostringstream oss;
+    oss << std::hex << sourceAddress << " -> " << targetAddress;
+    log_.record("addRdbLink", oss.str(), "ok", elapsedMs(t0));
+
+    return AgentApiResult<void>::ok();
+}
+
+AgentApiResult<void> AgentApi::removeRdbLink(uint16_t sourceAddress, uint16_t targetAddress)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    auto &rdb = backend_.rdbController();
+
+    // Check source object exists
+    if (!rdb.getObject(sourceAddress)) {
+        std::ostringstream oss;
+        oss << "source=" << std::hex << sourceAddress;
+        log_.record("removeRdbLink", oss.str(), "not found", elapsedMs(t0),
+                    false, "source object not found");
+        return AgentApiResult<void>::fail(
+            ErrorCode::NotFound, "No RDB object at source address");
+    }
+
+    // Check link exists
+    if (!rdb.hasLink(sourceAddress, targetAddress)) {
+        std::ostringstream oss;
+        oss << std::hex << sourceAddress << " -> " << targetAddress;
+        log_.record("removeRdbLink", oss.str(), "not found", elapsedMs(t0),
+                    false, "link not found");
+        return AgentApiResult<void>::fail(
+            ErrorCode::NotFound, "Link does not exist");
+    }
+
+    rdb.removeLink(sourceAddress, targetAddress);
+
+    std::ostringstream oss;
+    oss << std::hex << sourceAddress << " -> " << targetAddress;
+    log_.record("removeRdbLink", oss.str(), "ok", elapsedMs(t0));
+
+    return AgentApiResult<void>::ok();
+}
+
+AgentApiResult<std::vector<uint16_t>> AgentApi::getRdbLinks(uint16_t sourceAddress)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    auto &rdb = backend_.rdbController();
+
+    // Check source object exists
+    if (!rdb.getObject(sourceAddress)) {
+        std::ostringstream oss;
+        oss << "source=" << std::hex << sourceAddress;
+        log_.record("getRdbLinks", oss.str(), "not found", elapsedMs(t0),
+                    false, "source object not found");
+        return AgentApiResult<std::vector<uint16_t>>::fail(
+            ErrorCode::NotFound, "No RDB object at source address");
+    }
+
+    std::vector<uint16_t> links = rdb.getLinks(sourceAddress);
+    // Ensure stable ascending order
+    std::sort(links.begin(), links.end());
+
+    std::ostringstream oss;
+    oss << "source=" << std::hex << sourceAddress << " links=" << links.size();
+    log_.record("getRdbLinks", oss.str(), "ok", elapsedMs(t0));
+
+    return AgentApiResult<std::vector<uint16_t>>::ok(std::move(links));
+}
+
+// ---------------------------------------------------------------------------
 // Agent log
 // ---------------------------------------------------------------------------
 

@@ -1708,6 +1708,296 @@ static void test_rdb_get_not_found()
 }
 
 // ---------------------------------------------------------------------------
+// Stage 6.13 — RDB Links
+// ---------------------------------------------------------------------------
+
+static void test_rdb_add_link()
+{
+    TEST_BEGIN("addRdbLink — basic");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    api.addRdbObject(0x0100, "src", "Function");
+    api.addRdbObject(0x0200, "tgt", "Function");
+
+    auto r = api.addRdbLink(0x0100, 0x0200);
+    CHECK(r.success, "add link succeeds");
+
+    auto links = api.getRdbLinks(0x0100);
+    CHECK(links.success, "get links succeeds");
+    CHECK_EQ(1, static_cast<int>(links.value.size()), "1 link");
+    CHECK_EQ(0x0200, links.value[0], "target address");
+    TEST_END();
+}
+
+static void test_rdb_add_link_unresolved_target()
+{
+    TEST_BEGIN("addRdbLink — unresolved target");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    api.addRdbObject(0x0100, "src", "Function");
+    // No object at 0x0345
+
+    auto r = api.addRdbLink(0x0100, 0x0345);
+    CHECK(r.success, "link to unresolved target succeeds");
+
+    auto links = api.getRdbLinks(0x0100);
+    CHECK(links.success, "get links succeeds");
+    CHECK_EQ(1, static_cast<int>(links.value.size()), "1 link");
+    CHECK_EQ(0x0345, links.value[0], "unresolved target stored");
+    TEST_END();
+}
+
+static void test_rdb_add_link_duplicate()
+{
+    TEST_BEGIN("addRdbLink — idempotent duplicate");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    api.addRdbObject(0x0100, "src", "Function");
+
+    auto r1 = api.addRdbLink(0x0100, 0x0200);
+    CHECK(r1.success, "first add succeeds");
+
+    auto r2 = api.addRdbLink(0x0100, 0x0200);
+    CHECK(r2.success, "duplicate add succeeds (idempotent)");
+
+    auto links = api.getRdbLinks(0x0100);
+    CHECK_EQ(1, static_cast<int>(links.value.size()), "still 1 link");
+    TEST_END();
+}
+
+static void test_rdb_add_link_multiple()
+{
+    TEST_BEGIN("addRdbLink — multiple links");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    api.addRdbObject(0x0100, "src", "Function");
+
+    api.addRdbLink(0x0100, 0x0300);
+    api.addRdbLink(0x0100, 0x0100);
+    api.addRdbLink(0x0100, 0x0200);
+
+    auto links = api.getRdbLinks(0x0100);
+    CHECK(links.success, "get links succeeds");
+    CHECK_EQ(3, static_cast<int>(links.value.size()), "3 links");
+    TEST_END();
+}
+
+static void test_rdb_add_link_self()
+{
+    TEST_BEGIN("addRdbLink — self-link");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    api.addRdbObject(0x0100, "src", "Function");
+
+    auto r = api.addRdbLink(0x0100, 0x0100);
+    CHECK(r.success, "self-link succeeds");
+
+    auto links = api.getRdbLinks(0x0100);
+    CHECK_EQ(1, static_cast<int>(links.value.size()), "1 link");
+    CHECK_EQ(0x0100, links.value[0], "self target");
+    TEST_END();
+}
+
+static void test_rdb_add_link_cyclic()
+{
+    TEST_BEGIN("addRdbLink — cyclic links");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    api.addRdbObject(0x0100, "a", "Function");
+    api.addRdbObject(0x0200, "b", "Function");
+    api.addRdbObject(0x0300, "c", "Function");
+
+    api.addRdbLink(0x0100, 0x0200);  // a -> b
+    api.addRdbLink(0x0200, 0x0300);  // b -> c
+    api.addRdbLink(0x0300, 0x0100);  // c -> a
+
+    auto la = api.getRdbLinks(0x0100);
+    CHECK_EQ(1, static_cast<int>(la.value.size()), "a has 1 link");
+    CHECK_EQ(0x0200, la.value[0], "a -> b");
+
+    auto lb = api.getRdbLinks(0x0200);
+    CHECK_EQ(0x0300, lb.value[0], "b -> c");
+
+    auto lc = api.getRdbLinks(0x0300);
+    CHECK_EQ(0x0100, lc.value[0], "c -> a");
+    TEST_END();
+}
+
+static void test_rdb_add_link_no_source()
+{
+    TEST_BEGIN("addRdbLink — no source object fails");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto r = api.addRdbLink(0x9999, 0x0100);
+    CHECK(!r.success, "fails when source doesn't exist");
+    TEST_END();
+}
+
+static void test_rdb_remove_link()
+{
+    TEST_BEGIN("removeRdbLink — basic");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    api.addRdbObject(0x0100, "src", "Function");
+    api.addRdbLink(0x0100, 0x0200);
+    api.addRdbLink(0x0100, 0x0300);
+
+    auto r = api.removeRdbLink(0x0100, 0x0200);
+    CHECK(r.success, "remove succeeds");
+
+    auto links = api.getRdbLinks(0x0100);
+    CHECK_EQ(1, static_cast<int>(links.value.size()), "1 link remains");
+    CHECK_EQ(0x0300, links.value[0], "remaining link");
+    TEST_END();
+}
+
+static void test_rdb_remove_link_missing()
+{
+    TEST_BEGIN("removeRdbLink — missing link fails");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    api.addRdbObject(0x0100, "src", "Function");
+
+    auto r = api.removeRdbLink(0x0100, 0x0200);
+    CHECK(!r.success, "fails when link doesn't exist");
+    TEST_END();
+}
+
+static void test_rdb_remove_link_no_source()
+{
+    TEST_BEGIN("removeRdbLink — no source object fails");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto r = api.removeRdbLink(0x9999, 0x0100);
+    CHECK(!r.success, "fails when source doesn't exist");
+    TEST_END();
+}
+
+static void test_rdb_get_links_empty()
+{
+    TEST_BEGIN("getRdbLinks — empty");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    api.addRdbObject(0x0100, "src", "Function");
+
+    auto links = api.getRdbLinks(0x0100);
+    CHECK(links.success, "succeeds");
+    CHECK_EQ(0, static_cast<int>(links.value.size()), "0 links");
+    TEST_END();
+}
+
+static void test_rdb_get_links_not_found()
+{
+    TEST_BEGIN("getRdbLinks — source not found");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto links = api.getRdbLinks(0x9999);
+    CHECK(!links.success, "fails when source doesn't exist");
+    TEST_END();
+}
+
+static void test_rdb_get_links_sorted()
+{
+    TEST_BEGIN("getRdbLinks — stable ascending order");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    api.addRdbObject(0x0100, "src", "Function");
+    // Add in reverse order
+    api.addRdbLink(0x0100, 0x0500);
+    api.addRdbLink(0x0100, 0x0200);
+    api.addRdbLink(0x0100, 0x0300);
+
+    auto links = api.getRdbLinks(0x0100);
+    CHECK(links.success, "succeeds");
+    CHECK_EQ(3, static_cast<int>(links.value.size()), "3 links");
+    CHECK_EQ(0x0200, links.value[0], "first = 0x0200");
+    CHECK_EQ(0x0300, links.value[1], "second = 0x0300");
+    CHECK_EQ(0x0500, links.value[2], "third = 0x0500");
+    TEST_END();
+}
+
+static void test_rdb_link_persistence()
+{
+    TEST_BEGIN("RDB link persistence — save/reload");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    api.addRdbObject(0x0100, "src", "Function");
+    api.addRdbObject(0x0200, "tgt", "Function");
+    api.addRdbLink(0x0100, 0x0200);
+
+    // Save to temp file
+    std::string tmpPath = "/tmp/test_rdb_link_persistence.rdb";
+    auto &rdb = mock.rdbController();
+    CHECK(rdb.saveAs(tmpPath), "save succeeds");
+
+    // Reload
+    CHECK(rdb.load(tmpPath), "reload succeeds");
+
+    auto links = api.getRdbLinks(0x0100);
+    CHECK(links.success, "get links after reload succeeds");
+    CHECK_EQ(1, static_cast<int>(links.value.size()), "1 link after reload");
+    CHECK_EQ(0x0200, links.value[0], "link preserved");
+
+    // Cleanup
+    std::remove(tmpPath.c_str());
+    TEST_END();
+}
+
+static void test_rdb_remove_source_object_links()
+{
+    TEST_BEGIN("removeRdbObject — outgoing links removed with source");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    api.addRdbObject(0x0100, "src", "Function");
+    api.addRdbObject(0x0200, "tgt", "Function");
+    api.addRdbLink(0x0100, 0x0200);
+
+    // Remove source object
+    api.removeRdbObject(0x0100);
+
+    // Links should be gone (object doesn't exist)
+    auto links = api.getRdbLinks(0x0100);
+    CHECK(!links.success, "get links fails after source removed");
+    TEST_END();
+}
+
+static void test_rdb_remove_target_object_links()
+{
+    TEST_BEGIN("removeRdbObject — incoming links preserved");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    api.addRdbObject(0x0100, "src", "Function");
+    api.addRdbObject(0x0200, "tgt", "Function");
+    api.addRdbLink(0x0100, 0x0200);
+
+    // Remove target object
+    api.removeRdbObject(0x0200);
+
+    // Source's link to target should still exist (unresolved now)
+    auto links = api.getRdbLinks(0x0100);
+    CHECK(links.success, "get links succeeds");
+    CHECK_EQ(1, static_cast<int>(links.value.size()), "link preserved");
+    CHECK_EQ(0x0200, links.value[0], "target address preserved");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -1857,6 +2147,24 @@ int main()
     test_rdb_set_comment();
     test_rdb_set_property();
     test_rdb_get_not_found();
+
+    // Stage 6.13 — RDB Links
+    test_rdb_add_link();
+    test_rdb_add_link_unresolved_target();
+    test_rdb_add_link_duplicate();
+    test_rdb_add_link_multiple();
+    test_rdb_add_link_self();
+    test_rdb_add_link_cyclic();
+    test_rdb_add_link_no_source();
+    test_rdb_remove_link();
+    test_rdb_remove_link_missing();
+    test_rdb_remove_link_no_source();
+    test_rdb_get_links_empty();
+    test_rdb_get_links_not_found();
+    test_rdb_get_links_sorted();
+    test_rdb_link_persistence();
+    test_rdb_remove_source_object_links();
+    test_rdb_remove_target_object_links();
 
     printf("\n\033[1;33m========================================\033[0m\n");
     printf("  Results: %d/%d passed", tests_passed, tests_run);
