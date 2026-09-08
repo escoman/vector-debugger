@@ -84,18 +84,44 @@ MCP недоступен → сообщить об отсутствии Debugger
 6.  Сформируй план анализа
 7.  Проверь состояние Debugger (debug_get_state)
 8.  Загрузи ROM через MCP (debug_load_rom)
-9.  Выполняй MCP-операции для получения evidence
-10. Анализируй результаты
-11. Формируй гипотезы
-12. Проверяй гипотезы дополнительными MCP-запросами
-13. Оцени evidence
-14. Зафиксируй неизвестное (Unknowns)
-15. Сформируй итоговый отчёт
+9.  Прочитай RDB (debug_get_rdb_info, debug_list_rdb_objects)
+10. Выполняй MCP-операции для получения evidence
+11. Анализируй результаты
+12. Формируй гипотезы
+13. Проверяй гипотезы дополнительными MCP-запросами
+14. Оцени evidence
+15. Зафиксируй неизвестное (Unknowns)
+16. Сохрани результаты в RDB (debug_add_rdb_object, debug_set_rdb_comment, debug_save_rdb)
+17. Сформируй итоговый отчёт
 ```
 
 Не пропускай шаги. Не создавай второй workflow.
 
 **Шаги 2–5 обязательны:** MCP Debugger должен быть подключён, ROM загружен, и дизассемблирование получено через MCP до начала анализа. Не заменяй эти шаги самостоятельным чтением ROM.
+
+### RDB — рабочая база ROM
+
+RDB (ROM Database) является **единственным хранилищем** результатов анализа ROM.
+
+Правильный workflow:
+
+```
+прочитать RDB (debug_get_rdb_info)
+↓
+анализировать ROM
+↓
+добавлять/изменять объекты через RDB API
+↓
+проверять результат
+↓
+сохранять RDB (debug_save_rdb)
+```
+
+**Запрещено:**
+- Вручную генерировать JSON RDB.
+- Редактировать `.rdb` как текстовый файл.
+- Вручную генерировать `.map` для хранения результатов анализа.
+- Сохранять результаты анализа вне RDB.
 
 ## Project Resources
 
@@ -299,7 +325,7 @@ Hardware status: UNVERIFIED
 
 ## MCP Tools
 
-Сервер `vector-debugger` предоставляет 38 инструментов `debug_*`:
+Сервер `vector-debugger` предоставляет 49 инструментов `debug_*`:
 
 **Execution**: `debug_run`, `debug_pause`, `debug_step`, `debug_reset`, `debug_is_running`
 
@@ -326,6 +352,8 @@ Hardware status: UNVERIFIED
 **ROM**: `debug_load_rom`
 
 **Annotations**: `debug_set_comment`, `debug_set_function_comment`, `debug_rename_function`, `debug_create_function`, `debug_delete_function`, `debug_add_label`
+
+**ROM Database (RDB)**: `debug_get_rdb_info`, `debug_list_rdb_objects`, `debug_get_rdb_object`, `debug_find_rdb_object`, `debug_add_rdb_object`, `debug_update_rdb_object`, `debug_remove_rdb_object`, `debug_set_rdb_comment`, `debug_set_rdb_property`, `debug_save_rdb`, `debug_reload_rdb`
 
 ---
 

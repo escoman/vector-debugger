@@ -17,6 +17,7 @@
 #include "rom_file_dialog.h"
 #include "sound_window.h"
 #include "plane_screen_window.h"
+#include "rom_database_window.h"
 #include "workspace_manager.h"
 #include "config_manager.h"
 #include "idebug_backend.h"
@@ -111,6 +112,9 @@ private:
     
     // Functions window (Stage 4.5)
     FunctionsWindow functionsWindow_;
+    
+    // ROM Database window (Stage 6.11)
+    RomDatabaseWindow romDatabaseWindow_;
     
     // Xrefs window (Stage 4.7)
     XrefsWindow xrefsWindow_;

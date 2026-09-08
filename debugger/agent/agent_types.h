@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -138,6 +139,7 @@ namespace AgentLimits {
     static const size_t MAX_STACK_LIMIT        = 1000;
     static const size_t MAX_TRACE_ENTRIES      = 100000;
     static const size_t MAX_HISTORY_ENTRIES    = 100000;
+    static const size_t MAX_RDB_OBJECTS_LIMIT  = 10000;
 }
 
 // ---------------------------------------------------------------------------
@@ -513,4 +515,34 @@ struct DebugStateResult
     std::vector<DebuggerBreakpoint> breakpoints;
     std::string current_instruction;   // disassembly at PC
     std::string current_function;      // symbol name at PC (if any)
+};
+
+// ---------------------------------------------------------------------------
+// RDB types — Stage 6.11
+// ---------------------------------------------------------------------------
+
+struct RdbInfoResult
+{
+    std::string path;
+    std::string platform;
+    int         version = 0;
+    bool        loaded = false;
+    bool        dirty = false;
+    bool        existsOnDisk = false;
+    size_t      objectCount = 0;
+    std::string romFile;
+    uint64_t    romSize = 0;
+    std::string romSha256;
+};
+
+struct RdbObjectResult
+{
+    uint16_t    address = 0;
+    std::string type;        // "Function", "Variable", "Label", etc.
+    std::string name;
+    uint32_t    size = 0;
+    bool        hasSize = false;
+    std::string comment;
+    std::vector<uint16_t> links;
+    std::map<std::string, std::string> properties;  // simplified: all as strings
 };

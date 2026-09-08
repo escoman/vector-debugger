@@ -4,6 +4,8 @@
 #include "ring_buffer.h"
 #include "debug_memory.h"
 #include "map_loader.h"
+#include "map_import.h"
+#include "sha256.h"
 
 #include <cstdio>
 #include <cstring>
@@ -67,6 +69,7 @@ DebugBackend::DebugBackend(IDebugTarget &target)
     , instrumentationEnabled_(true)
     , fetchRemaining_(0)
     , impl_(new Impl())
+    , rdb_(new RdbController())
 {
     clearActivityCounters();
     installMemoryCallbacks();
@@ -79,6 +82,7 @@ DebugBackend::~DebugBackend()
         target_->setMemoryCallbacks(nullptr, nullptr);
     }
     delete impl_;
+    delete rdb_;
 }
 
 // ---------------------------------------------------------------------------
@@ -116,43 +120,32 @@ bool DebugBackend::loadRom(const std::string &path, uint32_t org)
     }
     pauseRequestedAtomic_.store(false, std::memory_order_release);
 
-    // Stage 6.2: Auto-detect and load Z88DK MAP file
-    symbols_.clearMapSymbols();  // remove MAP symbols from previous ROM
-    std::string mapPath = MapLoader::mapPathFromRom(path);
-    MapLoadResult mapResult = MapLoader::loadMapFile(mapPath);
-    if (mapResult.success) {
-        int added = 0;
-        for (const auto &ms : mapResult.symbols) {
-            // Classify: addr + public → Function, otherwise → Label
-            SymbolType type = (ms.isAddress && ms.visibility == MapSymbolVisibility::Public)
-                ? SymbolType::Function : SymbolType::Label;
+    // Stage 6.2: Clear MAP symbols from previous ROM
+    symbols_.clearMapSymbols();
 
-            DebugSymbol sym;
-            sym.address   = ms.address;
-            sym.name      = ms.name;
-            sym.type      = type;
-            sym.fromMap   = true;
-            sym.sourceFile = ms.sourceFile;
-            sym.sourceLine = ms.sourceLine;
+    // Stage 6.11: Load ROM Database (.rdb)
+    loadRdb(path);
 
-            // Try to add; if address already taken, skip (first wins)
-            if (symbols_.addSymbol(sym.address, sym.name, sym.type)) {
-                // Update MAP-specific fields
-                auto *p = const_cast<DebugSymbol*>(symbols_.findSymbol(sym.address));
-                if (p) {
-                    p->fromMap   = true;
-                    p->sourceFile = ms.sourceFile;
-                    p->sourceLine = ms.sourceLine;
-                }
-                added++;
-            }
+    // Stage 6.11: If RDB is empty and .map exists — auto-import MAP into RDB
+    if (rdb_->objectCount() == 0) {
+        std::string mapPath = MapLoader::mapPathFromRom(path);
+        MapLoadResult mapResult = MapLoader::loadMapFile(mapPath);
+        if (mapResult.success) {
+            int imported = MapImport::importMapToRdb(mapResult, *rdb_);
+            printf("DebugBackend::loadRom(): imported MAP %s → RDB (%d objects, %d skipped lines)\n",
+                   mapPath.c_str(), imported, mapResult.skippedLines);
+        } else {
+            printf("DebugBackend::loadRom(): MAP not loaded (%s)\n",
+                   mapResult.errorMessage.c_str());
         }
-        printf("DebugBackend::loadRom(): loaded MAP %s (%d symbols, %d skipped lines)\n",
-               mapPath.c_str(), added, mapResult.skippedLines);
-    } else {
-        // MAP not found or invalid format — not an error
-        printf("DebugBackend::loadRom(): MAP not loaded (%s)\n",
-               mapResult.errorMessage.c_str());
+    }
+
+    // Stage 6.11: Sync RDB → SymbolDatabase (backward compatibility)
+    {
+        int synced = MapImport::syncRdbToSymbolDatabase(*rdb_, symbols_);
+        if (synced > 0) {
+            printf("DebugBackend::loadRom(): synced RDB → SymbolDatabase (%d symbols)\n", synced);
+        }
     }
 
     // Stage 6.2.1: Load user comments from sidecar file
@@ -216,6 +209,61 @@ void DebugBackend::saveComments()
             snprintf(addrBuf, sizeof(addrBuf), "%04X", sym.address);
             f << addrBuf << '\t' << sym.comment << '\n';
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ROM Database (Stage 6.11) — .rdb lifecycle
+// ---------------------------------------------------------------------------
+
+std::string DebugBackend::rdbPathFromRom(const std::string &romPath)
+{
+    // .rdb sits next to the ROM: <rom_path>.rdb
+    return romPath + ".rdb";
+}
+
+void DebugBackend::loadRdb(const std::string &romPath)
+{
+    // Reset RDB controller to clean state
+    rdb_->close();
+
+    // Compute ROM identity: file path, size, SHA-256
+    RdbRomIdentity identity;
+    identity.file = romPath;
+
+    // Get file size
+    std::ifstream romFile(romPath, std::ios::binary | std::ios::ate);
+    if (romFile.is_open()) {
+        identity.size = static_cast<int64_t>(romFile.tellg());
+        romFile.close();
+    } else {
+        identity.size = -1;
+    }
+
+    // Compute SHA-256
+    identity.sha256 = Sha256::fileDigest(romPath);
+
+    // Set ROM identity on the controller
+    rdb_->setRomIdentity(identity);
+
+    // Derive .rdb path and try to load
+    rdbPath_ = rdbPathFromRom(romPath);
+
+    // Check if .rdb file exists
+    std::ifstream testFile(rdbPath_);
+    if (testFile.is_open()) {
+        testFile.close();
+        if (rdb_->load(rdbPath_)) {
+            printf("DebugBackend::loadRdb(): loaded %s (%zu objects)\n",
+                   rdbPath_.c_str(), rdb_->objectCount());
+        } else {
+            printf("DebugBackend::loadRdb(): failed to parse %s\n",
+                   rdbPath_.c_str());
+        }
+    } else {
+        // No .rdb file — initialize empty in-memory RDB
+        rdb_->initialize("vector06c", identity);
+        printf("DebugBackend::loadRdb(): no .rdb file, using in-memory RDB\n");
     }
 }
 

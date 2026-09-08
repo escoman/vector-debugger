@@ -13,6 +13,7 @@ set(SRC_DIR     ${ROOT_DIR}/src)
 set(DBG_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
 set(DBG_TST_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 set(DBG_GUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/gui)
+set(DBG_RDB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/rdb)
 set(IMGUI_DIR   ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/imgui)
 
 # ---------------------------------------------------------------------------
@@ -25,7 +26,8 @@ include_directories(${DBG_SRC_DIR})
 include_directories(${Boost_INCLUDE_DIRS})
 include_directories(${ROOT_DIR}/fast-filters/sources)  # coredsp for resampler
 include_directories(${ROOT_DIR}/coreutil/sources)       # coreutil for coredsp
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/thirdparty)  # stb_image.h
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/thirdparty)  # stb_image.h, nlohmann/json
+include_directories(${DBG_RDB_DIR})                          # RDB module (Stage 6.11)
 
 # ---------------------------------------------------------------------------
 # Find Boost (required for Board sources)
@@ -70,6 +72,15 @@ set(DBG_SOURCES
     ${DBG_SRC_DIR}/vram_mapping.cpp
     ${DBG_SRC_DIR}/no_board_target.cpp
     ${DBG_SRC_DIR}/map_loader.cpp
+    ${DBG_SRC_DIR}/map_import.cpp
+    ${DBG_SRC_DIR}/sha256.cpp
+)
+
+# RDB Module (Stage 6.11) — ROM Database Controller
+# No dependency on ImGui, SDL, OpenGL, Board, MCP, or Agent.
+set(RDB_SOURCES
+    ${DBG_RDB_DIR}/rdb_types.cpp
+    ${DBG_RDB_DIR}/rdb_controller.cpp
 )
 
 # Debug Adapter — bridge between Debugger Core and Vector Emulator (Stage 3.13/3.13a)
@@ -101,11 +112,26 @@ find_package(SDL2 REQUIRED)
 add_executable(test_backend
     ${TEST_SOURCES}
     ${DBG_SOURCES}
+    ${RDB_SOURCES}
     ${CORE_SOURCES}
 )
 
 target_link_libraries(test_backend
     ${Boost_LIBRARIES}
+)
+
+# ---------------------------------------------------------------------------
+# RDB Controller test executable (Stage 6.11)
+# ---------------------------------------------------------------------------
+
+add_executable(test_rdb_controller
+    ${DBG_TST_DIR}/test_rdb_controller.cpp
+    ${RDB_SOURCES}
+)
+
+target_include_directories(test_rdb_controller PRIVATE
+    ${DBG_RDB_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty
 )
 
 # ---------------------------------------------------------------------------
@@ -137,6 +163,24 @@ add_executable(test_map_loader
 )
 
 # ---------------------------------------------------------------------------
+# MAP Import test executable (Stage 6.11)
+# ---------------------------------------------------------------------------
+
+add_executable(test_map_import
+    ${DBG_TST_DIR}/test_map_import.cpp
+    ${DBG_SRC_DIR}/map_import.cpp
+    ${DBG_SRC_DIR}/map_loader.cpp
+    ${DBG_SRC_DIR}/symbol_database.cpp
+    ${RDB_SOURCES}
+)
+
+target_include_directories(test_map_import PRIVATE
+    ${DBG_SRC_DIR}
+    ${DBG_RDB_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty
+)
+
+# ---------------------------------------------------------------------------
 # MAP Loader integration test (Stage 6.2)
 # Uses real DebugBackend + NoBoardTarget.
 # ---------------------------------------------------------------------------
@@ -144,6 +188,7 @@ add_executable(test_map_loader
 add_executable(test_map_integration
     ${DBG_TST_DIR}/test_map_integration.cpp
     ${DBG_SOURCES}
+    ${RDB_SOURCES}
     ${CORE_SOURCES}
     ${SRC_DIR}/options.cpp
 )
@@ -165,6 +210,7 @@ target_link_libraries(test_map_integration
 add_executable(test_board_smoke
     ${BOARD_TEST_SOURCES}
     ${DBG_SOURCES}
+    ${RDB_SOURCES}
     ${BOARD_SOURCES}
     ${SRC_DIR}/hal.cpp
     ${CORE_SOURCES}
@@ -194,6 +240,7 @@ target_include_directories(test_rom_load_address PRIVATE
 add_executable(test_rom_loading
     ${DBG_TST_DIR}/test_rom_loading.cpp
     ${DBG_SOURCES}
+    ${RDB_SOURCES}
     ${CORE_SOURCES}
     ${SRC_DIR}/options.cpp
 )
@@ -215,6 +262,7 @@ target_link_libraries(test_rom_loading
 add_executable(test_reset_cpu_state
     ${DBG_TST_DIR}/test_reset_cpu_state.cpp
     ${DBG_SOURCES}
+    ${RDB_SOURCES}
     ${CORE_SOURCES}
     ${SRC_DIR}/options.cpp
 )
@@ -314,11 +362,14 @@ set(IMGUI_SOURCES
 
 add_library(debugger_core STATIC
     ${DBG_SOURCES}
+    ${RDB_SOURCES}
 )
 
 target_include_directories(debugger_core PUBLIC
     ${DBG_SRC_DIR}
     ${SRC_DIR}
+    ${DBG_RDB_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty
     ${Boost_INCLUDE_DIRS}
     ${ROOT_DIR}/fast-filters/sources
     ${ROOT_DIR}/coreutil/sources
@@ -512,6 +563,7 @@ if(ENABLE_AI_AGENT)
     add_executable(test_agent_integration
         ${AGENT_DIR}/tests/test_agent_integration.cpp
         ${DBG_SOURCES}
+        ${RDB_SOURCES}
         ${CORE_SOURCES}
         ${SRC_DIR}/options.cpp
     )
@@ -682,6 +734,7 @@ set(GUI_SOURCES
     ${DBG_GUI_DIR}/rom_file_dialog.cpp
     ${DBG_GUI_DIR}/sound_window.cpp
     ${DBG_GUI_DIR}/plane_screen_window.cpp
+    ${DBG_GUI_DIR}/rom_database_window.cpp
 )
 
 # ---------------------------------------------------------------------------

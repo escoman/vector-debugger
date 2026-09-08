@@ -105,17 +105,19 @@ Every analysis follows this sequence:
 7.  Form Analysis Plan
 8.  Check Debugger state
 9.  Load ROM if needed (debug_load_rom)
-10. Obtain disassembly via MCP (debug_disassemble)
-11. Execute MCP operations
-12. Analyze results
-13. Form hypotheses
-14. Verify hypotheses with additional MCP operations
-15. Evaluate evidence
-16. Form result
-17. Note limitations and unknowns
+10. Read RDB (debug_get_rdb_info, debug_list_rdb_objects)
+11. Obtain disassembly via MCP (debug_disassemble)
+12. Execute MCP operations
+13. Analyze results
+14. Form hypotheses
+15. Verify hypotheses with additional MCP operations
+16. Evaluate evidence
+17. Form result
+18. Save findings to RDB (debug_add_rdb_object, debug_set_rdb_comment, debug_save_rdb)
+19. Note limitations and unknowns
 ```
 
-Steps 2, 9, and 10 are mandatory. Do not replace them with self-analysis of the ROM binary.
+Steps 2, 9, 10, and 11 are mandatory. Do not replace them with self-analysis of the ROM binary.
 
 ---
 
@@ -267,9 +269,55 @@ If analysis requires a ROM:
 
 1. Call `debug_load_rom`
 2. Verify load result
-3. Obtain CPU state, memory map, symbols as needed
+3. Read RDB (`debug_get_rdb_info`) to check existing database
+4. Obtain CPU state, memory map, symbols as needed
 
 Do **not** reload ROM if it is already loaded and the task does not require replacement.
+
+---
+
+## ROM Database (RDB)
+
+RDB is the **sole persistent store** for ROM analysis results.
+
+### RDB Workflow
+
+```
+read RDB (debug_get_rdb_info)
+↓
+analyze ROM
+↓
+add/modify objects via RDB API
+↓
+verify results
+↓
+save RDB (debug_save_rdb)
+```
+
+### RDB Rules
+
+- All analysis findings (functions, labels, comments) go into RDB via MCP tools.
+- Do **not** manually generate RDB JSON.
+- Do **not** edit `.rdb` as a text file.
+- Do **not** generate `.map` files to store analysis results.
+- Save RDB after completing a batch of changes, not after every single operation.
+- RDB is loaded automatically when a ROM is opened. If `.rdb` exists, it takes priority over `.map`.
+
+### Available RDB MCP Tools
+
+| Tool | Purpose |
+|------|---------|
+| `debug_get_rdb_info` | RDB metadata: path, platform, dirty state, object count, ROM identity |
+| `debug_list_rdb_objects` | List all objects sorted by address (with optional limit) |
+| `debug_get_rdb_object` | Get single object by address |
+| `debug_find_rdb_object` | Find object by name |
+| `debug_add_rdb_object` | Add new object (address, name, type, size) |
+| `debug_update_rdb_object` | Update existing object |
+| `debug_remove_rdb_object` | Remove object |
+| `debug_set_rdb_comment` | Set comment on object |
+| `debug_set_rdb_property` | Set property on object |
+| `debug_save_rdb` | Save RDB to disk |
+| `debug_reload_rdb` | Reload from disk (discard unsaved changes) |
 
 ---
 

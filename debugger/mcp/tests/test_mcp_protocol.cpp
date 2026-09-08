@@ -119,11 +119,11 @@ static mcp::json parseTextAsJson(const mcp::json &result) {
 // Tool Registration Tests
 // ---------------------------------------------------------------------------
 
-void test_all_38_tools_registered() {
-    TEST_BEGIN("all 38 tools registered");
+void test_all_49_tools_registered() {
+    TEST_BEGIN("all 49 tools registered");
     Fixture f;
     auto names = f.mcp.registeredToolNames();
-    CHECK_EQ(static_cast<int>(names.size()), 38, "should have 38 tools");
+    CHECK_EQ(static_cast<int>(names.size()), 49, "should have 49 tools");
     TEST_END();
 }
 
@@ -164,7 +164,12 @@ void test_expected_tools_exist() {
         "debug_get_state",
         "debug_load_rom",
         "debug_set_comment", "debug_set_function_comment", "debug_rename_function",
-        "debug_create_function", "debug_delete_function", "debug_add_label"
+        "debug_create_function", "debug_delete_function", "debug_add_label",
+        // Stage 6.11: RDB tools
+        "debug_get_rdb_info", "debug_list_rdb_objects", "debug_get_rdb_object",
+        "debug_find_rdb_object", "debug_add_rdb_object", "debug_update_rdb_object",
+        "debug_remove_rdb_object", "debug_set_rdb_comment", "debug_set_rdb_property",
+        "debug_save_rdb", "debug_reload_rdb"
     };
 
     for (auto &e : expected) {
@@ -835,7 +840,7 @@ int main()
     printf("\033[1;33m========================================\033[0m\n\n");
 
     // Registration
-    test_all_38_tools_registered();
+    test_all_49_tools_registered();
     test_tool_names_have_debug_prefix();
     test_expected_tools_exist();
 

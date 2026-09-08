@@ -1504,6 +1504,210 @@ static void test_get_debug_state_with_function()
 }
 
 // ---------------------------------------------------------------------------
+// Stage 6.11 — ROM Database (RDB) tests
+// ---------------------------------------------------------------------------
+
+static void test_rdb_info_empty()
+{
+    TEST_BEGIN("getRdbInfo — empty RDB");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto r = api.getRdbInfo();
+    CHECK(r.success, "succeeds");
+    CHECK_EQ(0, r.value.objectCount, "object count = 0");
+    CHECK(!r.value.dirty, "not dirty");
+    TEST_END();
+}
+
+static void test_rdb_add_and_get()
+{
+    TEST_BEGIN("addRdbObject + getRdbObject");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto addR = api.addRdbObject(0x0100, "init", "Function", 10);
+    CHECK(addR.success, "add succeeds");
+
+    auto r = api.getRdbInfo();
+    CHECK(r.success, "info succeeds");
+    CHECK_EQ(1, r.value.objectCount, "1 object");
+    CHECK(r.value.dirty, "dirty after add");
+
+    auto obj = api.getRdbObject(0x0100);
+    CHECK(obj.success, "get succeeds");
+    CHECK_EQ(0x0100, obj.value.address, "address");
+    CHECK_STR("function", obj.value.type, "type");
+    CHECK_STR("init", obj.value.name, "name");
+    CHECK_EQ(10, obj.value.size, "size");
+    CHECK(obj.value.hasSize, "hasSize");
+    TEST_END();
+}
+
+static void test_rdb_add_duplicate()
+{
+    TEST_BEGIN("addRdbObject — duplicate address fails");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto r1 = api.addRdbObject(0x0200, "foo", "Label");
+    CHECK(r1.success, "first add succeeds");
+
+    auto r2 = api.addRdbObject(0x0200, "bar", "Label");
+    CHECK(!r2.success, "duplicate fails");
+    TEST_END();
+}
+
+static void test_rdb_find_by_name()
+{
+    TEST_BEGIN("findRdbObject — by name");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    api.addRdbObject(0x0300, "myFunc", "Function");
+    api.addRdbObject(0x0400, "myVar", "Variable");
+
+    auto r = api.findRdbObject("myVar");
+    CHECK(r.success, "found");
+    CHECK_EQ(0x0400, r.value.address, "address matches");
+    CHECK_STR("variable", r.value.type, "type matches");
+
+    auto r2 = api.findRdbObject("nonexistent");
+    CHECK(!r2.success, "not found returns failure");
+    TEST_END();
+}
+
+static void test_rdb_list_objects()
+{
+    TEST_BEGIN("listRdbObjects");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    api.addRdbObject(0x0100, "a", "Function");
+    api.addRdbObject(0x0200, "b", "Label");
+    api.addRdbObject(0x0050, "c", "Variable");
+
+    auto r = api.listRdbObjects();
+    CHECK(r.success, "succeeds");
+    CHECK_EQ(3, static_cast<unsigned>(r.value.size()), "3 objects");
+    // listObjects returns sorted by address
+    CHECK_EQ(0x0050, r.value[0].address, "first = 0x0050");
+    CHECK_EQ(0x0100, r.value[1].address, "second = 0x0100");
+    CHECK_EQ(0x0200, r.value[2].address, "third = 0x0200");
+    TEST_END();
+}
+
+static void test_rdb_list_objects_limit()
+{
+    TEST_BEGIN("listRdbObjects — with limit");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    api.addRdbObject(0x0100, "a", "Function");
+    api.addRdbObject(0x0200, "b", "Label");
+    api.addRdbObject(0x0300, "c", "Variable");
+
+    auto r = api.listRdbObjects(2);
+    CHECK(r.success, "succeeds");
+    CHECK_EQ(2, static_cast<unsigned>(r.value.size()), "limited to 2");
+    TEST_END();
+}
+
+static void test_rdb_update_object()
+{
+    TEST_BEGIN("updateRdbObject");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    api.addRdbObject(0x0100, "old", "Label");
+    auto r = api.updateRdbObject(0x0100, "new", "Function", 20, true);
+    CHECK(r.success, "update succeeds");
+
+    auto obj = api.getRdbObject(0x0100);
+    CHECK_STR("new", obj.value.name, "name updated");
+    CHECK_STR("function", obj.value.type, "type updated");
+    CHECK_EQ(20, obj.value.size, "size updated");
+    TEST_END();
+}
+
+static void test_rdb_update_not_found()
+{
+    TEST_BEGIN("updateRdbObject — not found");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto r = api.updateRdbObject(0x9999, "x", "Label", 0, false);
+    CHECK(!r.success, "fails for missing object");
+    TEST_END();
+}
+
+static void test_rdb_remove_object()
+{
+    TEST_BEGIN("removeRdbObject");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    api.addRdbObject(0x0100, "foo", "Label");
+    auto r = api.removeRdbObject(0x0100);
+    CHECK(r.success, "remove succeeds");
+
+    auto info = api.getRdbInfo();
+    CHECK_EQ(0, info.value.objectCount, "0 objects after remove");
+
+    auto r2 = api.removeRdbObject(0x0100);
+    CHECK(!r2.success, "remove again fails");
+    TEST_END();
+}
+
+static void test_rdb_set_comment()
+{
+    TEST_BEGIN("setRdbComment");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    api.addRdbObject(0x0100, "foo", "Label");
+    auto r = api.setRdbComment(0x0100, "hello world");
+    CHECK(r.success, "set comment succeeds");
+
+    auto obj = api.getRdbObject(0x0100);
+    CHECK_STR("hello world", obj.value.comment, "comment stored");
+
+    auto r2 = api.setRdbComment(0x9999, "nope");
+    CHECK(!r2.success, "comment on missing object fails");
+    TEST_END();
+}
+
+static void test_rdb_set_property()
+{
+    TEST_BEGIN("setRdbProperty");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    api.addRdbObject(0x0100, "foo", "Label");
+    auto r = api.setRdbProperty(0x0100, "source_file", "main.c");
+    CHECK(r.success, "set property succeeds");
+
+    auto obj = api.getRdbObject(0x0100);
+    CHECK(obj.value.properties.count("source_file") > 0, "property exists");
+    CHECK_STR("main.c", obj.value.properties["source_file"].c_str(), "property value");
+
+    auto r2 = api.setRdbProperty(0x9999, "x", "y");
+    CHECK(!r2.success, "property on missing object fails");
+    TEST_END();
+}
+
+static void test_rdb_get_not_found()
+{
+    TEST_BEGIN("getRdbObject — not found");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto r = api.getRdbObject(0xBEEF);
+    CHECK(!r.success, "fails for missing address");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -1639,6 +1843,20 @@ int main()
     test_get_debug_state();
     test_get_debug_state_with_breakpoint();
     test_get_debug_state_with_function();
+
+    // Stage 6.11 — ROM Database (RDB)
+    test_rdb_info_empty();
+    test_rdb_add_and_get();
+    test_rdb_add_duplicate();
+    test_rdb_find_by_name();
+    test_rdb_list_objects();
+    test_rdb_list_objects_limit();
+    test_rdb_update_object();
+    test_rdb_update_not_found();
+    test_rdb_remove_object();
+    test_rdb_set_comment();
+    test_rdb_set_property();
+    test_rdb_get_not_found();
 
     printf("\n\033[1;33m========================================\033[0m\n");
     printf("  Results: %d/%d passed", tests_passed, tests_run);

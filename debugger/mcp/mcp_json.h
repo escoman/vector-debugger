@@ -122,6 +122,12 @@ json functionContextToJson(const FunctionContext &ctx);
 
 json traceResultToJson(const TraceResult &result);
 
+// -- RDB types (Stage 6.11) --------------------------------------------------
+
+json rdbInfoToJson(const RdbInfoResult &info);
+json rdbObjectToJson(const RdbObjectResult &obj);
+json rdbObjectsToJson(const std::vector<RdbObjectResult> &objects);
+
 // -- Error response ----------------------------------------------------------
 
 // Build MCP error content from AgentApiResult failure.

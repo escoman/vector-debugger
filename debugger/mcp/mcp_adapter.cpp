@@ -83,6 +83,7 @@ void McpServer::registerAllTools() {
     registerDebugStateTools();
     registerRomTools();
     registerAnnotationTools();
+    registerRdbTools();
 }
 
 void McpServer::runStdio() {
@@ -895,6 +896,212 @@ void McpServer::registerAnnotationTools() {
             std::string name = params["name"].get<std::string>();
             auto r = api_.addLabel(addr, name);
             if (!r.success) return errorContent("add_label_failed", r.error_message);
+            return textContent(mcp_json::successVoidResult());
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RDB tools (Stage 6.11 — 11 tools)
+// ---------------------------------------------------------------------------
+
+void McpServer::registerRdbTools() {
+    // debug_get_rdb_info
+    {
+        auto tool = mcp::tool_builder("debug_get_rdb_info")
+            .with_description("Get ROM Database (RDB) info: path, platform, dirty state, object count, ROM identity.")
+            .build();
+        registerTool(tool, [this](const mcp::json &, const std::string &) -> mcp::json {
+            auto r = api_.getRdbInfo();
+            if (!r.success) return errorContent("get_rdb_info_failed", r.error_message);
+            return textContent(mcp_json::rdbInfoToJson(r.value));
+        });
+    }
+
+    // debug_list_rdb_objects
+    {
+        auto tool = mcp::tool_builder("debug_list_rdb_objects")
+            .with_description("List all RDB objects sorted by address.")
+            .with_number_param("limit", "Maximum objects (0 = all)", false)
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            size_t limit = getCount(params, "limit", 0);
+            auto r = api_.listRdbObjects(limit);
+            if (!r.success) return errorContent("list_rdb_objects_failed", r.error_message);
+            return textContent({
+                {"count",   static_cast<int>(r.value.size())},
+                {"objects", mcp_json::rdbObjectsToJson(r.value)}
+            });
+        });
+    }
+
+    // debug_get_rdb_object
+    {
+        auto tool = mcp::tool_builder("debug_get_rdb_object")
+            .with_description("Get a single RDB object by address.")
+            .with_number_param("address", "Object address (0..65535)")
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            uint16_t addr = getAddress(params);
+            auto r = api_.getRdbObject(addr);
+            if (!r.success) return errorContent("get_rdb_object_failed", r.error_message);
+            return textContent(mcp_json::rdbObjectToJson(r.value));
+        });
+    }
+
+    // debug_find_rdb_object
+    {
+        auto tool = mcp::tool_builder("debug_find_rdb_object")
+            .with_description("Find an RDB object by name (case-sensitive).")
+            .with_string_param("name", "Object name to search for")
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            if (!params.contains("name")) {
+                throw mcp::mcp_exception(mcp::error_code::invalid_params, "missing required parameter: name");
+            }
+            std::string name = params["name"].get<std::string>();
+            auto r = api_.findRdbObject(name);
+            if (!r.success) return errorContent("find_rdb_object_failed", r.error_message);
+            return textContent(mcp_json::rdbObjectToJson(r.value));
+        });
+    }
+
+    // debug_add_rdb_object
+    {
+        auto tool = mcp::tool_builder("debug_add_rdb_object")
+            .with_description("Add a new object to the ROM Database.")
+            .with_number_param("address", "Object address (0..65535)")
+            .with_string_param("name", "Object name")
+            .with_string_param("type", "Object type: Function, Variable, Data, Table, String, Code, Label, Unknown", false)
+            .with_number_param("size", "Object size in bytes (0 = unknown)", false)
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            uint16_t addr = getAddress(params);
+            if (!params.contains("name")) {
+                throw mcp::mcp_exception(mcp::error_code::invalid_params, "missing required parameter: name");
+            }
+            std::string name = params["name"].get<std::string>();
+            std::string type = "Label";
+            if (params.contains("type")) {
+                type = params["type"].get<std::string>();
+            }
+            uint32_t size = 0;
+            if (params.contains("size")) {
+                size = params["size"].get<int>();
+            }
+            auto r = api_.addRdbObject(addr, name, type, size);
+            if (!r.success) return errorContent("add_rdb_object_failed", r.error_message);
+            return textContent(mcp_json::successVoidResult());
+        });
+    }
+
+    // debug_update_rdb_object
+    {
+        auto tool = mcp::tool_builder("debug_update_rdb_object")
+            .with_description("Update an existing RDB object's name, type, and size.")
+            .with_number_param("address", "Object address (0..65535)")
+            .with_string_param("name", "New name")
+            .with_string_param("type", "New type")
+            .with_number_param("size", "New size (0 = unknown)")
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            uint16_t addr = getAddress(params);
+            if (!params.contains("name")) {
+                throw mcp::mcp_exception(mcp::error_code::invalid_params, "missing required parameter: name");
+            }
+            if (!params.contains("type")) {
+                throw mcp::mcp_exception(mcp::error_code::invalid_params, "missing required parameter: type");
+            }
+            std::string name = params["name"].get<std::string>();
+            std::string type = params["type"].get<std::string>();
+            uint32_t size = 0;
+            if (params.contains("size")) {
+                size = params["size"].get<int>();
+            }
+            bool hasSize = (size > 0);
+            auto r = api_.updateRdbObject(addr, name, type, size, hasSize);
+            if (!r.success) return errorContent("update_rdb_object_failed", r.error_message);
+            return textContent(mcp_json::successVoidResult());
+        });
+    }
+
+    // debug_remove_rdb_object
+    {
+        auto tool = mcp::tool_builder("debug_remove_rdb_object")
+            .with_description("Remove an RDB object at an address.")
+            .with_number_param("address", "Object address (0..65535)")
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            uint16_t addr = getAddress(params);
+            auto r = api_.removeRdbObject(addr);
+            if (!r.success) return errorContent("remove_rdb_object_failed", r.error_message);
+            return textContent(mcp_json::successVoidResult());
+        });
+    }
+
+    // debug_set_rdb_comment
+    {
+        auto tool = mcp::tool_builder("debug_set_rdb_comment")
+            .with_description("Set a comment on an RDB object.")
+            .with_number_param("address", "Object address (0..65535)")
+            .with_string_param("comment", "Comment text")
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            uint16_t addr = getAddress(params);
+            if (!params.contains("comment")) {
+                throw mcp::mcp_exception(mcp::error_code::invalid_params, "missing required parameter: comment");
+            }
+            std::string comment = params["comment"].get<std::string>();
+            auto r = api_.setRdbComment(addr, comment);
+            if (!r.success) return errorContent("set_rdb_comment_failed", r.error_message);
+            return textContent(mcp_json::successVoidResult());
+        });
+    }
+
+    // debug_set_rdb_property
+    {
+        auto tool = mcp::tool_builder("debug_set_rdb_property")
+            .with_description("Set a property on an RDB object.")
+            .with_number_param("address", "Object address (0..65535)")
+            .with_string_param("property", "Property name")
+            .with_string_param("value", "Property value (stored as string)")
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            uint16_t addr = getAddress(params);
+            if (!params.contains("property")) {
+                throw mcp::mcp_exception(mcp::error_code::invalid_params, "missing required parameter: property");
+            }
+            if (!params.contains("value")) {
+                throw mcp::mcp_exception(mcp::error_code::invalid_params, "missing required parameter: value");
+            }
+            std::string prop = params["property"].get<std::string>();
+            std::string val  = params["value"].get<std::string>();
+            auto r = api_.setRdbProperty(addr, prop, val);
+            if (!r.success) return errorContent("set_rdb_property_failed", r.error_message);
+            return textContent(mcp_json::successVoidResult());
+        });
+    }
+
+    // debug_save_rdb
+    {
+        auto tool = mcp::tool_builder("debug_save_rdb")
+            .with_description("Save the ROM Database to disk (.rdb file).")
+            .build();
+        registerTool(tool, [this](const mcp::json &, const std::string &) -> mcp::json {
+            auto r = api_.saveRdb();
+            if (!r.success) return errorContent("save_rdb_failed", r.error_message);
+            return textContent(mcp_json::successVoidResult());
+        });
+    }
+
+    // debug_reload_rdb
+    {
+        auto tool = mcp::tool_builder("debug_reload_rdb")
+            .with_description("Reload the ROM Database from disk (discard unsaved changes).")
+            .build();
+        registerTool(tool, [this](const mcp::json &, const std::string &) -> mcp::json {
+            auto r = api_.reloadRdb();
+            if (!r.success) return errorContent("reload_rdb_failed", r.error_message);
             return textContent(mcp_json::successVoidResult());
         });
     }

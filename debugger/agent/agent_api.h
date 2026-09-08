@@ -143,6 +143,36 @@ public:
 
     AgentApiResult<DebugStateResult> getDebugState();
 
+    // -- ROM Database (Stage 6.11) -------------------------------------------
+
+    AgentApiResult<RdbInfoResult> getRdbInfo();
+
+    AgentApiResult<std::vector<RdbObjectResult>> listRdbObjects(size_t limit = 0);
+
+    AgentApiResult<RdbObjectResult> getRdbObject(uint16_t address);
+
+    AgentApiResult<RdbObjectResult> findRdbObject(const std::string &name);
+
+    AgentApiResult<void> addRdbObject(uint16_t address, const std::string &name,
+                                      const std::string &type = "Label",
+                                      uint32_t size = 0);
+
+    AgentApiResult<void> updateRdbObject(uint16_t address, const std::string &name,
+                                         const std::string &type,
+                                         uint32_t size, bool hasSize);
+
+    AgentApiResult<void> removeRdbObject(uint16_t address);
+
+    AgentApiResult<void> setRdbComment(uint16_t address, const std::string &comment);
+
+    AgentApiResult<void> setRdbProperty(uint16_t address,
+                                        const std::string &propName,
+                                        const std::string &propValue);
+
+    AgentApiResult<void> saveRdb();
+
+    AgentApiResult<void> reloadRdb();
+
     // -- Agent log -----------------------------------------------------------
 
     const AgentLog &log() const;

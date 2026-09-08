@@ -12,6 +12,7 @@
 #include "events.h"
 #include "symbol_database.h"
 #include "opcode_info.h"
+#include "rdb_controller.h"
 
 #include <cstdint>
 #include <cstring>
@@ -462,6 +463,11 @@ public:
         return r;
     }
 
+    // -- ROM Database (Stage 6.11) ------------------------------------------
+
+    RdbController       &rdbController() override { return rdb_; }
+    const RdbController &rdbController() const override { return rdb_; }
+
     // -- Test data setters --------------------------------------------------
 
     void setCpuState(const CpuState &cpu) { cpu_ = cpu; }
@@ -530,6 +536,8 @@ private:
     std::vector<uint64_t> writeCount_;
 
     SymbolDatabase symbols_;
+
+    RdbController rdb_;
 
     // I/O port state (256 ports)
     uint8_t ioPorts_[256] = {};

@@ -11,6 +11,9 @@
 #include <string>
 #include <vector>
 
+// Forward declaration — RDB Controller (Stage 6.11)
+class RdbController;
+
 // Forward declarations for event types (defined in events.h)
 struct InstructionEvent;
 struct MemoryAccessEvent;
@@ -245,4 +248,9 @@ public:
 
     virtual uint8_t readIoPort(uint8_t port) = 0;
     virtual CommandResult writeIoPort(uint8_t port, uint8_t value) = 0;
+
+    // -- ROM Database (Stage 6.11) ------------------------------------------
+
+    virtual RdbController       &rdbController() = 0;
+    virtual const RdbController &rdbController() const = 0;
 };

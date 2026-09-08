@@ -2,6 +2,7 @@
 #include "disassembler.h"
 #include "opcode_info.h"
 #include "rom_load_address.h"
+#include "rdb_controller.h"
 
 #include <algorithm>
 #include <map>
@@ -1121,6 +1122,300 @@ AgentApiResult<DebugStateResult> AgentApi::getDebugState()
     log_.record("getDebugState", "", oss.str(), elapsedMs(t0));
 
     return AgentApiResult<DebugStateResult>::ok(std::move(result));
+}
+
+// ---------------------------------------------------------------------------
+// ROM Database (Stage 6.11)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Convert RdbObject → RdbObjectResult (agent-facing type).
+RdbObjectResult rdbObjectToResult(const RdbObject &obj)
+{
+    RdbObjectResult r;
+    r.address = obj.address;
+    r.type    = rdbObjectTypeToString(obj.type);
+    r.name    = obj.name;
+    r.size    = obj.size;
+    r.hasSize = obj.hasSize;
+    r.comment = obj.comment;
+    r.links   = obj.links;
+    // Flatten typed properties to string representation.
+    for (const auto &kv : obj.properties) {
+        switch (kv.second.type) {
+            case RdbPropertyValue::Type::String:
+                r.properties[kv.first] = kv.second.stringValue;
+                break;
+            case RdbPropertyValue::Type::Integer:
+                r.properties[kv.first] = std::to_string(kv.second.intValue);
+                break;
+            case RdbPropertyValue::Type::Boolean:
+                r.properties[kv.first] = kv.second.boolValue ? "true" : "false";
+                break;
+            case RdbPropertyValue::Type::Double:
+                r.properties[kv.first] = std::to_string(kv.second.doubleValue);
+                break;
+        }
+    }
+    return r;
+}
+
+} // anonymous namespace
+
+AgentApiResult<RdbInfoResult> AgentApi::getRdbInfo()
+{
+    auto t0 = std::chrono::steady_clock::now();
+    const auto &rdb = backend_.rdbController();
+
+    RdbInfoResult info;
+    info.path         = rdb.getPath();
+    info.platform     = rdb.getPlatform();
+    info.version      = rdb.getVersion();
+    info.loaded       = rdb.isLoaded();
+    info.dirty        = rdb.isDirty();
+    info.existsOnDisk = rdb.existsOnDisk();
+    info.objectCount  = rdb.objectCount();
+
+    RdbRomIdentity rom = rdb.getRomIdentity();
+    info.romFile   = rom.file;
+    info.romSize   = rom.size;
+    info.romSha256 = rom.sha256;
+
+    std::ostringstream oss;
+    oss << "objects=" << info.objectCount
+        << " dirty=" << info.dirty
+        << " platform=" << info.platform;
+    log_.record("getRdbInfo", "", oss.str(), elapsedMs(t0));
+
+    return AgentApiResult<RdbInfoResult>::ok(std::move(info));
+}
+
+AgentApiResult<std::vector<RdbObjectResult>> AgentApi::listRdbObjects(size_t limit)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    const auto &rdb = backend_.rdbController();
+
+    auto all = rdb.listObjects();
+
+    size_t count;
+    if (limit == 0) {
+        count = std::min(all.size(), AgentLimits::MAX_RDB_OBJECTS_LIMIT);
+    } else {
+        count = std::min(limit, all.size());
+    }
+
+    std::vector<RdbObjectResult> result;
+    result.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        result.push_back(rdbObjectToResult(all[i]));
+    }
+
+    log_.record("listRdbObjects", "",
+                std::to_string(result.size()) + " / " + std::to_string(all.size()) + " objects",
+                elapsedMs(t0));
+
+    return AgentApiResult<std::vector<RdbObjectResult>>::ok(std::move(result));
+}
+
+AgentApiResult<RdbObjectResult> AgentApi::getRdbObject(uint16_t address)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    const auto &rdb = backend_.rdbController();
+
+    const RdbObject *obj = rdb.getObject(address);
+    if (!obj) {
+        log_.record("getRdbObject", "addr=" + std::to_string(address),
+                    "not found", elapsedMs(t0), false, "object not found");
+        return AgentApiResult<RdbObjectResult>::fail(
+            ErrorCode::NotFound, "No RDB object at address");
+    }
+
+    RdbObjectResult r = rdbObjectToResult(*obj);
+
+    std::ostringstream oss;
+    oss << "addr=" << std::hex << address << " name=" << r.name;
+    log_.record("getRdbObject", oss.str(), "found", elapsedMs(t0));
+
+    return AgentApiResult<RdbObjectResult>::ok(std::move(r));
+}
+
+AgentApiResult<RdbObjectResult> AgentApi::findRdbObject(const std::string &name)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    const auto &rdb = backend_.rdbController();
+
+    const RdbObject *obj = rdb.findObject(name);
+    if (!obj) {
+        log_.record("findRdbObject", "name=" + name,
+                    "not found", elapsedMs(t0), false, "object not found");
+        return AgentApiResult<RdbObjectResult>::fail(
+            ErrorCode::NotFound, "No RDB object with name '" + name + "'");
+    }
+
+    RdbObjectResult r = rdbObjectToResult(*obj);
+
+    std::ostringstream oss;
+    oss << "name=" << name << " addr=" << std::hex << obj->address;
+    log_.record("findRdbObject", oss.str(), "found", elapsedMs(t0));
+
+    return AgentApiResult<RdbObjectResult>::ok(std::move(r));
+}
+
+AgentApiResult<void> AgentApi::addRdbObject(uint16_t address, const std::string &name,
+                                             const std::string &type, uint32_t size)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    auto &rdb = backend_.rdbController();
+
+    RdbObject obj;
+    obj.address = address;
+    obj.type    = rdbObjectTypeFromString(type);
+    obj.name    = name;
+    obj.size    = size;
+    obj.hasSize = (size > 0);
+
+    if (!rdb.addObject(obj)) {
+        log_.record("addRdbObject", "addr=" + std::to_string(address),
+                    "failed", elapsedMs(t0), false, "address already exists");
+        return AgentApiResult<void>::fail(
+            ErrorCode::InvalidArgument, "RDB object already exists at this address");
+    }
+
+    std::ostringstream oss;
+    oss << "addr=" << std::hex << address << " name=" << name << " type=" << type;
+    log_.record("addRdbObject", oss.str(), "ok", elapsedMs(t0));
+
+    return AgentApiResult<void>::ok();
+}
+
+AgentApiResult<void> AgentApi::updateRdbObject(uint16_t address, const std::string &name,
+                                                const std::string &type,
+                                                uint32_t size, bool hasSize)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    auto &rdb = backend_.rdbController();
+
+    const RdbObject *existing = rdb.getObject(address);
+    if (!existing) {
+        log_.record("updateRdbObject", "addr=" + std::to_string(address),
+                    "not found", elapsedMs(t0), false, "object not found");
+        return AgentApiResult<void>::fail(
+            ErrorCode::NotFound, "No RDB object at address");
+    }
+
+    RdbObject updated = *existing;
+    updated.name    = name;
+    updated.type    = rdbObjectTypeFromString(type);
+    updated.size    = size;
+    updated.hasSize = hasSize;
+
+    if (!rdb.updateObject(updated)) {
+        log_.record("updateRdbObject", "addr=" + std::to_string(address),
+                    "failed", elapsedMs(t0), false, "update failed");
+        return AgentApiResult<void>::fail(
+            ErrorCode::OperationFailed, "Failed to update RDB object");
+    }
+
+    std::ostringstream oss;
+    oss << "addr=" << std::hex << address << " name=" << name << " type=" << type;
+    log_.record("updateRdbObject", oss.str(), "ok", elapsedMs(t0));
+
+    return AgentApiResult<void>::ok();
+}
+
+AgentApiResult<void> AgentApi::removeRdbObject(uint16_t address)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    auto &rdb = backend_.rdbController();
+
+    if (!rdb.removeObject(address)) {
+        log_.record("removeRdbObject", "addr=" + std::to_string(address),
+                    "not found", elapsedMs(t0), false, "object not found");
+        return AgentApiResult<void>::fail(
+            ErrorCode::NotFound, "No RDB object at address");
+    }
+
+    std::ostringstream oss;
+    oss << "addr=" << std::hex << address;
+    log_.record("removeRdbObject", oss.str(), "ok", elapsedMs(t0));
+
+    return AgentApiResult<void>::ok();
+}
+
+AgentApiResult<void> AgentApi::setRdbComment(uint16_t address, const std::string &comment)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    auto &rdb = backend_.rdbController();
+
+    if (!rdb.setComment(address, comment)) {
+        log_.record("setRdbComment", "addr=" + std::to_string(address),
+                    "not found", elapsedMs(t0), false, "object not found");
+        return AgentApiResult<void>::fail(
+            ErrorCode::NotFound, "No RDB object at address");
+    }
+
+    std::ostringstream oss;
+    oss << "addr=" << std::hex << address << " comment=\"" << comment << "\"";
+    log_.record("setRdbComment", oss.str(), "ok", elapsedMs(t0));
+
+    return AgentApiResult<void>::ok();
+}
+
+AgentApiResult<void> AgentApi::setRdbProperty(uint16_t address,
+                                               const std::string &propName,
+                                               const std::string &propValue)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    auto &rdb = backend_.rdbController();
+
+    RdbPropertyValue val = RdbPropertyValue::fromString(propValue);
+    if (!rdb.setProperty(address, propName, val)) {
+        log_.record("setRdbProperty", "addr=" + std::to_string(address),
+                    "not found", elapsedMs(t0), false, "object not found");
+        return AgentApiResult<void>::fail(
+            ErrorCode::NotFound, "No RDB object at address");
+    }
+
+    std::ostringstream oss;
+    oss << "addr=" << std::hex << address << " " << propName << "=\"" << propValue << "\"";
+    log_.record("setRdbProperty", oss.str(), "ok", elapsedMs(t0));
+
+    return AgentApiResult<void>::ok();
+}
+
+AgentApiResult<void> AgentApi::saveRdb()
+{
+    auto t0 = std::chrono::steady_clock::now();
+    auto &rdb = backend_.rdbController();
+
+    if (!rdb.save()) {
+        log_.record("saveRdb", rdb.getPath(),
+                    "failed", elapsedMs(t0), false, "save failed");
+        return AgentApiResult<void>::fail(
+            ErrorCode::OperationFailed, "Failed to save RDB");
+    }
+
+    log_.record("saveRdb", rdb.getPath(), "ok", elapsedMs(t0));
+
+    return AgentApiResult<void>::ok();
+}
+
+AgentApiResult<void> AgentApi::reloadRdb()
+{
+    auto t0 = std::chrono::steady_clock::now();
+    auto &rdb = backend_.rdbController();
+
+    if (!rdb.reload()) {
+        log_.record("reloadRdb", rdb.getPath(),
+                    "failed", elapsedMs(t0), false, "reload failed");
+        return AgentApiResult<void>::fail(
+            ErrorCode::OperationFailed, "Failed to reload RDB");
+    }
+
+    log_.record("reloadRdb", rdb.getPath(), "ok", elapsedMs(t0));
+
+    return AgentApiResult<void>::ok();
 }
 
 // ---------------------------------------------------------------------------

@@ -388,4 +388,49 @@ json successVoidResult() {
     };
 }
 
+// -- RDB types (Stage 6.11) --------------------------------------------------
+
+json rdbInfoToJson(const RdbInfoResult &info) {
+    return {
+        {"path",         info.path},
+        {"platform",     info.platform},
+        {"version",      info.version},
+        {"loaded",       info.loaded},
+        {"dirty",        info.dirty},
+        {"exists_on_disk", info.existsOnDisk},
+        {"object_count", static_cast<int>(info.objectCount)},
+        {"rom_file",     info.romFile},
+        {"rom_size",     info.romSize},
+        {"rom_sha256",   info.romSha256}
+    };
+}
+
+json rdbObjectToJson(const RdbObjectResult &obj) {
+    json linksArr = json::array();
+    for (uint16_t l : obj.links) {
+        linksArr.push_back(hex16(l));
+    }
+    json propsObj = json::object();
+    for (const auto &kv : obj.properties) {
+        propsObj[kv.first] = kv.second;
+    }
+    return {
+        {"address",  hex16(obj.address)},
+        {"type",     obj.type},
+        {"name",     obj.name},
+        {"size",     obj.hasSize ? static_cast<int>(obj.size) : -1},
+        {"comment",  obj.comment},
+        {"links",    linksArr},
+        {"properties", propsObj}
+    };
+}
+
+json rdbObjectsToJson(const std::vector<RdbObjectResult> &objects) {
+    json arr = json::array();
+    for (const auto &obj : objects) {
+        arr.push_back(rdbObjectToJson(obj));
+    }
+    return arr;
+}
+
 } // namespace mcp_json

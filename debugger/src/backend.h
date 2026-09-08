@@ -15,6 +15,7 @@
 
 #include "idebug_backend.h"
 #include "debug_target.h"
+#include "rdb_controller.h"
 
 // ---------------------------------------------------------------------------
 // Result of a single-instruction step (kept for backward compatibility)
@@ -170,6 +171,11 @@ public:
 
     SymbolDatabase       &symbolDatabase() override { return symbols_; }
     const SymbolDatabase &symbolDatabase() const override { return symbols_; }
+
+    // -- IDebugBackend: ROM Database (Stage 6.11) ----------------------------
+
+    RdbController       &rdbController() override { return *rdb_; }
+    const RdbController &rdbController() const override { return *rdb_; }
 
     // -- IDebugBackend: symbol commands (Stage 5.3.1) -----------------------
 
@@ -371,6 +377,17 @@ private:
     // -- Comment persistence (Stage 6.2.1) ----------------------------------
 
     std::string commentsPath_;  // sidecar file: <rom_path>.comments
+
+    // -- ROM Database (Stage 6.11) ------------------------------------------
+
+    RdbController *rdb_;
+    std::string rdbPath_;  // derived path: <rom_path>.rdb
+
+    // Derive .rdb path from ROM path
+    static std::string rdbPathFromRom(const std::string &romPath);
+
+    // Load .rdb file if it exists; create empty in-memory RDB otherwise
+    void loadRdb(const std::string &romPath);
 
 public:
     // Load comments from sidecar file and apply to existing symbols.
