@@ -129,6 +129,14 @@ json rdbObjectToJson(const RdbObjectResult &obj);
 json rdbObjectsToJson(const std::vector<RdbObjectResult> &objects);
 json rdbLinksToJson(uint16_t source, const std::vector<uint16_t> &links);
 
+// -- Runtime Memory Analysis types (Stage 6.20) ------------------------------
+
+json runtimeAccessBlockToJson(const RuntimeAccessBlock &block);
+json runtimeAccessBlocksToJson(const std::vector<RuntimeAccessBlock> &blocks);
+json runtimeAccessLogEntryToJson(const RuntimeAccessLogEntry &entry);
+json runtimeAccessLogEntriesToJson(const std::vector<RuntimeAccessLogEntry> &entries);
+json memorySnapshotDiffToJson(const MemorySnapshotDiff &diff);
+
 // -- Error response ----------------------------------------------------------
 
 // Build MCP error content from AgentApiResult failure.

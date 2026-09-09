@@ -14,6 +14,7 @@ set(DBG_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
 set(DBG_TST_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 set(DBG_GUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/gui)
 set(DBG_RDB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/rdb)
+set(AGENT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/agent)
 set(IMGUI_DIR   ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/imgui)
 set(NODE_EDITOR_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/imgui-node-editor)
 
@@ -24,6 +25,7 @@ set(NODE_EDITOR_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/imgui-node-editor)
 
 include_directories(${SRC_DIR})
 include_directories(${DBG_SRC_DIR})
+include_directories(${AGENT_DIR})
 include_directories(${Boost_INCLUDE_DIRS})
 include_directories(${ROOT_DIR}/fast-filters/sources)  # coredsp for resampler
 include_directories(${ROOT_DIR}/coreutil/sources)       # coreutil for coredsp
@@ -378,6 +380,7 @@ target_include_directories(debugger_core PUBLIC
     ${DBG_SRC_DIR}
     ${SRC_DIR}
     ${DBG_RDB_DIR}
+    ${AGENT_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty
     ${Boost_INCLUDE_DIRS}
     ${ROOT_DIR}/fast-filters/sources
@@ -485,7 +488,6 @@ set(BINARY_RESOURCES
 option(ENABLE_AI_AGENT "Build AI Agent module for dynamic ROM analysis" OFF)
 
 if(ENABLE_AI_AGENT)
-    set(AGENT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/agent)
 
     add_library(debugger_agent STATIC
         ${AGENT_DIR}/agent_api.cpp
@@ -601,6 +603,24 @@ if(ENABLE_AI_AGENT)
     )
 
     target_link_libraries(test_agent_contract
+        debugger_agent
+        debugger_core
+        ${Boost_LIBRARIES}
+        pthread
+    )
+
+    # Agent Runtime Memory Analysis tests (Stage 6.20)
+    add_executable(test_agent_runtime_memory
+        ${AGENT_DIR}/tests/test_agent_runtime_memory.cpp
+    )
+
+    target_include_directories(test_agent_runtime_memory PRIVATE
+        ${AGENT_DIR}
+        ${DBG_SRC_DIR}
+        ${SRC_DIR}
+    )
+
+    target_link_libraries(test_agent_runtime_memory
         debugger_agent
         debugger_core
         ${Boost_LIBRARIES}

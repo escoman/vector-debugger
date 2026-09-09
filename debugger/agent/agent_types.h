@@ -140,9 +140,11 @@ namespace AgentLimits {
     static const size_t MAX_TRACE_ENTRIES      = 100000;
     static const size_t MAX_HISTORY_ENTRIES    = 100000;
     static const size_t MAX_RDB_OBJECTS_LIMIT  = 10000;
-    static const size_t MAX_MEMORY_READ_RANGE  = 16384;  // 16 KB
+    static const size_t MAX_MEMORY_READ_RANGE  = 65536;  // 64 KB (Stage 6.20: full address space)
     static const size_t MAX_CODE_ANALYSIS_INSTRUCTIONS = 10000;
     static const size_t MAX_ANALYSIS_ENTRY_POINTS = 256;
+    static const size_t MAX_MEMORY_ACCESS_LOG  = 50000;  // Stage 6.20: bounded access log
+    static const size_t MAX_MEMORY_SNAPSHOTS   = 16;     // Stage 6.20: max concurrent snapshots
 }
 
 // ---------------------------------------------------------------------------
@@ -548,6 +550,65 @@ struct RdbObjectResult
     std::string comment;
     std::vector<uint16_t> links;
     std::map<std::string, std::string> properties;  // simplified: all as strings
+};
+
+// ---------------------------------------------------------------------------
+// Runtime Memory Access types — Stage 6.20
+//
+// Runtime Memory Access Map: 256 blocks × 256 bytes covering 64K.
+// Tracks READ/WRITE/FETCH with per-block counters.
+// These are evidence from a concrete execution session, not static facts.
+// ---------------------------------------------------------------------------
+
+struct RuntimeAccessBlock
+{
+    uint16_t address = 0;      // block start address (aligned to 256)
+    bool read   = false;
+    bool write  = false;
+    bool fetch  = false;
+    uint64_t read_count  = 0;
+    uint64_t write_count = 0;
+    uint64_t fetch_count = 0;
+};
+
+// ---------------------------------------------------------------------------
+// Runtime Access Log Entry — Stage 6.20
+//
+// Single entry from the bounded runtime memory access log.
+// Each entry records an individual memory access with PC attribution.
+// ---------------------------------------------------------------------------
+
+struct RuntimeAccessLogEntry
+{
+    uint16_t address = 0;
+    enum Type { Read, Write, Fetch };
+    Type type = Read;
+    uint16_t pc = 0;
+    uint8_t value = 0;
+};
+
+// ---------------------------------------------------------------------------
+// Memory Snapshot types — Stage 6.20
+//
+// Snapshots capture the full 64K (or a subrange) address space at a point
+// in time.  They are independent of RDB and are invalidated on ROM load.
+// ---------------------------------------------------------------------------
+
+struct MemorySnapshotData
+{
+    uint32_t snapshot_id = 0;
+    uint16_t start_address = 0;
+    std::vector<uint8_t> data;
+};
+
+struct MemorySnapshotDiff
+{
+    struct ChangedRange
+    {
+        uint16_t address = 0;
+        size_t   size    = 0;
+    };
+    std::vector<ChangedRange> changed_ranges;
 };
 
 // ---------------------------------------------------------------------------

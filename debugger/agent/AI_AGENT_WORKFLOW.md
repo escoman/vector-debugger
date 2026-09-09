@@ -417,6 +417,48 @@ A hypothesis should not automatically become a link. Verify first via MCP.
 
 ---
 
+## Runtime Memory Analysis (Stage 6.20)
+
+When analyzing ROMs containing packed data, runtime-generated structures, or
+dynamic buffers, the Agent can observe **runtime memory behavior**:
+
+1. **Memory Access Map** — 256-block heatmap showing which 256-byte pages are
+   read, written, or fetched during execution, with per-page counters.
+2. **Memory Access Log** — bounded FIFO of individual memory accesses with
+   address, type (Read/Write/Fetch), PC attribution, and value.
+3. **Memory Snapshots** — point-in-time captures of memory regions. Two
+   snapshots can be compared to produce a list of changed ranges.
+
+### Workflow for Packed Data Analysis
+
+```
+1. Clear access map (debug_clear_memory_access_map)
+2. Run or step through the unpacking routine
+3. Inspect access map (debug_get_memory_access_map) to see which pages were touched
+4. Take snapshot A of the data area (debug_create_memory_snapshot)
+5. Continue execution
+6. Take snapshot B of the same area
+7. Compare A vs B (debug_compare_memory_snapshots) to see exactly which bytes changed
+```
+
+### Available Runtime Analysis MCP Tools
+
+| Tool | Purpose |
+|------|--------|
+| `debug_clear_memory_access_map` | Reset all access counters and log entries |
+| `debug_get_memory_access_map` | Get 256-block access map (only active blocks returned) |
+| `debug_get_memory_access_log` | Get recent access log entries (most recent last) |
+| `debug_create_memory_snapshot` | Capture memory region (default: full 64K) |
+| `debug_compare_memory_snapshots` | Diff two snapshots → list of changed ranges |
+
+### ROM Isolation
+
+All runtime state (access map, log, snapshots) is **invalidated on ROM load**.
+This ensures stale data from a previous ROM does not contaminate analysis of
+a new ROM.
+
+---
+
 ## Knowledge Base Usage
 
 Knowledge Base is a technical reference, not an algorithm.

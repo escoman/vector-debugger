@@ -74,6 +74,11 @@ public:
 
         writeCount_[0xC000] = 1;  // VRAM write
 
+        // Stage 6.20: Initialize runtime access map block addresses
+        for (int i = 0; i < 256; ++i) {
+            runtimeMap_[i].address = static_cast<uint16_t>(i * 256);
+        }
+
         // Initialize video mode to consistent 256-mode defaults
         setVideoMode(false);
     }
@@ -468,6 +473,105 @@ public:
     RdbController       &rdbController() override { return rdb_; }
     const RdbController &rdbController() const override { return rdb_; }
 
+    // -- Runtime Memory Access Map (Stage 6.20) ------------------------------
+
+    void clearRuntimeAccessMap() override {
+        for (int i = 0; i < 256; ++i) {
+            runtimeMap_[i] = RuntimeAccessBlock{};
+            runtimeMap_[i].address = static_cast<uint16_t>(i * 256);
+        }
+        runtimeLog_.clear();
+    }
+
+    std::vector<RuntimeAccessBlock> getRuntimeAccessMap() const override {
+        return std::vector<RuntimeAccessBlock>(runtimeMap_, runtimeMap_ + 256);
+    }
+
+    std::vector<RuntimeAccessLogEntry> getRuntimeAccessLog(size_t maxEntries) const override {
+        if (maxEntries >= runtimeLog_.size()) return runtimeLog_;
+        return std::vector<RuntimeAccessLogEntry>(
+            runtimeLog_.end() - static_cast<long>(maxEntries), runtimeLog_.end());
+    }
+
+    // -- Memory Snapshots (Stage 6.20) ---------------------------------------
+
+    uint32_t createMemorySnapshot(uint16_t start, size_t size) override {
+        if (size == 0 || static_cast<uint32_t>(start) + size > 0x10000) return 0;
+        MemorySnapshotData snap;
+        snap.start_address = start;
+        snap.data.resize(size);
+        for (size_t i = 0; i < size; ++i)
+            snap.data[i] = memory_[static_cast<uint16_t>(start + i)];
+        uint32_t id = nextSnapId_++;
+        snap.snapshot_id = id;
+        snapshots_[id] = std::move(snap);
+        return id;
+    }
+
+    MemorySnapshotData getMemorySnapshot(uint32_t id) const override {
+        auto it = snapshots_.find(id);
+        if (it == snapshots_.end()) return {};
+        return it->second;
+    }
+
+    MemorySnapshotDiff compareMemorySnapshots(uint32_t idA, uint32_t idB) const override {
+        MemorySnapshotDiff diff;
+        auto itA = snapshots_.find(idA);
+        auto itB = snapshots_.find(idB);
+        if (itA == snapshots_.end() || itB == snapshots_.end()) return diff;
+        const auto &a = itA->second;
+        const auto &b = itB->second;
+        if (a.start_address != b.start_address || a.data.size() != b.data.size()) return diff;
+        bool inRange = false;
+        uint16_t rangeStart = 0;
+        size_t rangeSize = 0;
+        for (size_t i = 0; i < a.data.size(); ++i) {
+            if (a.data[i] != b.data[i]) {
+                if (!inRange) { rangeStart = static_cast<uint16_t>(a.start_address + i); rangeSize = 1; inRange = true; }
+                else ++rangeSize;
+            } else {
+                if (inRange) { diff.changed_ranges.push_back({rangeStart, rangeSize}); inRange = false; }
+            }
+        }
+        if (inRange) diff.changed_ranges.push_back({rangeStart, rangeSize});
+        return diff;
+    }
+
+    bool deleteMemorySnapshot(uint32_t id) override {
+        return snapshots_.erase(id) > 0;
+    }
+
+    void invalidateAllSnapshots() override {
+        snapshots_.clear();
+    }
+
+    // -- Test helpers for Stage 6.20 -----------------------------------------
+
+    // Simulate a runtime memory access (for testing the mock's map/log)
+    void simulateRuntimeAccess(uint16_t addr, RuntimeAccessLogEntry::Type type, uint16_t pc = 0, uint8_t value = 0) {
+        int block = addr >> 8;
+        switch (type) {
+            case RuntimeAccessLogEntry::Read:
+                runtimeMap_[block].read = true;
+                runtimeMap_[block].read_count++;
+                break;
+            case RuntimeAccessLogEntry::Write:
+                runtimeMap_[block].write = true;
+                runtimeMap_[block].write_count++;
+                break;
+            case RuntimeAccessLogEntry::Fetch:
+                runtimeMap_[block].fetch = true;
+                runtimeMap_[block].fetch_count++;
+                break;
+        }
+        RuntimeAccessLogEntry entry;
+        entry.address = addr;
+        entry.type = type;
+        entry.pc = pc;
+        entry.value = value;
+        runtimeLog_.push_back(entry);
+    }
+
     // -- Test data setters --------------------------------------------------
 
     void setCpuState(const CpuState &cpu) { cpu_ = cpu; }
@@ -538,6 +642,14 @@ private:
     SymbolDatabase symbols_;
 
     RdbController rdb_;
+
+    // Stage 6.20: Runtime memory access tracking
+    RuntimeAccessBlock runtimeMap_[256] = {};
+    std::vector<RuntimeAccessLogEntry> runtimeLog_;
+
+    // Stage 6.20: Memory snapshots
+    std::map<uint32_t, MemorySnapshotData> snapshots_;
+    uint32_t nextSnapId_ = 1;
 
     // I/O port state (256 ports)
     uint8_t ioPorts_[256] = {};

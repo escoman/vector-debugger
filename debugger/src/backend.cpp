@@ -23,6 +23,7 @@
 static const size_t DEFAULT_INSTRUCTION_HISTORY = 10000;
 static const size_t DEFAULT_MEMORY_HISTORY      = 50000;
 static const size_t DEFAULT_IO_HISTORY          = 10000;
+static const size_t DEFAULT_RUNTIME_ACCESS_LOG  = 50000;  // Stage 6.20
 
 // ---------------------------------------------------------------------------
 // Impl — heap-allocated ring buffers + memory statistics
@@ -70,8 +71,13 @@ DebugBackend::DebugBackend(IDebugTarget &target)
     , fetchRemaining_(0)
     , impl_(new Impl())
     , rdb_(new RdbController())
+    , runtimeAccessLog_(new RingBuffer<RuntimeAccessLogEntry>(DEFAULT_RUNTIME_ACCESS_LOG))
 {
     clearActivityCounters();
+    // Initialize runtime access map (Stage 6.20)
+    for (int i = 0; i < 256; ++i) {
+        runtimeAccessMap_[i].address = static_cast<uint16_t>(i * 256);
+    }
     installMemoryCallbacks();
 }
 
@@ -81,6 +87,7 @@ DebugBackend::~DebugBackend()
     if (target_) {
         target_->setMemoryCallbacks(nullptr, nullptr);
     }
+    delete runtimeAccessLog_;
     delete impl_;
     delete rdb_;
 }
@@ -109,6 +116,10 @@ bool DebugBackend::loadRom(const std::string &path, uint32_t org)
     // Clear debug history
     clearHistory();
     instructionSequence_ = 0;
+
+    // Stage 6.20: Invalidate runtime analysis state from previous ROM
+    clearRuntimeAccessMap();
+    invalidateAllSnapshots();
 
     // Set state to Paused — regardless of previous running state.
     // running_ must be cleared so the emulation thread stops executing
@@ -719,7 +730,8 @@ void DebugBackend::onMemoryRead(uint32_t virt, uint32_t phys,
     MemoryAccessEvent ev;
     ev.instructionSequence = instructionSequence_;
 
-    if (fetchRemaining_ > 0) {
+    bool isFetch = fetchRemaining_ > 0;
+    if (isFetch) {
         ev.type = MemoryAccessType::Fetch;
         fetchRemaining_--;
     } else {
@@ -737,6 +749,27 @@ void DebugBackend::onMemoryRead(uint32_t virt, uint32_t phys,
     impl_->memStats[addr].reads++;
     impl_->memStats[addr].lastReadSequence = instructionSequence_;
     impl_->memStats[addr].lastReadTime = MemoryStats::Clock::now();
+
+    // Stage 6.20: Runtime Memory Access Map accumulation
+    {
+        int block = addr >> 8;
+        if (isFetch) {
+            runtimeAccessMap_[block].fetch = true;
+            runtimeAccessMap_[block].fetch_count++;
+        } else {
+            runtimeAccessMap_[block].read = true;
+            runtimeAccessMap_[block].read_count++;
+        }
+
+        // Stage 6.20: Runtime Access Log entry
+        RuntimeAccessLogEntry logEntry;
+        logEntry.address = addr;
+        logEntry.type = isFetch ? RuntimeAccessLogEntry::Fetch
+                                : RuntimeAccessLogEntry::Read;
+        logEntry.pc = target_->getCpuState().pc;
+        logEntry.value = value;
+        runtimeAccessLog_->push(logEntry);
+    }
 }
 
 void DebugBackend::onMemoryWrite(uint32_t virt, uint32_t phys,
@@ -766,6 +799,21 @@ void DebugBackend::onMemoryWrite(uint32_t virt, uint32_t phys,
         vramLastWrite_[idx].value    = value;
         vramLastWrite_[idx].pc       = target_->getCpuState().pc;
         vramLastWrite_[idx].sequence = instructionSequence_;
+    }
+
+    // Stage 6.20: Runtime Memory Access Map accumulation
+    {
+        int block = addr >> 8;
+        runtimeAccessMap_[block].write = true;
+        runtimeAccessMap_[block].write_count++;
+
+        // Stage 6.20: Runtime Access Log entry
+        RuntimeAccessLogEntry logEntry;
+        logEntry.address = addr;
+        logEntry.type = RuntimeAccessLogEntry::Write;
+        logEntry.pc = target_->getCpuState().pc;
+        logEntry.value = value;
+        runtimeAccessLog_->push(logEntry);
     }
 }
 
@@ -1942,4 +1990,135 @@ void DebugBackend::runUntilPause()
         // Loop back — if processCommand set running_ (Run command),
         // executeFramesTarget_() will be called at the top of the loop.
     }
+}
+
+// ---------------------------------------------------------------------------
+// Runtime Memory Access Map (Stage 6.20)
+// ---------------------------------------------------------------------------
+
+void DebugBackend::clearRuntimeAccessMap()
+{
+    std::lock_guard<std::mutex> lock(runtimeAccessMutex_);
+    for (int i = 0; i < 256; ++i) {
+        runtimeAccessMap_[i].address = static_cast<uint16_t>(i * 256);
+        runtimeAccessMap_[i].read   = false;
+        runtimeAccessMap_[i].write  = false;
+        runtimeAccessMap_[i].fetch  = false;
+        runtimeAccessMap_[i].read_count  = 0;
+        runtimeAccessMap_[i].write_count = 0;
+        runtimeAccessMap_[i].fetch_count = 0;
+    }
+    runtimeAccessLog_->clear();
+}
+
+std::vector<RuntimeAccessBlock> DebugBackend::getRuntimeAccessMap() const
+{
+    std::lock_guard<std::mutex> lock(runtimeAccessMutex_);
+    return std::vector<RuntimeAccessBlock>(
+        runtimeAccessMap_, runtimeAccessMap_ + 256);
+}
+
+std::vector<RuntimeAccessLogEntry> DebugBackend::getRuntimeAccessLog(size_t maxEntries) const
+{
+    auto all = runtimeAccessLog_->snapshot();
+    if (maxEntries > 0 && all.size() > maxEntries) {
+        // Return the most recent maxEntries entries (they are at the end)
+        return std::vector<RuntimeAccessLogEntry>(
+            all.end() - static_cast<long>(maxEntries), all.end());
+    }
+    return all;
+}
+
+// ---------------------------------------------------------------------------
+// Memory Snapshots (Stage 6.20)
+// ---------------------------------------------------------------------------
+
+uint32_t DebugBackend::createMemorySnapshot(uint16_t start, size_t size)
+{
+    if (!target_) return 0;
+    if (size == 0 || static_cast<uint32_t>(start) + size > 0x10000) return 0;
+
+    MemorySnapshotData snap;
+    snap.start_address = start;
+    snap.data.resize(size);
+    for (size_t i = 0; i < size; ++i) {
+        snap.data[i] = target_->readMemoryRaw(static_cast<uint16_t>(start + i));
+    }
+
+    std::lock_guard<std::mutex> lock(snapshotMutex_);
+    uint32_t id = nextSnapshotId_++;
+    snap.snapshot_id = id;
+    snapshots_[id] = std::move(snap);
+    return id;
+}
+
+MemorySnapshotData DebugBackend::getMemorySnapshot(uint32_t id) const
+{
+    std::lock_guard<std::mutex> lock(snapshotMutex_);
+    auto it = snapshots_.find(id);
+    if (it == snapshots_.end()) {
+        return {};  // empty/invalid
+    }
+    return it->second;
+}
+
+MemorySnapshotDiff DebugBackend::compareMemorySnapshots(uint32_t idA, uint32_t idB) const
+{
+    MemorySnapshotDiff diff;
+
+    std::lock_guard<std::mutex> lock(snapshotMutex_);
+    auto itA = snapshots_.find(idA);
+    auto itB = snapshots_.find(idB);
+    if (itA == snapshots_.end() || itB == snapshots_.end()) {
+        return diff;  // empty diff for invalid snapshots
+    }
+
+    const auto &a = itA->second;
+    const auto &b = itB->second;
+
+    // Both snapshots must cover the same range
+    if (a.start_address != b.start_address || a.data.size() != b.data.size()) {
+        return diff;
+    }
+
+    // Find changed bytes and merge into contiguous ranges
+    size_t len = a.data.size();
+    bool inRange = false;
+    uint16_t rangeStart = 0;
+    size_t rangeSize = 0;
+
+    for (size_t i = 0; i < len; ++i) {
+        if (a.data[i] != b.data[i]) {
+            if (!inRange) {
+                rangeStart = static_cast<uint16_t>(a.start_address + i);
+                rangeSize = 1;
+                inRange = true;
+            } else {
+                ++rangeSize;
+            }
+        } else {
+            if (inRange) {
+                diff.changed_ranges.push_back({rangeStart, rangeSize});
+                inRange = false;
+            }
+        }
+    }
+    // Close any open range at the end
+    if (inRange) {
+        diff.changed_ranges.push_back({rangeStart, rangeSize});
+    }
+
+    return diff;
+}
+
+bool DebugBackend::deleteMemorySnapshot(uint32_t id)
+{
+    std::lock_guard<std::mutex> lock(snapshotMutex_);
+    return snapshots_.erase(id) > 0;
+}
+
+void DebugBackend::invalidateAllSnapshots()
+{
+    std::lock_guard<std::mutex> lock(snapshotMutex_);
+    snapshots_.clear();
 }

@@ -444,4 +444,66 @@ json rdbLinksToJson(uint16_t source, const std::vector<uint16_t> &links) {
     };
 }
 
+// ---------------------------------------------------------------------------
+// Runtime Memory Analysis types (Stage 6.20)
+// ---------------------------------------------------------------------------
+
+json runtimeAccessBlockToJson(const RuntimeAccessBlock &block) {
+    return {
+        {"address",     mcp_json::hex16(block.address)},
+        {"size",        256},
+        {"read",        block.read},
+        {"write",       block.write},
+        {"fetch",       block.fetch},
+        {"read_count",  static_cast<int64_t>(block.read_count)},
+        {"write_count", static_cast<int64_t>(block.write_count)},
+        {"fetch_count", static_cast<int64_t>(block.fetch_count)}
+    };
+}
+
+json runtimeAccessBlocksToJson(const std::vector<RuntimeAccessBlock> &blocks) {
+    json arr = json::array();
+    // Only return blocks that have any activity (to reduce MCP traffic)
+    for (const auto &b : blocks) {
+        if (b.read || b.write || b.fetch) {
+            arr.push_back(runtimeAccessBlockToJson(b));
+        }
+    }
+    return arr;
+}
+
+json runtimeAccessLogEntryToJson(const RuntimeAccessLogEntry &entry) {
+    const char *typeStr = "read";
+    switch (entry.type) {
+        case RuntimeAccessLogEntry::Read:  typeStr = "read"; break;
+        case RuntimeAccessLogEntry::Write: typeStr = "write"; break;
+        case RuntimeAccessLogEntry::Fetch: typeStr = "fetch"; break;
+    }
+    return {
+        {"address", mcp_json::hex16(entry.address)},
+        {"type",    typeStr},
+        {"pc",      mcp_json::hex16(entry.pc)},
+        {"value",   mcp_json::hex8(entry.value)}
+    };
+}
+
+json runtimeAccessLogEntriesToJson(const std::vector<RuntimeAccessLogEntry> &entries) {
+    json arr = json::array();
+    for (const auto &e : entries) {
+        arr.push_back(runtimeAccessLogEntryToJson(e));
+    }
+    return arr;
+}
+
+json memorySnapshotDiffToJson(const MemorySnapshotDiff &diff) {
+    json ranges = json::array();
+    for (const auto &r : diff.changed_ranges) {
+        ranges.push_back({
+            {"address", mcp_json::hex16(r.address)},
+            {"size",    static_cast<int>(r.size)}
+        });
+    }
+    return {{"changed_ranges", ranges}};
+}
+
 } // namespace mcp_json

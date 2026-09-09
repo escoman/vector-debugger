@@ -1068,6 +1068,107 @@ AgentApi::getMemoryMap()
 }
 
 // ---------------------------------------------------------------------------
+// Runtime Memory Analysis (Stage 6.20)
+// ---------------------------------------------------------------------------
+
+AgentApiResult<void> AgentApi::clearMemoryAccessMap()
+{
+    auto t0 = std::chrono::steady_clock::now();
+    backend_.clearRuntimeAccessMap();
+    log_.record("clearMemoryAccessMap", "", "ok", elapsedMs(t0));
+    return AgentApiResult<void>::ok();
+}
+
+AgentApiResult<std::vector<RuntimeAccessBlock>> AgentApi::getMemoryAccessMap()
+{
+    auto t0 = std::chrono::steady_clock::now();
+    auto blocks = backend_.getRuntimeAccessMap();
+    log_.record("getMemoryAccessMap", "", "256 blocks", elapsedMs(t0));
+    return AgentApiResult<std::vector<RuntimeAccessBlock>>::ok(std::move(blocks));
+}
+
+AgentApiResult<std::vector<RuntimeAccessLogEntry>> AgentApi::getMemoryAccessLog(size_t maxEntries)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    if (maxEntries > AgentLimits::MAX_MEMORY_ACCESS_LOG) {
+        maxEntries = AgentLimits::MAX_MEMORY_ACCESS_LOG;
+    }
+    auto entries = backend_.getRuntimeAccessLog(maxEntries);
+    std::ostringstream oss;
+    oss << "max=" << maxEntries << " got=" << entries.size();
+    log_.record("getMemoryAccessLog", oss.str(),
+                std::to_string(entries.size()) + " entries", elapsedMs(t0));
+    return AgentApiResult<std::vector<RuntimeAccessLogEntry>>::ok(std::move(entries));
+}
+
+AgentApiResult<uint32_t> AgentApi::createMemorySnapshot(uint16_t start, size_t size)
+{
+    auto t0 = std::chrono::steady_clock::now();
+
+    // Overflow check
+    uint32_t endAddr = static_cast<uint32_t>(start) + size;
+    if (endAddr > 0x10000) {
+        log_.record("createMemorySnapshot",
+                    "start=" + std::to_string(start) + " size=" + std::to_string(size),
+                    "range overflow", elapsedMs(t0), false, "address + size exceeds 64K");
+        return AgentApiResult<uint32_t>::fail(
+            ErrorCode::InvalidRange, "address + size exceeds 64K address space");
+    }
+
+    uint32_t id = backend_.createMemorySnapshot(start, size);
+    if (id == 0) {
+        log_.record("createMemorySnapshot", "", "failed", elapsedMs(t0), false, "snapshot creation failed");
+        return AgentApiResult<uint32_t>::fail(
+            ErrorCode::OperationFailed, "Failed to create memory snapshot");
+    }
+
+    std::ostringstream oss;
+    oss << "id=" << id << " start=" << std::hex << start << " size=" << std::dec << size;
+    log_.record("createMemorySnapshot", oss.str(), "ok", elapsedMs(t0));
+    return AgentApiResult<uint32_t>::ok(id);
+}
+
+AgentApiResult<MemorySnapshotData> AgentApi::getMemorySnapshot(uint32_t snapshotId)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    auto snap = backend_.getMemorySnapshot(snapshotId);
+    if (snap.data.empty()) {
+        log_.record("getMemorySnapshot", "id=" + std::to_string(snapshotId),
+                    "not found", elapsedMs(t0), false, "snapshot not found or invalidated");
+        return AgentApiResult<MemorySnapshotData>::fail(
+            ErrorCode::NotFound, "Snapshot not found or invalidated");
+    }
+    std::ostringstream oss;
+    oss << "id=" << snapshotId << " size=" << snap.data.size();
+    log_.record("getMemorySnapshot", oss.str(), "ok", elapsedMs(t0));
+    return AgentApiResult<MemorySnapshotData>::ok(std::move(snap));
+}
+
+AgentApiResult<MemorySnapshotDiff> AgentApi::compareMemorySnapshots(uint32_t idA, uint32_t idB)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    auto diff = backend_.compareMemorySnapshots(idA, idB);
+
+    // Check if both snapshots existed (empty diff could mean identical or invalid)
+    auto snapA = backend_.getMemorySnapshot(idA);
+    auto snapB = backend_.getMemorySnapshot(idB);
+    if (snapA.data.empty() || snapB.data.empty()) {
+        log_.record("compareMemorySnapshots",
+                    "a=" + std::to_string(idA) + " b=" + std::to_string(idB),
+                    "not found", elapsedMs(t0), false, "one or both snapshots not found");
+        return AgentApiResult<MemorySnapshotDiff>::fail(
+            ErrorCode::NotFound, "One or both snapshots not found or invalidated");
+    }
+
+    std::ostringstream oss;
+    oss << "a=" << idA << " b=" << idB << " ranges=" << diff.changed_ranges.size();
+    log_.record("compareMemorySnapshots", oss.str(),
+                std::to_string(diff.changed_ranges.size()) + " changed ranges",
+                elapsedMs(t0));
+    return AgentApiResult<MemorySnapshotDiff>::ok(std::move(diff));
+}
+
+// ---------------------------------------------------------------------------
 // Screen Info (Stage 6.1 §20)
 // ---------------------------------------------------------------------------
 

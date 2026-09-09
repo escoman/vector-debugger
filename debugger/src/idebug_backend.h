@@ -2,6 +2,7 @@
 
 #include "debugger_types.h"
 #include "symbol_database.h"
+#include "agent_types.h"  // Stage 6.20: RuntimeAccessBlock, MemorySnapshotData, etc.
 
 #include <chrono>
 #include <cstdint>
@@ -249,4 +250,34 @@ public:
 
     virtual RdbController       &rdbController() = 0;
     virtual const RdbController &rdbController() const = 0;
+
+    // -- Runtime Memory Access Map (Stage 6.20) ------------------------------
+
+    // Clear the accumulated runtime memory access map and access log.
+    // Does NOT reset CPU, Board, unload ROM, or modify RDB.
+    virtual void clearRuntimeAccessMap() = 0;
+
+    // Get the 256-block runtime memory access map (256 bytes per block).
+    virtual std::vector<RuntimeAccessBlock> getRuntimeAccessMap() const = 0;
+
+    // Get the bounded runtime memory access log (most recent entries).
+    virtual std::vector<RuntimeAccessLogEntry> getRuntimeAccessLog(size_t maxEntries) const = 0;
+
+    // -- Memory Snapshots (Stage 6.20) ---------------------------------------
+
+    // Create a memory snapshot covering [start, start+size).
+    // Returns a snapshot_id (0 on failure).
+    virtual uint32_t createMemorySnapshot(uint16_t start, size_t size) = 0;
+
+    // Retrieve a snapshot by id.  Returns empty data if not found/invalidated.
+    virtual MemorySnapshotData getMemorySnapshot(uint32_t id) const = 0;
+
+    // Compare two snapshots.  Returns merged changed ranges.
+    virtual MemorySnapshotDiff compareMemorySnapshots(uint32_t idA, uint32_t idB) const = 0;
+
+    // Delete a single snapshot.  Returns true if it existed.
+    virtual bool deleteMemorySnapshot(uint32_t id) = 0;
+
+    // Invalidate all snapshots (called on ROM load).
+    virtual void invalidateAllSnapshots() = 0;
 };

@@ -16,6 +16,7 @@
 #include "idebug_backend.h"
 #include "debug_target.h"
 #include "rdb_controller.h"
+#include "ring_buffer.h"
 
 // ---------------------------------------------------------------------------
 // Result of a single-instruction step (kept for backward compatibility)
@@ -176,6 +177,20 @@ public:
 
     RdbController       &rdbController() override { return *rdb_; }
     const RdbController &rdbController() const override { return *rdb_; }
+
+    // -- IDebugBackend: Runtime Memory Access Map (Stage 6.20) ---------------
+
+    void clearRuntimeAccessMap() override;
+    std::vector<RuntimeAccessBlock> getRuntimeAccessMap() const override;
+    std::vector<RuntimeAccessLogEntry> getRuntimeAccessLog(size_t maxEntries) const override;
+
+    // -- IDebugBackend: Memory Snapshots (Stage 6.20) ------------------------
+
+    uint32_t createMemorySnapshot(uint16_t start, size_t size) override;
+    MemorySnapshotData getMemorySnapshot(uint32_t id) const override;
+    MemorySnapshotDiff compareMemorySnapshots(uint32_t idA, uint32_t idB) const override;
+    bool deleteMemorySnapshot(uint32_t id) override;
+    void invalidateAllSnapshots() override;
 
     // -- IDebugBackend: symbol commands (Stage 5.3.1) -----------------------
 
@@ -384,6 +399,23 @@ private:
 
     // Load .rdb file if it exists; create empty in-memory RDB otherwise
     void loadRdb(const std::string &romPath);
+
+    // -- Runtime Memory Access Map (Stage 6.20) ------------------------------
+
+    // 256 blocks × 256 bytes covering 64K address space.
+    // Accumulated in onMemoryRead/onMemoryWrite (emulation thread only).
+    RuntimeAccessBlock runtimeAccessMap_[256];
+
+    // Bounded log of individual memory accesses.
+    RingBuffer<RuntimeAccessLogEntry> *runtimeAccessLog_;
+
+    mutable std::mutex runtimeAccessMutex_;
+
+    // -- Memory Snapshots (Stage 6.20) ---------------------------------------
+
+    std::map<uint32_t, MemorySnapshotData> snapshots_;
+    uint32_t nextSnapshotId_ = 1;
+    mutable std::mutex snapshotMutex_;
 
 private:
 

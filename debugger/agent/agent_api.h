@@ -124,6 +124,25 @@ public:
     AgentApiResult<std::vector<MemoryMapBlock>>
     getMemoryMap();
 
+    // -- Runtime Memory Analysis (Stage 6.20) --------------------------------
+
+    AgentApiResult<void> clearMemoryAccessMap();
+
+    AgentApiResult<std::vector<RuntimeAccessBlock>>
+    getMemoryAccessMap();
+
+    AgentApiResult<std::vector<RuntimeAccessLogEntry>>
+    getMemoryAccessLog(size_t maxEntries = 1000);
+
+    AgentApiResult<uint32_t>
+    createMemorySnapshot(uint16_t start = 0, size_t size = 65536);
+
+    AgentApiResult<MemorySnapshotData>
+    getMemorySnapshot(uint32_t snapshotId);
+
+    AgentApiResult<MemorySnapshotDiff>
+    compareMemorySnapshots(uint32_t idA, uint32_t idB);
+
     // -- Screen Info ---------------------------------------------------------
 
     AgentApiResult<ScreenInfoResult> getScreenInfo();

@@ -84,6 +84,7 @@ void McpServer::registerAllTools() {
     registerRomTools();
     registerAnnotationTools();
     registerRdbTools();
+    registerRuntimeAnalysisTools();  // Stage 6.20
 }
 
 void McpServer::runStdio() {
@@ -1392,6 +1393,112 @@ void McpServer::registerRdbTools() {
             auto r = api_.getRdbLinks(source);
             if (!r.success) return errorContent("get_rdb_links_failed", r.error_message);
             return textContent(mcp_json::rdbLinksToJson(source, r.value));
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Runtime Memory Analysis tools (Stage 6.20) — 5 tools
+// ---------------------------------------------------------------------------
+
+void McpServer::registerRuntimeAnalysisTools() {
+    // debug_clear_memory_access_map
+    {
+        auto tool = mcp::tool_builder("debug_clear_memory_access_map")
+            .with_description("Clear the runtime memory access map and access log. "
+                              "Does not reset CPU, Board, or unload ROM.")
+            .build();
+        registerTool(tool, [this](const mcp::json &, const std::string &) -> mcp::json {
+            auto r = api_.clearMemoryAccessMap();
+            if (!r.success) return errorContent("clear_memory_access_map_failed", r.error_message);
+            return textContent(mcp_json::successVoidResult());
+        });
+    }
+
+    // debug_get_memory_access_map
+    {
+        auto tool = mcp::tool_builder("debug_get_memory_access_map")
+            .with_description("Get the runtime memory access map (256 blocks of 256 bytes). "
+                              "Only active blocks (with read/write/fetch activity) are returned.")
+            .build();
+        registerTool(tool, [this](const mcp::json &, const std::string &) -> mcp::json {
+            auto r = api_.getMemoryAccessMap();
+            if (!r.success) return errorContent("get_memory_access_map_failed", r.error_message);
+            return textContent({
+                {"total_blocks", 256},
+                {"active_blocks", static_cast<int>(r.value.size())},
+                {"blocks", mcp_json::runtimeAccessBlocksToJson(r.value)}
+            });
+        });
+    }
+
+    // debug_get_memory_access_log
+    {
+        auto tool = mcp::tool_builder("debug_get_memory_access_log")
+            .with_description("Get the bounded runtime memory access log. "
+                              "Each entry has address, type (read/write/fetch), PC, and value.")
+            .with_number_param("max_entries", "Maximum entries to return (default 1000)", false)
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            size_t maxEntries = getCount(params, "max_entries", 1000);
+            auto r = api_.getMemoryAccessLog(maxEntries);
+            if (!r.success) return errorContent("get_memory_access_log_failed", r.error_message);
+            return textContent({
+                {"count", static_cast<int>(r.value.size())},
+                {"entries", mcp_json::runtimeAccessLogEntriesToJson(r.value)}
+            });
+        });
+    }
+
+    // debug_create_memory_snapshot
+    {
+        auto tool = mcp::tool_builder("debug_create_memory_snapshot")
+            .with_description("Create a snapshot of the current memory state. "
+                              "Returns a snapshot_id for later comparison.")
+            .with_number_param("address", "Start address (default 0)", false)
+            .with_number_param("size", "Number of bytes (default 65536 = full 64K)", false)
+            .build();
+        addNumericConstraint(tool, "address", 0, 65535);
+        addNumericConstraint(tool, "size", 1, 65536);
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            uint16_t addr = 0;
+            size_t size = 65536;
+            if (params.contains("address")) {
+                addr = static_cast<uint16_t>(params["address"].get<int>());
+            }
+            if (params.contains("size")) {
+                size = static_cast<size_t>(params["size"].get<int>());
+            }
+            auto r = api_.createMemorySnapshot(addr, size);
+            if (!r.success) return errorContent("create_memory_snapshot_failed", r.error_message);
+            return textContent({
+                {"snapshot_id", static_cast<int>(r.value)},
+                {"address", mcp_json::hex16(addr)},
+                {"size", static_cast<int>(size)}
+            });
+        });
+    }
+
+    // debug_compare_memory_snapshots
+    {
+        auto tool = mcp::tool_builder("debug_compare_memory_snapshots")
+            .with_description("Compare two memory snapshots. Returns changed ranges as merged contiguous blocks.")
+            .with_number_param("snapshot_a", "First snapshot ID")
+            .with_number_param("snapshot_b", "Second snapshot ID")
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            if (!params.contains("snapshot_a") || !params.contains("snapshot_b")) {
+                throw mcp::mcp_exception(mcp::error_code::invalid_params,
+                    "missing required parameters: snapshot_a, snapshot_b");
+            }
+            uint32_t idA = static_cast<uint32_t>(params["snapshot_a"].get<int>());
+            uint32_t idB = static_cast<uint32_t>(params["snapshot_b"].get<int>());
+            auto r = api_.compareMemorySnapshots(idA, idB);
+            if (!r.success) return errorContent("compare_memory_snapshots_failed", r.error_message);
+            auto diffJson = mcp_json::memorySnapshotDiffToJson(r.value);
+            diffJson["snapshot_a"] = static_cast<int>(idA);
+            diffJson["snapshot_b"] = static_cast<int>(idB);
+            return textContent(diffJson);
         });
     }
 }

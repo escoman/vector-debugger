@@ -65,6 +65,7 @@ private:
     void registerRomTools();
     void registerAnnotationTools();
     void registerRdbTools();
+    void registerRuntimeAnalysisTools();  // Stage 6.20
 
     // Register a tool with both cpp-mcp server and local handler map.
     void registerTool(const mcp::tool &tool, mcp::tool_handler handler);
