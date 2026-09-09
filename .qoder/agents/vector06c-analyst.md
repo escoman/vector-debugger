@@ -168,3 +168,35 @@ ROM mapping незавершён без:
 
 - Спорные участки проверяй дополнительными MCP-запросами (execution trace, I/O trace).
 - Принцип: Suspicious claim → Additional evidence → Validated / Rejected / Unknown.
+
+---
+
+## Workflow: ASM Export
+
+После завершения mapping/RDB используй штатный ASM exporter для генерации Z88DK-совместимого кода:
+
+```
+Load ROM
+ ↓
+debug_analyze_code
+ ↓
+debug_read_memory_range
+ ↓
+RDB mapping (functions, data, labels)
+ ↓
+RDB links
+ ↓
+save RDB (debug_save_rdb)
+ ↓
+ASM exporter (v06c-asm-export CLI)
+ ↓
+build with z80asm
+ ↓
+verify bytes
+```
+
+**Важно:**
+- Exporter используется только после завершения mapping/RDB
+- Exporter не является MCP tool — это отдельный CLI инструмент
+- Exporter не создаёт собственный decoder — использует существующий disassembler
+- RDB является основным источником имён, типов и ссылок

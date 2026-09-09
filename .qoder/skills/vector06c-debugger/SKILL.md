@@ -515,6 +515,35 @@ Confidence: [High/Medium/Low]
 
 ---
 
+## Генерация Z88DK ASM
+
+Для генерации Z88DK/z80asm-compatible `.asm` файлов используй **штатный ASM exporter** (`v06c-asm-export`).
+
+**Запрещено:**
+- Создавать собственный `generate_asm.py` или аналогичные скрипты
+- Создавать собственный 8080 decoder или disassembler
+- Использовать сторонние дизассемблеры
+
+**Правильный workflow:**
+1. Загрузи ROM и выполни анализ через `debug_analyze_code`
+2. Создай/обнови RDB mapping (функции, данные, labels)
+3. Сохрани RDB
+4. Запусти ASM exporter:
+   ```bash
+   v06c-asm-export --rom <file.rom> --rdb <file.rdb> --output <dir>
+   ```
+5. Результат — готовый к сборке через `z80asm`
+
+ASM exporter автоматически:
+- Конвертирует 8080 mnemonics в z80asm синтаксис (lowercase, `h` suffix для hex)
+- Разделяет CODE и DATA секции
+- Использует RDB как основной источник имён/типов/ссылок
+- Генерирует стабильные labels для CALL/JMP targets
+- Переносит RDB comments
+- Создаёт `export.json` manifest
+
+---
+
 ## Правило "Документация прежде кода" (обязательно)
 
 **Перед генерацией ЛЮБОГО файла сначала прочитай соответствующую документацию.**

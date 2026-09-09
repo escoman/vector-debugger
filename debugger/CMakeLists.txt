@@ -717,6 +717,53 @@ if(ENABLE_AI_AGENT)
     )
 endif()
 
+# ---------------------------------------------------------------------------
+# ASM Exporter (Stage 6.17) — Z88DK ASM export CLI tool
+# ---------------------------------------------------------------------------
+
+set(EXPORT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/export)
+
+add_executable(v06c-asm-export
+    ${EXPORT_DIR}/asm_exporter.cpp
+    ${EXPORT_DIR}/asm_exporter_main.cpp
+)
+
+target_include_directories(v06c-asm-export PRIVATE
+    ${EXPORT_DIR}
+    ${AGENT_DIR}
+    ${DBG_SRC_DIR}
+    ${SRC_DIR}
+    ${DBG_RDB_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty
+)
+
+target_link_libraries(v06c-asm-export
+    debugger_core
+    ${Boost_LIBRARIES}
+    pthread
+)
+
+# ASM Exporter tests (Stage 6.17)
+add_executable(test_asm_exporter
+    ${DBG_TST_DIR}/test_asm_exporter.cpp
+    ${EXPORT_DIR}/asm_exporter.cpp
+)
+
+target_include_directories(test_asm_exporter PRIVATE
+    ${EXPORT_DIR}
+    ${AGENT_DIR}
+    ${DBG_SRC_DIR}
+    ${SRC_DIR}
+    ${DBG_RDB_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty
+)
+
+target_link_libraries(test_asm_exporter
+    debugger_core
+    ${Boost_LIBRARIES}
+    pthread
+)
+
 include_directories(${SDL2_INCLUDE_DIR})
 include_directories(${IMGUI_DIR})
 include_directories(${IMGUI_DIR}/backends)
