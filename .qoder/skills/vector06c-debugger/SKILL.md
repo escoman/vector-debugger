@@ -138,6 +138,20 @@ RDB (ROM Database) является **единственным хранилищ�
 - Вручную генерировать `.map` для хранения результатов анализа.
 - Сохранять результаты анализа вне RDB.
 
+### Функции vs RDB-объекты
+
+В debugger существуют **две разные сущности**:
+
+| Сущность | Создание | Переименование | Удаление |
+|----------|----------|----------------|----------|
+| Function symbol | `debug_create_function` | `debug_rename_function` | `debug_delete_function` |
+| RDB object | `debug_add_rdb_object` | `debug_update_rdb_object` | `debug_remove_rdb_object` |
+
+**Важно:**
+- `debug_rename_function` работает **только** с function symbols, не с RDB-объектами.
+- Для переименования RDB-объекта используй `debug_update_rdb_object(address, name, type, size)` — он обновляет имя, тип и размер существующего объекта.
+- Не нужно удалять и пересоздавать RDB-объект для переименования — используй `debug_update_rdb_object`.
+
 ### RDB Links — связи между объектами
 
 Связи представляют подтверждённые семантические отношения между объектами RDB.

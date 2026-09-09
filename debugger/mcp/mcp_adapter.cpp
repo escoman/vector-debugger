@@ -1076,7 +1076,8 @@ void McpServer::registerAnnotationTools() {
     // debug_rename_function
     {
         auto tool = mcp::tool_builder("debug_rename_function")
-            .with_description("Rename a function.")
+            .with_description("Rename a function symbol (created via debug_create_function). "
+                              "For RDB objects use debug_update_rdb_object instead.")
             .with_number_param("address", "Function address (0..65535)")
             .with_string_param("name", "New function name")
             .build();
@@ -1239,7 +1240,8 @@ void McpServer::registerRdbTools() {
     // debug_update_rdb_object
     {
         auto tool = mcp::tool_builder("debug_update_rdb_object")
-            .with_description("Update an existing RDB object's name, type, and size.")
+            .with_description("Update an existing RDB object's name, type, and size. "
+                              "Use this to rename RDB objects (not debug_rename_function, which is for function symbols only).")
             .with_number_param("address", "Object address (0..65535)")
             .with_string_param("name", "New name")
             .with_string_param("type", "New type")

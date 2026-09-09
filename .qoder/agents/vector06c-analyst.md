@@ -112,6 +112,15 @@ Workflow:
 
 **Запрещено:** вручную генерировать JSON RDB, редактировать `.rdb` как текст, генерировать `.map` для хранения результатов.
 
+### Функции vs RDB-объекты
+
+| Сущность | Создание | Переименование | Удаление |
+|----------|----------|----------------|----------|
+| Function symbol | `debug_create_function` | `debug_rename_function` | `debug_delete_function` |
+| RDB object | `debug_add_rdb_object` | `debug_update_rdb_object` | `debug_remove_rdb_object` |
+
+`debug_rename_function` работает только с function symbols. Для переименования RDB-объекта используй `debug_update_rdb_object`.
+
 ### ROM Mapping Entry Point
 
 Первичное построение карты ROM всегда начинается с `0x0000`. `_main` не является точкой входа ROM mapping.
