@@ -1190,6 +1190,15 @@ void DebugBackend::executeCommand(Command &cmd)
         if (!ok) {
             result.error = "symbol not found";
             result.status = CommandResult::Failed;
+        } else {
+            // Stage 6.20.2: Also update RDB object name so debug_save_rdb
+            // persists the rename. Mirrors CreateFunction dual-update pattern.
+            const RdbObject *existing = rdb_->getObject(cmd.address);
+            if (existing) {
+                RdbObject updated = *existing;
+                updated.name = cmd.name;
+                rdb_->updateObject(updated);
+            }
         }
         break;
     }
@@ -1199,6 +1208,10 @@ void DebugBackend::executeCommand(Command &cmd)
         if (!ok) {
             result.error = "symbol not found";
             result.status = CommandResult::Failed;
+        } else {
+            // Stage 6.20.2: Also update RDB object comment so debug_save_rdb
+            // persists the comment. Mirrors CreateFunction dual-update pattern.
+            rdb_->setComment(cmd.address, cmd.comment);
         }
         break;
     }

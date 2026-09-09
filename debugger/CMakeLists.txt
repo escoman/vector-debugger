@@ -649,6 +649,28 @@ if(ENABLE_AI_AGENT)
         pthread
     )
 
+    # RDB Save Symbol Sync tests (Stage 6.20.2)
+    # Verifies rename/comment propagate to RDB for debug_save_rdb.
+add_executable(test_agent_rdb_save_sync
+${AGENT_DIR}/tests/test_agent_rdb_save_sync.cpp
+        ${DBG_SOURCES}
+        ${RDB_SOURCES}
+        ${CORE_SOURCES}
+        ${SRC_DIR}/options.cpp
+    )
+
+target_include_directories(test_agent_rdb_save_sync PRIVATE
+        ${AGENT_DIR}
+        ${DBG_SRC_DIR}
+        ${SRC_DIR}
+    )
+
+target_link_libraries(test_agent_rdb_save_sync
+        debugger_agent
+        ${Boost_LIBRARIES}
+        pthread
+    )
+
     # -----------------------------------------------------------------------
     # MCP Adapter Module (Stage 6.4)
     # -----------------------------------------------------------------------
