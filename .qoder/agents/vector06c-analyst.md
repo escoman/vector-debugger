@@ -125,14 +125,14 @@ ROM mapping незавершён без:
 
 ## MCP Tools
 
-Сервер `vector-debugger` предоставляет 54 инструмента `debug_*`:
+Сервер `vector-debugger` предоставляет 55 инструментов `debug_*`:
 
 - **Execution**: `debug_run`, `debug_pause`, `debug_step`, `debug_reset`, `debug_is_running`
 - **CPU**: `debug_get_cpu_state`, `debug_get_registers`, `debug_set_register`
 - **Memory**: `debug_read_memory`, `debug_write_memory`, `debug_read_memory_range`
 - **I/O**: `debug_read_io`, `debug_write_io`
 - **Breakpoints**: `debug_set_breakpoint`, `debug_remove_breakpoint`, `debug_list_breakpoints`, `debug_clear_breakpoints`
-- **Disassembly & Analysis**: `debug_disassemble`, `debug_analyze_code`, `debug_get_instruction_history`, `debug_get_execution_trace`
+- **Disassembly & Analysis**: `debug_disassemble`, `debug_analyze_code`, `debug_disassemble_range`, `debug_get_instruction_history`, `debug_get_execution_trace`
 - **Stack**: `debug_get_stack`
 - **Symbols**: `debug_get_symbols`, `debug_get_function`, `debug_get_function_context`, `debug_get_xrefs`, `debug_get_call_graph`
 - **Memory Map / Video**: `debug_get_memory_map`, `debug_get_vram_info`, `debug_get_screen_info`

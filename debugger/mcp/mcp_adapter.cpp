@@ -607,20 +607,64 @@ void McpServer::registerDisassemblyTools() {
         });
     }
 
-    // debug_analyze_code (Stage 6.16)
+    // debug_analyze_code (Stage 6.16, 6.19 — multi-entry)
     {
         auto tool = mcp::tool_builder("debug_analyze_code")
-            .with_description("Analyze reachable 8080 machine code from an entry point using control-flow analysis. "
-                              "Follows JMP/CALL/Jcc/RST targets. Does NOT modify RDB.")
-            .with_number_param("start_address", "Entry point address (0..65535)")
+            .with_description("Analyze reachable 8080 machine code using control-flow analysis. "
+                              "Follows JMP/CALL/Jcc/RST targets. Does NOT modify RDB. "
+                              "Use 'start_address' for single entry point or 'addresses' for multi-entry analysis.")
+            .with_number_param("start_address", "Entry point address (0..65535). Mutually exclusive with 'addresses'", false)
+            .with_array_param("addresses", "Array of entry point addresses (0..65535). Mutually exclusive with 'start_address'", "integer", false)
             .with_number_param("max_instructions", "Maximum instructions to analyze (default 1000)", false)
             .build();
         addNumericConstraint(tool, "start_address", 0, 65535);
         addNumericConstraint(tool, "max_instructions", 1, static_cast<int>(AgentLimits::MAX_CODE_ANALYSIS_INSTRUCTIONS));
         registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
-            uint16_t startAddr = getAddress(params, "start_address");
+            bool hasStartAddr = params.contains("start_address");
+            bool hasAddresses = params.contains("addresses");
+
+            if (hasStartAddr && hasAddresses) {
+                throw mcp::mcp_exception(mcp::error_code::invalid_params,
+                    "'start_address' and 'addresses' are mutually exclusive");
+            }
+            if (!hasStartAddr && !hasAddresses) {
+                throw mcp::mcp_exception(mcp::error_code::invalid_params,
+                    "either 'start_address' or 'addresses' is required");
+            }
+
             size_t maxInstr = getCount(params, "max_instructions", 1000);
-            auto r = api_.analyzeCode(startAddr, maxInstr);
+            AgentApiResult<CodeAnalysisResult> r;
+
+            if (hasAddresses) {
+                const auto &arr = params["addresses"];
+                if (!arr.is_array()) {
+                    throw mcp::mcp_exception(mcp::error_code::invalid_params,
+                        "'addresses' must be an array");
+                }
+                if (arr.empty()) {
+                    throw mcp::mcp_exception(mcp::error_code::invalid_params,
+                        "'addresses' must not be empty");
+                }
+                if (arr.size() > AgentLimits::MAX_ANALYSIS_ENTRY_POINTS) {
+                    throw mcp::mcp_exception(mcp::error_code::invalid_params,
+                        "'addresses' count exceeds limit (" +
+                        std::to_string(AgentLimits::MAX_ANALYSIS_ENTRY_POINTS) + ")");
+                }
+                std::vector<uint16_t> entryPoints;
+                for (const auto &v : arr) {
+                    int addr = v.get<int>();
+                    if (addr < 0 || addr > 65535) {
+                        throw mcp::mcp_exception(mcp::error_code::invalid_params,
+                            "each address must be 0..65535");
+                    }
+                    entryPoints.push_back(static_cast<uint16_t>(addr));
+                }
+                r = api_.analyzeCode(entryPoints, maxInstr);
+            } else {
+                uint16_t startAddr = getAddress(params, "start_address");
+                r = api_.analyzeCode(startAddr, maxInstr);
+            }
+
             if (!r.success) return errorContent("analyze_code_failed", r.error_message);
 
             const auto &a = r.value;
@@ -663,9 +707,16 @@ void McpServer::registerDisassemblyTools() {
                 });
             }
 
+            mcp::json eps = mcp::json::array();
+            for (auto ep : a.entryPoints) {
+                eps.push_back(mcp_json::hex16(ep));
+            }
+
             return textContent({
                 {"entry_point",     mcp_json::hex16(a.entryPoint)},
+                {"entry_points",    eps},
                 {"instruction_count", static_cast<int>(a.instructionCount)},
+                {"code_bytes",      static_cast<int>(a.codeBytes)},
                 {"truncated",       a.truncated},
                 {"instructions",    instrs},
                 {"references",      refs},

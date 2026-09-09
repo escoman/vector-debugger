@@ -405,7 +405,7 @@ Hardware status: UNVERIFIED
 
 ## MCP Tools
 
-Сервер `vector-debugger` предоставляет 52 инструмента `debug_*`:
+Сервер `vector-debugger` предоставляет 55 инструментов `debug_*`:
 
 **Execution**: `debug_run`, `debug_pause`, `debug_step`, `debug_reset`, `debug_is_running`
 
@@ -417,7 +417,7 @@ Hardware status: UNVERIFIED
 
 **Breakpoints**: `debug_set_breakpoint`, `debug_remove_breakpoint`, `debug_list_breakpoints`, `debug_clear_breakpoints`
 
-**Disassembly**: `debug_disassemble`, `debug_analyze_code`, `debug_get_instruction_history`, `debug_get_execution_trace`
+**Disassembly & Analysis**: `debug_disassemble`, `debug_analyze_code`, `debug_disassemble_range`, `debug_get_instruction_history`, `debug_get_execution_trace`
 
 **Stack**: `debug_get_stack`
 
@@ -561,6 +561,27 @@ debug_disassemble_range
         ↓
 анализ функций / RDB
 ```
+
+### Multi-Entry Analysis (Stage 6.19)
+
+`debug_analyze_code` поддерживает несколько точек входа:
+
+```json
+{"addresses": [0, 256, 512]}
+```
+
+Если анализ от `0x0000` покрывает только небольшую часть ROM, агент должен:
+
+1. получить известные RDB functions (`debug_list_rdb_objects` / `debug_get_symbols`);
+2. собрать их addresses;
+3. запустить `debug_analyze_code` с несколькими entry points;
+4. сравнить coverage (поле `code_bytes` / `instruction_count`);
+5. использовать полученный результат как evidence.
+
+**Важно:**
+- Не делать вывод `unreachable = data` только на основании отсутствия статической достижимости.
+- `start_address` и `addresses` — взаимоисключающие параметры.
+- Результат содержит `entry_points`, `code_bytes`, `instruction_count`.
 
 ---
 

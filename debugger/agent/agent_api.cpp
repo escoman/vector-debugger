@@ -449,6 +449,66 @@ AgentApi::analyzeCode(uint16_t startAddress, size_t maxInstructions)
 }
 
 // ---------------------------------------------------------------------------
+// Code Analysis — Multi-Entry (Stage 6.19)
+// ---------------------------------------------------------------------------
+
+AgentApiResult<CodeAnalysisResult>
+AgentApi::analyzeCode(const std::vector<uint16_t>& entryPoints, size_t maxInstructions)
+{
+    auto t0 = std::chrono::steady_clock::now();
+
+    if (entryPoints.empty()) {
+        log_.record("analyzeCodeMulti", "empty", "invalid",
+                    elapsedMs(t0), false, "entryPoints must not be empty");
+        return AgentApiResult<CodeAnalysisResult>::fail(
+            ErrorCode::InvalidArgument, "entryPoints must not be empty");
+    }
+
+    if (maxInstructions == 0) {
+        log_.record("analyzeCodeMulti", "max=0", "invalid",
+                    elapsedMs(t0), false, "maxInstructions must be > 0");
+        return AgentApiResult<CodeAnalysisResult>::fail(
+            ErrorCode::InvalidArgument, "maxInstructions must be > 0");
+    }
+
+    if (maxInstructions > AgentLimits::MAX_CODE_ANALYSIS_INSTRUCTIONS) {
+        maxInstructions = AgentLimits::MAX_CODE_ANALYSIS_INSTRUCTIONS;
+    }
+
+    if (entryPoints.size() > AgentLimits::MAX_ANALYSIS_ENTRY_POINTS) {
+        log_.record("analyzeCodeMulti", "too many entries",
+                    "invalid", elapsedMs(t0), false,
+                    "entryPoints count " + std::to_string(entryPoints.size()) +
+                    " exceeds limit " +
+                    std::to_string(AgentLimits::MAX_ANALYSIS_ENTRY_POINTS));
+        return AgentApiResult<CodeAnalysisResult>::fail(
+            ErrorCode::InvalidArgument,
+            "entryPoints count exceeds limit (" +
+            std::to_string(AgentLimits::MAX_ANALYSIS_ENTRY_POINTS) + ")");
+    }
+
+    auto readByte = [this](uint16_t addr) -> uint8_t {
+        return backend_.readMemory(addr);
+    };
+
+    CodeAnalysisResult analysis = ::analyzeCodeMulti(entryPoints, readByte, maxInstructions);
+
+    std::ostringstream oss;
+    oss << "entries=" << std::dec << analysis.entryPoints.size()
+        << " instructions=" << analysis.instructionCount
+        << " ranges=" << analysis.ranges.size()
+        << " codeBytes=" << analysis.codeBytes
+        << " refs=" << analysis.references.size()
+        << " conflicts=" << analysis.conflicts.size();
+    if (analysis.truncated) oss << " TRUNCATED";
+    log_.record("analyzeCodeMulti", oss.str(),
+                std::to_string(analysis.instructionCount) + " instructions",
+                elapsedMs(t0));
+
+    return AgentApiResult<CodeAnalysisResult>::ok(std::move(analysis));
+}
+
+// ---------------------------------------------------------------------------
 // Range Disassembly (Stage 6.18)
 // ---------------------------------------------------------------------------
 

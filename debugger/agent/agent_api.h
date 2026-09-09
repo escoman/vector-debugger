@@ -72,10 +72,13 @@ public:
     AgentApiResult<std::vector<DisassembledInstructionResult>>
     disassemble(uint16_t address, size_t count);
 
-    // -- Code Analysis (Stage 6.16) ------------------------------------------
+    // -- Code Analysis (Stage 6.16, 6.19) ------------------------------------
 
     AgentApiResult<CodeAnalysisResult>
     analyzeCode(uint16_t startAddress, size_t maxInstructions);
+
+    AgentApiResult<CodeAnalysisResult>
+    analyzeCode(const std::vector<uint16_t>& entryPoints, size_t maxInstructions);
 
     // -- Range Disassembly (Stage 6.18) --------------------------------------
 

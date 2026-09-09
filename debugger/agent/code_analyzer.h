@@ -57,11 +57,13 @@ struct AnalysisConflict {
 
 struct CodeAnalysisResult {
     uint16_t                       entryPoint = 0;
+    std::vector<uint16_t>          entryPoints;    // Stage 6.19: actual entry points analyzed
     std::vector<AnalyzedInstruction> instructions;
     std::vector<ControlFlowRef>     references;
     std::vector<CodeRange>          ranges;
     std::vector<AnalysisConflict>   conflicts;
     size_t   instructionCount = 0;
+    size_t   codeBytes        = 0;   // Stage 6.19: sum of instruction sizes
     bool     truncated        = false;
 };
 
@@ -124,41 +126,60 @@ inline ControlFlowType classifyControlFlow(uint8_t opcode)
 }
 
 // ---------------------------------------------------------------------------
-// analyzeCode — BFS control-flow analysis
+// analyzeCodeMulti — BFS control-flow analysis from multiple entry points
+// Stage 6.19
+//
+// Performs a single BFS with all entry points seeded into the work queue.
+// The visited set is shared, so overlapping code is analyzed only once.
 // ---------------------------------------------------------------------------
 
-inline CodeAnalysisResult analyzeCode(
-    uint16_t startAddress,
+inline CodeAnalysisResult analyzeCodeMulti(
+    const std::vector<uint16_t>& entryPoints,
     DisasmReadFn readByte,
     size_t maxInstructions)
 {
     CodeAnalysisResult result;
-    result.entryPoint = startAddress;
+
+    // Deduplicate entry points preserving order
+    std::set<uint16_t> seen;
+    for (auto ep : entryPoints) {
+        if (seen.insert(ep).second) {
+            result.entryPoints.push_back(ep);
+        }
+    }
+
+    if (!result.entryPoints.empty()) {
+        result.entryPoint = result.entryPoints.front();
+    }
 
     std::set<uint16_t> visited;
-    std::unordered_map<uint16_t, uint8_t> instrEndMap; // address → last byte offset
+    std::unordered_map<uint16_t, uint8_t> instrEndMap;
     std::queue<uint16_t> workQueue;
 
-    workQueue.push(startAddress);
+    for (auto ep : result.entryPoints) {
+        workQueue.push(ep);
+    }
 
     while (!workQueue.empty() && result.instructions.size() < maxInstructions) {
         uint16_t addr = workQueue.front();
         workQueue.pop();
 
-        // Already fully processed
         if (visited.count(addr)) continue;
 
         // Conflict: this address falls inside an already-decoded instruction
+        bool conflict = false;
         for (const auto &kv : instrEndMap) {
             uint16_t instrStart = kv.first;
-            uint16_t instrLast  = instrStart + kv.second; // inclusive last byte
+            uint16_t instrLast  = instrStart + kv.second;
             if (addr > instrStart && addr <= instrLast) {
                 result.conflicts.push_back({addr,
                     "instruction boundary conflict: address falls inside "
                     "existing instruction at " + std::to_string(instrStart)});
-                goto skip_decode;
+                conflict = true;
+                break;
             }
         }
+        if (conflict) continue;
 
         {
             DisassembledInstruction di = disassemble(addr, readByte);
@@ -180,7 +201,6 @@ inline CodeAnalysisResult analyzeCode(
             uint16_t nextAddr = addr + di.length;
             ControlFlowType cft = classifyControlFlow(di.opcode);
 
-            // Record control-flow references
             switch (cft) {
             case ControlFlowType::UnconditionalJmp:
                 result.references.push_back({addr, di.target, "JMP"});
@@ -201,16 +221,13 @@ inline CodeAnalysisResult analyzeCode(
                 break;
             }
 
-            // Determine successors for BFS
             switch (cft) {
             case ControlFlowType::UnconditionalJmp:
-                // Only follow target; fall-through is NOT reachable
                 if (!visited.count(di.target))
                     workQueue.push(di.target);
                 break;
 
             case ControlFlowType::ConditionalJmp:
-                // Both target and fall-through are reachable
                 if (!visited.count(di.target))
                     workQueue.push(di.target);
                 if (!visited.count(nextAddr))
@@ -219,7 +236,6 @@ inline CodeAnalysisResult analyzeCode(
 
             case ControlFlowType::UnconditionalCall:
             case ControlFlowType::ConditionalCall:
-                // Follow call target AND continue after call
                 if (!visited.count(di.target))
                     workQueue.push(di.target);
                 if (!visited.count(nextAddr))
@@ -229,17 +245,14 @@ inline CodeAnalysisResult analyzeCode(
             case ControlFlowType::UnconditionalRet:
             case ControlFlowType::Halt:
             case ControlFlowType::IndirectJump:
-                // Path terminates
                 break;
 
             case ControlFlowType::ConditionalRet:
-                // Both return (terminates) and fall-through are reachable
                 if (!visited.count(nextAddr))
                     workQueue.push(nextAddr);
                 break;
 
             case ControlFlowType::Restart:
-                // RST is like CALL: follow target + continue after
                 if (!visited.count(di.target))
                     workQueue.push(di.target);
                 if (!visited.count(nextAddr))
@@ -252,34 +265,37 @@ inline CodeAnalysisResult analyzeCode(
                 break;
             }
         }
-        skip_decode:;
     }
 
     result.truncated = !workQueue.empty() &&
                        result.instructions.size() >= maxInstructions;
     result.instructionCount = result.instructions.size();
 
+    // Sort instructions by address and compute codeBytes
+    std::sort(result.instructions.begin(), result.instructions.end(),
+              [](const AnalyzedInstruction &a, const AnalyzedInstruction &b) {
+                  return a.address < b.address;
+              });
+
+    result.codeBytes = 0;
+    for (const auto &inst : result.instructions) {
+        result.codeBytes += inst.size;
+    }
+
     // Form contiguous code ranges (inclusive end)
     if (!result.instructions.empty()) {
-        std::vector<AnalyzedInstruction> sorted = result.instructions;
-        std::sort(sorted.begin(), sorted.end(),
-                  [](const AnalyzedInstruction &a, const AnalyzedInstruction &b) {
-                      return a.address < b.address;
-                  });
+        uint16_t rangeStart = result.instructions[0].address;
+        uint16_t rangeEnd   = rangeStart + result.instructions[0].size - 1;
 
-        uint16_t rangeStart = sorted[0].address;
-        uint16_t rangeEnd   = sorted[0].address + sorted[0].size - 1;
-
-        for (size_t i = 1; i < sorted.size(); ++i) {
-            uint16_t curStart = sorted[i].address;
+        for (size_t i = 1; i < result.instructions.size(); ++i) {
+            uint16_t curStart = result.instructions[i].address;
             if (curStart <= rangeEnd + 1) {
-                // Contiguous or overlapping — extend range
-                uint16_t curEnd = curStart + sorted[i].size - 1;
+                uint16_t curEnd = curStart + result.instructions[i].size - 1;
                 if (curEnd > rangeEnd) rangeEnd = curEnd;
             } else {
                 result.ranges.push_back({rangeStart, rangeEnd});
                 rangeStart = curStart;
-                rangeEnd   = curStart + sorted[i].size - 1;
+                rangeEnd   = curStart + result.instructions[i].size - 1;
             }
         }
         result.ranges.push_back({rangeStart, rangeEnd});
@@ -287,3 +303,16 @@ inline CodeAnalysisResult analyzeCode(
 
     return result;
 }
+
+// ---------------------------------------------------------------------------
+// analyzeCode — BFS control-flow analysis (single entry point)
+// ---------------------------------------------------------------------------
+
+inline CodeAnalysisResult analyzeCode(
+    uint16_t startAddress,
+    DisasmReadFn readByte,
+    size_t maxInstructions)
+{
+    return analyzeCodeMulti({startAddress}, readByte, maxInstructions);
+}
+

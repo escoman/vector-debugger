@@ -119,11 +119,11 @@ static mcp::json parseTextAsJson(const mcp::json &result) {
 // Tool Registration Tests
 // ---------------------------------------------------------------------------
 
-void test_all_54_tools_registered() {
-    TEST_BEGIN("all 54 tools registered");
+void test_all_55_tools_registered() {
+    TEST_BEGIN("all 55 tools registered");
     Fixture f;
     auto names = f.mcp.registeredToolNames();
-    CHECK_EQ(static_cast<int>(names.size()), 54, "should have 54 tools");
+    CHECK_EQ(static_cast<int>(names.size()), 55, "should have 55 tools");
     TEST_END();
 }
 
@@ -173,7 +173,9 @@ void test_expected_tools_exist() {
         // Stage 6.13: RDB Links
         "debug_add_rdb_link", "debug_remove_rdb_link", "debug_get_rdb_links",
         // Stage 6.16: Reverse Engineering Primitives
-        "debug_read_memory_range", "debug_analyze_code"
+        "debug_read_memory_range", "debug_analyze_code",
+        // Stage 6.18: Range Disassembly
+        "debug_disassemble_range"
     };
 
     for (auto &e : expected) {
@@ -944,6 +946,104 @@ void test_rdb_link_remove_missing() {
 }
 
 // ---------------------------------------------------------------------------
+// Stage 6.19: Multi-entry analyze_code MCP tests
+// ---------------------------------------------------------------------------
+
+void test_mcp_analyze_code_single_entry_compat() {
+    TEST_BEGIN("MCP: debug_analyze_code single entry backward compat");
+    Fixture f;
+
+    // Write NOP + RET at 0x0200
+    f.mock.setMemory(0x0200, {0x00, 0xC9});
+
+    auto r = f.mcp.callTool("debug_analyze_code",
+        {{"start_address", 0x0200}});
+    CHECK(!isErrorContent(r), "single entry should succeed");
+    auto data = parseTextAsJson(r);
+    CHECK(data.contains("entry_points"), "result has entry_points");
+    CHECK(data["entry_points"].size() == 1, "1 entry point");
+    CHECK(data.contains("code_bytes"), "result has code_bytes");
+    TEST_END();
+}
+
+void test_mcp_analyze_code_multi_entry() {
+    TEST_BEGIN("MCP: debug_analyze_code multi-entry via addresses");
+    Fixture f;
+
+    // Write code at two separate locations
+    f.mock.setMemory(0x0100, {0x00, 0xC3, 0x20, 0x01});  // NOP; JMP 0x0120
+    f.mock.setMemory(0x0110, {0x00, 0xC9});               // NOP; RET
+    f.mock.setMemory(0x0120, {0x00, 0xC9});               // NOP; RET
+
+    auto r = f.mcp.callTool("debug_analyze_code",
+        {{"addresses", {0x0100, 0x0110}}});
+    CHECK(!isErrorContent(r), "multi-entry should succeed");
+    auto data = parseTextAsJson(r);
+    CHECK(data["entry_points"].size() == 2, "2 entry points");
+    CHECK(data["instruction_count"].get<int>() > 0, "has instructions");
+    CHECK(data["code_bytes"].get<int>() > 0, "has code_bytes");
+    TEST_END();
+}
+
+void test_mcp_analyze_code_duplicate_entries() {
+    TEST_BEGIN("MCP: debug_analyze_code duplicate entries");
+    Fixture f;
+    f.mock.setMemory(0x0200, {0x00, 0xC9});
+
+    auto r = f.mcp.callTool("debug_analyze_code",
+        {{"addresses", {0x0200, 0x0200}}});
+    CHECK(!isErrorContent(r), "duplicate entries succeed");
+    auto data = parseTextAsJson(r);
+    CHECK(data["entry_points"].size() == 1, "duplicates removed");
+    TEST_END();
+}
+
+void test_mcp_analyze_code_empty_addresses() {
+    TEST_BEGIN("MCP: debug_analyze_code empty addresses array");
+    Fixture f;
+
+    bool threw = false;
+    try {
+        f.mcp.callTool("debug_analyze_code",
+            {{"addresses", mcp::json::array()}});
+    } catch (const mcp::mcp_exception &) {
+        threw = true;
+    }
+    CHECK(threw, "empty array throws");
+    TEST_END();
+}
+
+void test_mcp_analyze_code_mutual_exclusion() {
+    TEST_BEGIN("MCP: debug_analyze_code start_address and addresses exclusive");
+    Fixture f;
+
+    bool threw = false;
+    try {
+        f.mcp.callTool("debug_analyze_code",
+            {{"start_address", 0x0000}, {"addresses", {0x0100}}});
+    } catch (const mcp::mcp_exception &) {
+        threw = true;
+    }
+    CHECK(threw, "both params throws");
+    TEST_END();
+}
+
+void test_mcp_analyze_code_neither_param() {
+    TEST_BEGIN("MCP: debug_analyze_code requires one of start_address/addresses");
+    Fixture f;
+
+    bool threw = false;
+    try {
+        f.mcp.callTool("debug_analyze_code",
+            {{"max_instructions", 100}});
+    } catch (const mcp::mcp_exception &) {
+        threw = true;
+    }
+    CHECK(threw, "missing both params throws");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -956,7 +1056,7 @@ int main()
     printf("\033[1;33m========================================\033[0m\n\n");
 
     // Registration
-    test_all_54_tools_registered();
+    test_all_55_tools_registered();
     test_tool_names_have_debug_prefix();
     test_expected_tools_exist();
 
@@ -1029,6 +1129,14 @@ int main()
     // E2E
     test_e2e_read_memory_full_path();
     test_e2e_write_then_read();
+
+    // Stage 6.19: Multi-entry analyze_code
+    test_mcp_analyze_code_single_entry_compat();
+    test_mcp_analyze_code_multi_entry();
+    test_mcp_analyze_code_duplicate_entries();
+    test_mcp_analyze_code_empty_addresses();
+    test_mcp_analyze_code_mutual_exclusion();
+    test_mcp_analyze_code_neither_param();
 
     // JSON serialization
     test_json_cpu_state_format();

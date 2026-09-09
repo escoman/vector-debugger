@@ -2135,6 +2135,87 @@ static void test_analyze_code_control_flow()
 }
 
 // ---------------------------------------------------------------------------
+// #51 — Stage 6.19: multi-entry analyzeCode
+// ---------------------------------------------------------------------------
+
+static void test_multi_entry_analyze_code()
+{
+    TEST_BEGIN("stage_6.19_multi_entry_analyze_code");
+
+    TestFixture f;
+    AgentApi api(*f.backend);
+
+    // Write test code:
+    //   0x0100: NOP           (entry A)
+    //   0x0101: JMP 0x0120
+    //   0x0104..0x010F: padding (unreachable)
+    //   0x0110: NOP           (entry B — separate code)
+    //   0x0111: JMP 0x0120    (shares code with entry A)
+    //   0x0114..0x011F: padding
+    //   0x0120: NOP           (shared target)
+    //   0x0121: RET
+    std::vector<uint8_t> code(0x30, 0x00);  // zero-fill
+    code[0x00] = 0x00;                       // 0x0100: NOP
+    code[0x01] = 0xC3; code[0x02] = 0x20; code[0x03] = 0x01;  // 0x0101: JMP 0x0120
+    code[0x10] = 0x00;                       // 0x0110: NOP
+    code[0x11] = 0xC3; code[0x12] = 0x20; code[0x13] = 0x01;  // 0x0111: JMP 0x0120
+    code[0x20] = 0x00;                       // 0x0120: NOP
+    code[0x21] = 0xC9;                       // 0x0121: RET
+
+    auto w = api.writeMemory(0x0100, code);
+    CHECK(w.success, "write test code");
+
+    // --- Single entry compatibility ---
+    auto rSingle = api.analyzeCode(uint16_t(0x0100), 200);
+    CHECK(rSingle.success, "single entry succeeds");
+
+    auto rVec1 = api.analyzeCode(std::vector<uint16_t>{0x0100}, 200);
+    CHECK(rVec1.success, "vector single entry succeeds");
+    CHECK(rVec1.value.instructionCount == rSingle.value.instructionCount,
+          "single-entry vector matches scalar");
+
+    // --- Multiple entries ---
+    auto rMulti = api.analyzeCode(std::vector<uint16_t>{0x0100, 0x0110}, 200);
+    CHECK(rMulti.success, "multi-entry succeeds");
+
+    const auto &a = rMulti.value;
+
+    // Should find instructions from both entries
+    // Entry A: NOP(0100), JMP(0101), NOP(0120), RET(0121)
+    // Entry B: NOP(0110), JMP(0111), NOP(0120), RET(0121)
+    // Shared: NOP(0120), RET(0121) — counted once
+    CHECK(a.instructionCount == 6, "6 unique instructions (shared code counted once)");
+
+    // Entry points reported
+    CHECK(a.entryPoints.size() == 2, "2 entry points reported");
+    CHECK(a.entryPoints[0] == 0x0100, "first entry = 0x0100");
+    CHECK(a.entryPoints[1] == 0x0110, "second entry = 0x0110");
+
+    // codeBytes
+    // 4 single-byte + 2 three-byte = 4 + 6 = 10
+    CHECK(a.codeBytes == 10, "codeBytes = 10");
+
+    // Instructions sorted by address
+    for (size_t i = 1; i < a.instructions.size(); ++i) {
+        CHECK(a.instructions[i].address > a.instructions[i-1].address,
+              "instructions sorted by address");
+    }
+
+    // --- Duplicate entries ---
+    auto rDup = api.analyzeCode(std::vector<uint16_t>{0x0100, 0x0100}, 200);
+    CHECK(rDup.success, "duplicate entries succeed");
+    CHECK(rDup.value.entryPoints.size() == 1, "duplicates removed");
+    CHECK(rDup.value.instructionCount == rSingle.value.instructionCount,
+          "duplicate entries give same count as single");
+
+    // --- Empty entries ---
+    auto rEmpty = api.analyzeCode(std::vector<uint16_t>{}, 200);
+    CHECK(!rEmpty.success, "empty entries returns error");
+
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -2215,6 +2296,9 @@ int main()
     // Stage 6.16 — MCP Reverse Engineering Primitives
     test_read_memory_range();                        // 49
     test_analyze_code_control_flow();                // 50
+
+    // Stage 6.19 — Multi-Entry Static Code Analysis
+    test_multi_entry_analyze_code();                  // 51
 
     printf("\n\033[1;33m========================================\033[0m\n");
     printf("  Results: %d/%d passed", tests_passed, tests_run);
