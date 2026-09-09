@@ -548,3 +548,36 @@ struct RdbObjectResult
     std::vector<uint16_t> links;
     std::map<std::string, std::string> properties;  // simplified: all as strings
 };
+
+// ---------------------------------------------------------------------------
+// DisassembledRangeInstruction — Stage 6.18
+//
+// Single instruction from disassembleRange(address, size).
+// Includes branch target and type information for control-flow instructions.
+// ---------------------------------------------------------------------------
+
+struct DisassembledRangeInstruction
+{
+    uint16_t    address = 0;
+    std::vector<uint8_t> bytes;
+    std::string mnemonic;
+    std::string operands;
+    uint8_t     size = 0;
+    std::optional<uint16_t> branch_target;  // null for non-branch instructions
+    std::string branch_type;                // "JMP", "JCC", "CALL", "RET", "RST", or empty
+};
+
+// ---------------------------------------------------------------------------
+// DisassembleRangeResult — Stage 6.18
+//
+// Result of disassembleRange(address, size).
+// Contains sequentially disassembled instructions from a memory range.
+// ---------------------------------------------------------------------------
+
+struct DisassembleRangeResult
+{
+    uint16_t startAddress = 0;
+    uint16_t size = 0;
+    std::vector<DisassembledRangeInstruction> instructions;
+    bool incomplete_instruction = false;  // true if last instruction extends beyond range
+};

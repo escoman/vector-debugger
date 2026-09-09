@@ -171,6 +171,41 @@ ROM mapping незавершён без:
 
 ---
 
+## Workflow: Range Disassembly
+
+Для последовательного дизассемблирования диапазона используй `debug_disassemble_range`:
+
+```
+debug_read_memory_range
+        ↓
+debug_analyze_code
+        ↓
+получить code regions
+        ↓
+debug_disassemble_range
+        ↓
+получить инструкции + branch targets
+        ↓
+анализ функций / RDB
+```
+
+Для отдельной функции:
+```
+RDB function
+    ↓
+address + size
+    ↓
+debug_disassemble_range
+```
+
+**Важно:**
+- Не запускай `debug_analyze_code` повторно для каждого байта или инструкции
+- Используй `debug_disassemble_range` вместо серии `debug_disassemble`
+- Инструмент не выполняет CFG traversal — только последовательное дизассемблирование
+- Для CFG-анализа используй `debug_analyze_code`
+
+---
+
 ## Workflow: ASM Export
 
 После завершения mapping/RDB используй штатный ASM exporter для генерации Z88DK-совместимого кода:

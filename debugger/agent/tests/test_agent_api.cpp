@@ -1998,6 +1998,140 @@ static void test_rdb_remove_target_object_links()
 }
 
 // ---------------------------------------------------------------------------
+// Stage 6.18 — Range Disassembly
+// ---------------------------------------------------------------------------
+
+static void test_disassemble_range_basic()
+{
+    TEST_BEGIN("disassembleRange — basic sequential disassembly");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    // Load a simple ROM: NOP, NOP, RET
+    std::vector<uint8_t> rom = {0x00, 0x00, 0xC9};
+    mock.writeMemory(0x0000, rom.data(), rom.size());
+
+    auto r = api.disassembleRange(0x0000, 3);
+    CHECK(r.success, "succeeds");
+    CHECK_EQ(3, static_cast<int>(r.value.instructions.size()), "3 instructions");
+    CHECK_EQ(0x0000, r.value.instructions[0].address, "first at 0000");
+    CHECK_EQ(0x0001, r.value.instructions[1].address, "second at 0001");
+    CHECK_EQ(0x0002, r.value.instructions[2].address, "third at 0002");
+    CHECK_STR("NOP", r.value.instructions[0].mnemonic, "first is NOP");
+    CHECK_STR("RET", r.value.instructions[2].mnemonic, "third is RET");
+    TEST_END();
+}
+
+static void test_disassemble_range_branches()
+{
+    TEST_BEGIN("disassembleRange — branch targets and types");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    // JMP 0100h, CALL 0200h, RET, RST 7
+    std::vector<uint8_t> rom = {
+        0xC3, 0x00, 0x01,  // JMP 0100h
+        0xCD, 0x00, 0x02,  // CALL 0200h
+        0xC9,              // RET
+        0xFF               // RST 7 (target = 0038h)
+    };
+    mock.writeMemory(0x0000, rom.data(), rom.size());
+
+    auto r = api.disassembleRange(0x0000, rom.size());
+    CHECK(r.success, "succeeds");
+    CHECK_EQ(4, static_cast<int>(r.value.instructions.size()), "4 instructions");
+
+    // JMP
+    CHECK_STR("JMP", r.value.instructions[0].mnemonic, "first is JMP");
+    CHECK_STR("JMP", r.value.instructions[0].branch_type, "branch type JMP");
+    CHECK(r.value.instructions[0].branch_target.has_value(), "has target");
+    CHECK_EQ(0x0100, r.value.instructions[0].branch_target.value(), "target = 0100h");
+
+    // CALL
+    CHECK_STR("CALL", r.value.instructions[1].mnemonic, "second is CALL");
+    CHECK_STR("CALL", r.value.instructions[1].branch_type, "branch type CALL");
+    CHECK_EQ(0x0200, r.value.instructions[1].branch_target.value(), "target = 0200h");
+
+    // RET
+    CHECK_STR("RET", r.value.instructions[2].mnemonic, "third is RET");
+    CHECK_STR("RET", r.value.instructions[2].branch_type, "branch type RET");
+    CHECK(!r.value.instructions[2].branch_target.has_value(), "RET has no target");
+
+    // RST
+    CHECK_STR("RST", r.value.instructions[3].mnemonic, "fourth is RST");
+    CHECK_STR("RST", r.value.instructions[3].branch_type, "branch type RST");
+    CHECK_EQ(0x0038, r.value.instructions[3].branch_target.value(), "RST 7 target = 0038h");
+    TEST_END();
+}
+
+static void test_disassemble_range_invalid()
+{
+    TEST_BEGIN("disassembleRange — invalid range");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    std::vector<uint8_t> rom(256, 0x00);
+    mock.writeMemory(0x0000, rom.data(), rom.size());
+
+    // size = 0
+    auto r1 = api.disassembleRange(0x0000, 0);
+    CHECK(!r1.success, "size=0 fails");
+    CHECK_EQ(static_cast<int>(ErrorCode::InvalidArgument), static_cast<int>(r1.error_code), "InvalidArgument");
+
+    // size > 16384
+    auto r2 = api.disassembleRange(0x0000, 20000);
+    CHECK(!r2.success, "size>16384 fails");
+    CHECK_EQ(static_cast<int>(ErrorCode::InvalidRange), static_cast<int>(r2.error_code), "InvalidRange");
+
+    // address + size > 64K
+    auto r3 = api.disassembleRange(0xFF00, 0x0200);
+    CHECK(!r3.success, "wrap-around fails");
+    CHECK_EQ(static_cast<int>(ErrorCode::InvalidRange), static_cast<int>(r3.error_code), "InvalidRange");
+    TEST_END();
+}
+
+static void test_disassemble_range_incomplete()
+{
+    TEST_BEGIN("disassembleRange — incomplete instruction at end");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    // CALL instruction (3 bytes) but only 2 bytes in range
+    std::vector<uint8_t> rom = {0xCD, 0x00, 0x01};
+    mock.writeMemory(0x0000, rom.data(), rom.size());
+
+    auto r = api.disassembleRange(0x0000, 2);
+    CHECK(r.success, "succeeds");
+    CHECK_EQ(0, static_cast<int>(r.value.instructions.size()), "no complete instructions");
+    CHECK(r.value.incomplete_instruction, "incomplete flag set");
+    TEST_END();
+}
+
+static void test_disassemble_range_readonly()
+{
+    TEST_BEGIN("disassembleRange — does not modify RDB");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    std::vector<uint8_t> rom = {0x00, 0xC9};
+    mock.writeMemory(0x0000, rom.data(), rom.size());
+
+    // Get RDB state before
+    auto rdbBefore = api.getRdbInfo();
+    CHECK(rdbBefore.success, "RDB info before");
+
+    // Disassemble
+    auto r = api.disassembleRange(0x0000, 2);
+    CHECK(r.success, "disassemble succeeds");
+
+    // Get RDB state after
+    auto rdbAfter = api.getRdbInfo();
+    CHECK(rdbAfter.success, "RDB info after");
+    CHECK_EQ(rdbBefore.value.objectCount, rdbAfter.value.objectCount, "object count unchanged");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -2165,6 +2299,13 @@ int main()
     test_rdb_link_persistence();
     test_rdb_remove_source_object_links();
     test_rdb_remove_target_object_links();
+
+    // Stage 6.18 — Range Disassembly
+    test_disassemble_range_basic();
+    test_disassemble_range_branches();
+    test_disassemble_range_invalid();
+    test_disassemble_range_incomplete();
+    test_disassemble_range_readonly();
 
     printf("\n\033[1;33m========================================\033[0m\n");
     printf("  Results: %d/%d passed", tests_passed, tests_run);

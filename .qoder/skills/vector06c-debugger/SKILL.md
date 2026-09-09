@@ -515,6 +515,55 @@ Confidence: [High/Medium/Low]
 
 ---
 
+## Range Disassembly
+
+Для последовательного анализа диапазона ROM используй `debug_disassemble_range` вместо серии вызовов `debug_disassemble`.
+
+**Когда использовать:**
+- Получить полный кодовый диапазон
+- Проверить последовательность инструкций
+- Исследовать функцию
+- Проверить участок ROM
+- Подготовить данные для анализа
+- Получить branch targets
+
+**Параметры:**
+- `address`: начальный адрес (0..65535)
+- `size`: количество байт (1..16384)
+
+**Результат:**
+Каждая инструкция содержит:
+- `address`: адрес инструкции
+- `bytes`: байты инструкции
+- `mnemonic`: мнемоника (JMP, CALL, RET, etc.)
+- `operands`: операнды
+- `size`: размер инструкции
+- `branch_target`: адрес перехода (для JMP/CALL/RST) или null
+- `branch_type`: тип перехода ("JMP", "JCC", "CALL", "RET", "RST") или null
+
+**Важно:**
+- Дизассемблирование последовательное, без CFG traversal
+- Не изменяет RDB
+- Не выполняет инструкций
+- Для CFG-анализа используй `debug_analyze_code`
+
+**Пример workflow:**
+```
+debug_read_memory_range
+        ↓
+debug_analyze_code
+        ↓
+получить code regions
+        ↓
+debug_disassemble_range
+        ↓
+получить инструкции + branch targets
+        ↓
+анализ функций / RDB
+```
+
+---
+
 ## Генерация Z88DK ASM
 
 Для генерации Z88DK/z80asm-compatible `.asm` файлов используй **штатный ASM exporter** (`v06c-asm-export`).

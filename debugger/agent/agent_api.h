@@ -77,6 +77,11 @@ public:
     AgentApiResult<CodeAnalysisResult>
     analyzeCode(uint16_t startAddress, size_t maxInstructions);
 
+    // -- Range Disassembly (Stage 6.18) --------------------------------------
+
+    AgentApiResult<DisassembleRangeResult>
+    disassembleRange(uint16_t address, uint16_t size);
+
     // -- Instruction History -------------------------------------------------
 
     AgentApiResult<std::vector<InstructionHistoryEntry>>

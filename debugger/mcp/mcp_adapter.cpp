@@ -674,6 +674,74 @@ void McpServer::registerDisassemblyTools() {
             });
         });
     }
+
+    // debug_disassemble_range (Stage 6.18)
+    {
+        auto tool = mcp::tool_builder("debug_disassemble_range")
+            .with_description("Sequentially disassemble a range of memory. "
+                              "Returns instructions with branch targets and types. "
+                              "Does NOT perform CFG traversal or modify RDB.")
+            .with_number_param("address", "Start address (0..65535)")
+            .with_number_param("size", "Number of bytes to disassemble (1..16384)")
+            .build();
+        addNumericConstraint(tool, "address", 0, 65535);
+        addNumericConstraint(tool, "size", 1, static_cast<int>(AgentLimits::MAX_MEMORY_READ_RANGE));
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            uint16_t addr = getAddress(params);
+            uint16_t size = getAddress(params, "size");
+            
+            if (size == 0) {
+                throw mcp::mcp_exception(mcp::error_code::invalid_params, "size must be >= 1");
+            }
+            if (size > AgentLimits::MAX_MEMORY_READ_RANGE) {
+                throw mcp::mcp_exception(mcp::error_code::invalid_params,
+                    "size exceeds maximum (" + std::to_string(AgentLimits::MAX_MEMORY_READ_RANGE) + ")");
+            }
+            uint32_t endAddr = static_cast<uint32_t>(addr) + size;
+            if (endAddr > 0x10000) {
+                return errorContent("invalid_range",
+                    "address + size exceeds 64K address space");
+            }
+            
+            auto r = api_.disassembleRange(addr, size);
+            if (!r.success) return errorContent("disassemble_range_failed", r.error_message);
+            
+            const auto &result = r.value;
+            
+            mcp::json instrs = mcp::json::array();
+            for (const auto &inst : result.instructions) {
+                mcp::json instrJson = {
+                    {"address",   mcp_json::hex16(inst.address)},
+                    {"mnemonic",  inst.mnemonic},
+                    {"operands",  inst.operands},
+                    {"size",      inst.size}
+                };
+                
+                // Add bytes array
+                mcp::json bytesArr = mcp::json::array();
+                for (auto b : inst.bytes) bytesArr.push_back(b);
+                instrJson["bytes"] = bytesArr;
+                
+                // Add branch info
+                if (inst.branch_target.has_value()) {
+                    instrJson["branch_target"] = inst.branch_target.value();
+                } else {
+                    instrJson["branch_target"] = nullptr;
+                }
+                instrJson["branch_type"] = inst.branch_type.empty() ? nullptr : inst.branch_type;
+                
+                instrs.push_back(instrJson);
+            }
+            
+            return textContent({
+                {"address",              mcp_json::hex16(result.startAddress)},
+                {"size",                 result.size},
+                {"instruction_count",   static_cast<int>(result.instructions.size())},
+                {"incomplete_instruction", result.incomplete_instruction},
+                {"instructions",         instrs}
+            });
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------

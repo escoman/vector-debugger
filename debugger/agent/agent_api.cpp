@@ -449,6 +449,127 @@ AgentApi::analyzeCode(uint16_t startAddress, size_t maxInstructions)
 }
 
 // ---------------------------------------------------------------------------
+// Range Disassembly (Stage 6.18)
+// ---------------------------------------------------------------------------
+
+AgentApiResult<DisassembleRangeResult>
+AgentApi::disassembleRange(uint16_t address, uint16_t size)
+{
+    auto t0 = std::chrono::steady_clock::now();
+
+    // Validate size
+    if (size == 0) {
+        log_.record("disassembleRange", "size=0", "invalid",
+                    elapsedMs(t0), false, "size must be > 0");
+        return AgentApiResult<DisassembleRangeResult>::fail(
+            ErrorCode::InvalidArgument, "size must be > 0");
+    }
+
+    // Check maximum range
+    if (size > AgentLimits::MAX_MEMORY_READ_RANGE) {
+        log_.record("disassembleRange", 
+                    "size=" + std::to_string(size), "invalid",
+                    elapsedMs(t0), false, "size exceeds maximum");
+        return AgentApiResult<DisassembleRangeResult>::fail(
+            ErrorCode::InvalidRange, 
+            "size exceeds maximum (" + std::to_string(AgentLimits::MAX_MEMORY_READ_RANGE) + ")");
+    }
+
+    // Check address wrap-around
+    uint32_t endAddr = static_cast<uint32_t>(address) + size;
+    if (endAddr > 0x10000) {
+        log_.record("disassembleRange",
+                    "address+size > 64K", "invalid",
+                    elapsedMs(t0), false, "address wrap-around");
+        return AgentApiResult<DisassembleRangeResult>::fail(
+            ErrorCode::InvalidRange,
+            "address + size exceeds 64K address space");
+    }
+
+    DisassembleRangeResult result;
+    result.startAddress = address;
+    result.size = size;
+
+    auto readByte = [this](uint16_t addr) -> uint8_t {
+        return backend_.readMemory(addr);
+    };
+
+    uint16_t currentAddr = address;
+    uint16_t rangeEnd = address + size;
+
+    // Sequential disassembly through the range
+    while (currentAddr < rangeEnd) {
+        DisassembledInstruction di = ::disassemble(currentAddr, readByte);
+
+        // Check if instruction fits completely in range
+        uint16_t instrEnd = currentAddr + di.length;
+        if (instrEnd > rangeEnd) {
+            // Instruction extends beyond range
+            result.incomplete_instruction = true;
+            break;
+        }
+
+        // Convert to result format
+        DisassembledRangeInstruction ri;
+        ri.address = di.address;
+        ri.bytes.assign(di.bytes.begin(), di.bytes.begin() + di.length);
+        ri.mnemonic = di.mnemonic;
+        ri.operands = di.operands;
+        ri.size = di.length;
+
+        // Determine branch type and target
+        ControlFlowType cft = classifyControlFlow(di.opcode);
+        switch (cft) {
+        case ControlFlowType::UnconditionalJmp:
+            ri.branch_type = "JMP";
+            ri.branch_target = di.target;
+            break;
+        case ControlFlowType::ConditionalJmp:
+            ri.branch_type = "JCC";
+            ri.branch_target = di.target;
+            break;
+        case ControlFlowType::UnconditionalCall:
+            ri.branch_type = "CALL";
+            ri.branch_target = di.target;
+            break;
+        case ControlFlowType::ConditionalCall:
+            ri.branch_type = "CALL";
+            ri.branch_target = di.target;
+            break;
+        case ControlFlowType::UnconditionalRet:
+            ri.branch_type = "RET";
+            ri.branch_target = std::nullopt;  // RET has no static target
+            break;
+        case ControlFlowType::ConditionalRet:
+            ri.branch_type = "RET";
+            ri.branch_target = std::nullopt;
+            break;
+        case ControlFlowType::Restart:
+            ri.branch_type = "RST";
+            ri.branch_target = di.target;
+            break;
+        default:
+            // Sequential instruction — no branch
+            break;
+        }
+
+        result.instructions.push_back(std::move(ri));
+        currentAddr = instrEnd;
+    }
+
+    std::ostringstream oss;
+    oss << "address=" << std::hex << address
+        << " size=" << std::hex << size
+        << " instructions=" << std::dec << result.instructions.size();
+    if (result.incomplete_instruction) oss << " INCOMPLETE";
+    log_.record("disassembleRange", oss.str(),
+                std::to_string(result.instructions.size()) + " instructions",
+                elapsedMs(t0));
+
+    return AgentApiResult<DisassembleRangeResult>::ok(std::move(result));
+}
+
+// ---------------------------------------------------------------------------
 // Instruction History (Stage 6.1 §11)
 // ---------------------------------------------------------------------------
 
