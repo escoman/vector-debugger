@@ -74,7 +74,7 @@ CallGraphModel buildCallGraphModel(const std::vector<RdbObject> &objects)
                 model.unresolvedCount++;
             }
 
-            CallGraphEdge edge;
+            GraphEdge edge;
             edge.source = obj.address;
             edge.target = targetAddr;
             model.edges.push_back(edge);

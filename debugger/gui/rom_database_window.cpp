@@ -177,7 +177,7 @@ void RomDatabaseWindow::render(IDebugBackend &backend)
 
     // Table header
     if (ImGui::BeginTable("RdbTable", 5,
-            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Sortable |
+            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
             ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY))
     {
         ImGui::TableSetupColumn("Address", ImGuiTableColumnFlags_WidthFixed, 70);
@@ -185,14 +185,25 @@ void RomDatabaseWindow::render(IDebugBackend &backend)
         ImGui::TableSetupColumn("Name",    ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("Size",    ImGuiTableColumnFlags_WidthFixed, 60);
         ImGui::TableSetupColumn("Comment", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableHeadersRow();
 
-        // Handle sorting
-        ImGuiTableSortSpecs *sortSpecs = ImGui::TableGetSortSpecs();
-        if (sortSpecs && sortSpecs->SpecsDirty) {
-            sortColumn_ = sortSpecs->Specs[0].ColumnIndex;
-            sortReverse_ = sortSpecs->Specs[0].SortDirection == ImGuiSortDirection_Descending;
-            sortSpecs->SpecsDirty = false;
+        // Manual header row with clickable sort headers
+        static const char *colNames[] = {"Address", "Type", "Name", "Size", "Comment"};
+        ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+        for (int column = 0; column < 5; column++) {
+            ImGui::TableSetColumnIndex(column);
+            std::string label = std::string(colNames[column]);
+            if (sortColumn_ == column) {
+                label += sortReverse_ ? " \xe2\x96\xbc" : " \xe2\x96\xb2"; // ▼ or ▲
+            }
+            if (ImGui::Selectable(label.c_str(), sortColumn_ == column))
+            {
+                if (sortColumn_ == column) {
+                    sortReverse_ = !sortReverse_;
+                } else {
+                    sortColumn_ = column;
+                    sortReverse_ = false;
+                }
+            }
         }
 
         // Filter and sort
@@ -203,18 +214,29 @@ void RomDatabaseWindow::render(IDebugBackend &backend)
             }
         }
 
-        std::sort(filtered.begin(), filtered.end(),
-            [this](const CachedObject *a, const CachedObject *b) {
-                bool result = false;
-                switch (sortColumn_) {
-                    case 0: result = a->address < b->address; break;
-                    case 1: result = a->typeStr < b->typeStr; break;
-                    case 2: result = a->name < b->name; break;
-                    case 3: result = a->sizeStr < b->sizeStr; break;
-                    case 4: result = a->comment < b->comment; break;
-                    default: result = a->address < b->address; break;
-                }
-                return sortReverse_ ? !result : result;
+        auto sizeToInt = [](const std::string &s) -> int {
+            if (s.empty() || s == "-") return 0;
+            try { return std::stoi(s); } catch (...) { return 0; }
+        };
+
+        auto compareCols = [&sizeToInt](const CachedObject *a, const CachedObject *b, int col) {
+            switch (col) {
+                case 0: return a->address < b->address;
+                case 1: return a->typeStr < b->typeStr;
+                case 2: return a->name < b->name;
+                case 3: return sizeToInt(a->sizeStr) < sizeToInt(b->sizeStr);
+                case 4: return a->comment < b->comment;
+                default: return a->address < b->address;
+            }
+        };
+
+        std::stable_sort(filtered.begin(), filtered.end(),
+            [this, &compareCols](const CachedObject *a, const CachedObject *b) {
+                // Swap arguments for reverse — preserves strict weak ordering
+                // for equal elements (unlike negating the result).
+                return sortReverse_
+                    ? compareCols(b, a, sortColumn_)
+                    : compareCols(a, b, sortColumn_);
             });
 
         if (filtered.empty()) {

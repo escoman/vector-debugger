@@ -40,7 +40,7 @@ struct CallGraphNode
 // Graph edge — corresponds to one unique RDB link
 // ---------------------------------------------------------------------------
 
-struct CallGraphEdge
+struct GraphEdge
 {
     uint16_t source = 0;
     uint16_t target = 0;
@@ -53,7 +53,7 @@ struct CallGraphEdge
 struct CallGraphModel
 {
     std::vector<CallGraphNode> nodes;
-    std::vector<CallGraphEdge> edges;
+    std::vector<GraphEdge> edges;
 
     // address → index in nodes[] for O(1) lookup
     std::unordered_map<uint16_t, size_t> addressToIndex;
