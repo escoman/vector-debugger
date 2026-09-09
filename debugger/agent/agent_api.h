@@ -4,6 +4,7 @@
 #include "agent_log.h"
 #include "idebug_backend.h"
 #include "events.h"
+#include "code_analyzer.h"
 
 #include <cstdint>
 #include <optional>
@@ -70,6 +71,11 @@ public:
 
     AgentApiResult<std::vector<DisassembledInstructionResult>>
     disassemble(uint16_t address, size_t count);
+
+    // -- Code Analysis (Stage 6.16) ------------------------------------------
+
+    AgentApiResult<CodeAnalysisResult>
+    analyzeCode(uint16_t startAddress, size_t maxInstructions);
 
     // -- Instruction History -------------------------------------------------
 

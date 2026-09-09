@@ -2023,6 +2023,118 @@ static void test_create_function_creates_rdb_object()
 }
 
 // ---------------------------------------------------------------------------
+// #49 — Stage 6.16: readMemoryRange basic + boundary
+// ---------------------------------------------------------------------------
+
+static void test_read_memory_range()
+{
+    TEST_BEGIN("stage_6.16_read_memory_range");
+
+    TestFixture f;
+    AgentApi api(*f.backend);
+
+    // Write known pattern
+    std::vector<uint8_t> pattern = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE};
+    auto w = api.writeMemory(0x1000, pattern);
+    CHECK(w.success, "writeMemory for range test");
+
+    // Read back as range
+    auto r = api.readMemory(0x1000, 5);
+    CHECK(r.success, "readMemory range");
+    CHECK(r.value.size() == 5, "range size = 5");
+    CHECK(r.value[0] == 0xAA, "byte 0");
+    CHECK(r.value[4] == 0xEE, "byte 4");
+
+    // Boundary: read at 0xFFFF, length 1
+    auto r2 = api.readMemory(0xFFFF, 1);
+    CHECK(r2.success, "read at 0xFFFF");
+
+    // Overflow: address + length > 0x10000
+    auto r3 = api.readMemory(0xFFFF, 2);
+    CHECK(!r3.success, "overflow returns error");
+
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// #50 — Stage 6.16: analyzeCode control-flow analysis
+// ---------------------------------------------------------------------------
+
+static void test_analyze_code_control_flow()
+{
+    TEST_BEGIN("stage_6.16_analyze_code_control_flow");
+
+    TestFixture f;
+    AgentApi api(*f.backend);
+
+    // Write test code at 0x0200:
+    //   0200: NOP           (sequential)
+    //   0201: JMP 0x0210    (unconditional jump)
+    //   0204: NOP           (NOT reachable from 0200 via JMP)
+    //   ...
+    //   0210: CALL 0x0220   (call + continue)
+    //   0213: RET           (return — terminates path)
+    //   ...
+    //   0220: NOP           (call target)
+    //   0221: RET           (return)
+
+    // NOP = 0x00, JMP addr = 0xC3 lo hi, CALL addr = 0xCD lo hi, RET = 0xC9
+    std::vector<uint8_t> code = {
+        // 0x0200: NOP
+        0x00,
+        // 0x0201: JMP 0x0210
+        0xC3, 0x10, 0x02,
+        // 0x0204: NOP (unreachable via JMP from 0200)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        // 0x0210: CALL 0x0220
+        0xCD, 0x20, 0x02,
+        // 0x0213: RET
+        0xC9,
+        // 0x0214..0x021F: padding
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00,
+        // 0x0220: NOP
+        0x00,
+        // 0x0221: RET
+        0xC9
+    };
+
+    auto w = api.writeMemory(0x0200, code);
+    CHECK(w.success, "write test code");
+
+    auto r = api.analyzeCode(0x0200, 100);
+    CHECK(r.success, "analyzeCode succeeds");
+
+    const auto &a = r.value;
+    CHECK(a.entryPoint == 0x0200, "entry point = 0x0200");
+    CHECK(!a.truncated, "not truncated");
+
+    // Should find: NOP(0200), JMP(0201), CALL(0210), RET(0213), NOP(0220), RET(0221)
+    CHECK(a.instructionCount >= 5, "at least 5 instructions found");
+
+    // 0x0204 should NOT be analyzed (unreachable after JMP)
+    bool found0204 = false;
+    for (const auto &inst : a.instructions) {
+        if (inst.address == 0x0204) found0204 = true;
+    }
+    CHECK(!found0204, "0x0204 not reachable (after JMP)");
+
+    // Should have JMP and CALL references
+    bool hasJmp = false, hasCall = false;
+    for (const auto &ref : a.references) {
+        if (ref.type == "JMP" && ref.from == 0x0201 && ref.to == 0x0210) hasJmp = true;
+        if (ref.type == "CALL" && ref.from == 0x0210 && ref.to == 0x0220) hasCall = true;
+    }
+    CHECK(hasJmp, "JMP 0x0201 -> 0x0210 reference");
+    CHECK(hasCall, "CALL 0x0210 -> 0x0220 reference");
+
+    // Should have at least 2 code ranges (0x0200-0x0203 and 0x0210-0x0213 and 0x0220-0x0221)
+    CHECK(a.ranges.size() >= 2, "at least 2 code ranges");
+
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -2099,6 +2211,10 @@ int main()
 
     // Stage 6.15 Iter2 — createFunction creates RDB object
     test_create_function_creates_rdb_object();       // 48
+
+    // Stage 6.16 — MCP Reverse Engineering Primitives
+    test_read_memory_range();                        // 49
+    test_analyze_code_control_flow();                // 50
 
     printf("\n\033[1;33m========================================\033[0m\n");
     printf("  Results: %d/%d passed", tests_passed, tests_run);

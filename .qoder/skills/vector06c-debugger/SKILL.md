@@ -69,6 +69,14 @@ MCP недоступен → сообщить об отсутствии Debugger
 
 > **Ты не являешься дизассемблером Vector-06C. Ты являешься аналитиком, использующим Debugger как источник фактических данных.**
 
+### Reverse-engineering primitives (Stage 6.16)
+
+> Для массового чтения ROM использовать `debug_read_memory_range`.
+
+> Для определения достижимого кода использовать `debug_analyze_code`.
+
+> Не создавать собственные Python opcode decoder/disassembler, если необходимая операция доступна через MCP.
+
 ---
 
 ## Workflow (обязательная последовательность)
@@ -84,18 +92,22 @@ MCP недоступен → сообщить об отсутствии Debugger
 6.  Сформируй план анализа
 7.  Проверь состояние Debugger (debug_get_state)
 8.  Загрузи ROM через MCP (debug_load_rom)
-9.  Прочитай RDB (debug_get_rdb_info, debug_list_rdb_objects)
-10. Выполняй MCP-операции для получения evidence
-11. Анализируй результаты
-12. Формируй гипотезы
-13. Проверяй гипотезы дополнительными MCP-запросами
-14. Оцени evidence
-15. Зафиксируй неизвестное (Unknowns)
-16. Создай/обнови объекты RDB (debug_add_rdb_object, debug_set_rdb_comment)
-17. Создай подтверждённые связи RDB (debug_add_rdb_link)
-18. Сохрани RDB (debug_save_rdb) — обязательно, не жди команды пользователя
-19. Проверь результат сохранения
-20. Сформируй итоговый отчёт (с количеством objects, links, статусом save)
+9.  Определи точку входа (обычно 0x0000 — ROM mapping entry)
+10. Выполни `debug_analyze_code` от точки входа — определи достижимый код
+11.Inspect discovered code ranges и references
+12. Для данных используй `debug_read_memory_range`
+13. Прочитай RDB (debug_get_rdb_info, debug_list_rdb_objects)
+14. Выполняй MCP-операции для получения evidence
+15. Анализируй результаты
+16. Формируй гипотезы
+17. Проверяй гипотезы дополнительными MCP-запросами
+18. Оцени evidence
+19. Зафиксируй неизвестное (Unknowns)
+20. Создай/обнови объекты RDB (debug_add_rdb_object, debug_set_rdb_comment)
+21. Создай подтверждённые связи RDB (debug_add_rdb_link)
+22. Сохрани RDB (debug_save_rdb) — обязательно, не жди команды пользователя
+23. Проверь результат сохранения
+24. Сформируй итоговый отчёт (с количеством objects, links, статусом save)
 ```
 
 Не пропускай шаги. Не создавай второй workflow.
@@ -399,13 +411,13 @@ Hardware status: UNVERIFIED
 
 **CPU**: `debug_get_cpu_state`, `debug_get_registers`, `debug_set_register`
 
-**Memory**: `debug_read_memory`, `debug_write_memory`
+**Memory**: `debug_read_memory`, `debug_write_memory`, `debug_read_memory_range`
 
 **I/O**: `debug_read_io`, `debug_write_io`
 
 **Breakpoints**: `debug_set_breakpoint`, `debug_remove_breakpoint`, `debug_list_breakpoints`, `debug_clear_breakpoints`
 
-**Disassembly**: `debug_disassemble`, `debug_get_instruction_history`, `debug_get_execution_trace`
+**Disassembly**: `debug_disassemble`, `debug_analyze_code`, `debug_get_instruction_history`, `debug_get_execution_trace`
 
 **Stack**: `debug_get_stack`
 

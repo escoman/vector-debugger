@@ -382,6 +382,43 @@ void McpServer::registerMemoryTools() {
             });
         });
     }
+
+    // debug_read_memory_range (Stage 6.16)
+    {
+        auto tool = mcp::tool_builder("debug_read_memory_range")
+            .with_description("Read a contiguous range of memory bytes in a single call. "
+                              "Use for bulk ROM data access instead of repeated debug_read_memory.")
+            .with_number_param("address", "Start address (0..65535)")
+            .with_number_param("length", "Number of bytes to read (1..16384)")
+            .build();
+        addNumericConstraint(tool, "address", 0, 65535);
+        addNumericConstraint(tool, "length", 1, static_cast<int>(AgentLimits::MAX_MEMORY_READ_RANGE));
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            uint16_t addr = getAddress(params);
+            size_t length = getCount(params, "length", 1);
+            if (length == 0) {
+                throw mcp::mcp_exception(mcp::error_code::invalid_params, "length must be >= 1");
+            }
+            if (length > AgentLimits::MAX_MEMORY_READ_RANGE) {
+                throw mcp::mcp_exception(mcp::error_code::invalid_params,
+                    "length exceeds maximum (" + std::to_string(AgentLimits::MAX_MEMORY_READ_RANGE) + ")");
+            }
+            uint32_t endAddr = static_cast<uint32_t>(addr) + length;
+            if (endAddr > 0x10000) {
+                return errorContent("invalid_range",
+                    "address + length exceeds 64K address space");
+            }
+            auto r = api_.readMemory(addr, length);
+            if (!r.success) return errorContent("read_memory_range_failed", r.error_message);
+            mcp::json dataArr = mcp::json::array();
+            for (auto b : r.value) dataArr.push_back(b);
+            return textContent({
+                {"address", mcp_json::hex16(addr)},
+                {"length",  static_cast<int>(r.value.size())},
+                {"data",    dataArr}
+            });
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -566,6 +603,74 @@ void McpServer::registerDisassemblyTools() {
             return textContent({
                 {"count",  static_cast<int>(r.value.size())},
                 {"events", mcp_json::instructionEventsToJson(r.value)}
+            });
+        });
+    }
+
+    // debug_analyze_code (Stage 6.16)
+    {
+        auto tool = mcp::tool_builder("debug_analyze_code")
+            .with_description("Analyze reachable 8080 machine code from an entry point using control-flow analysis. "
+                              "Follows JMP/CALL/Jcc/RST targets. Does NOT modify RDB.")
+            .with_number_param("start_address", "Entry point address (0..65535)")
+            .with_number_param("max_instructions", "Maximum instructions to analyze (default 1000)", false)
+            .build();
+        addNumericConstraint(tool, "start_address", 0, 65535);
+        addNumericConstraint(tool, "max_instructions", 1, static_cast<int>(AgentLimits::MAX_CODE_ANALYSIS_INSTRUCTIONS));
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            uint16_t startAddr = getAddress(params, "start_address");
+            size_t maxInstr = getCount(params, "max_instructions", 1000);
+            auto r = api_.analyzeCode(startAddr, maxInstr);
+            if (!r.success) return errorContent("analyze_code_failed", r.error_message);
+
+            const auto &a = r.value;
+
+            mcp::json instrs = mcp::json::array();
+            for (const auto &inst : a.instructions) {
+                instrs.push_back({
+                    {"address",   mcp_json::hex16(inst.address)},
+                    {"opcode",    mcp_json::hex8(inst.opcode)},
+                    {"mnemonic",  inst.mnemonic},
+                    {"operands",  inst.operands},
+                    {"text",      inst.text},
+                    {"size",      inst.size}
+                });
+            }
+
+            mcp::json refs = mcp::json::array();
+            for (const auto &ref : a.references) {
+                refs.push_back({
+                    {"from", mcp_json::hex16(ref.from)},
+                    {"to",   mcp_json::hex16(ref.to)},
+                    {"type", ref.type}
+                });
+            }
+
+            mcp::json ranges = mcp::json::array();
+            for (const auto &rng : a.ranges) {
+                ranges.push_back({
+                    {"start", mcp_json::hex16(rng.start)},
+                    {"end",   mcp_json::hex16(rng.end)}
+                });
+            }
+
+            mcp::json conflicts = mcp::json::array();
+            for (const auto &c : a.conflicts) {
+                conflicts.push_back({
+                    {"type",    "instruction_boundary_conflict"},
+                    {"address", mcp_json::hex16(c.address)},
+                    {"description", c.description}
+                });
+            }
+
+            return textContent({
+                {"entry_point",     mcp_json::hex16(a.entryPoint)},
+                {"instruction_count", static_cast<int>(a.instructionCount)},
+                {"truncated",       a.truncated},
+                {"instructions",    instrs},
+                {"references",      refs},
+                {"ranges",          ranges},
+                {"conflicts",       conflicts}
             });
         });
     }

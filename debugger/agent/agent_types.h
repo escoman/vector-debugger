@@ -140,6 +140,8 @@ namespace AgentLimits {
     static const size_t MAX_TRACE_ENTRIES      = 100000;
     static const size_t MAX_HISTORY_ENTRIES    = 100000;
     static const size_t MAX_RDB_OBJECTS_LIMIT  = 10000;
+    static const size_t MAX_MEMORY_READ_RANGE  = 16384;  // 16 KB
+    static const size_t MAX_CODE_ANALYSIS_INSTRUCTIONS = 10000;
 }
 
 // ---------------------------------------------------------------------------

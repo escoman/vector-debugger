@@ -77,19 +77,29 @@ ROM → MCP Debugger → DebugAdapter → Agent API → disassembly / CPU / memo
 4. Загрузи нужную **Knowledge Base**.
 5. Для фактов учитывай `verification.md`.
 6. Загрузи ROM через MCP (`debug_load_rom`), проверь состояние (`debug_get_state`).
-7. Прочитай RDB (`debug_get_rdb_info`, `debug_list_rdb_objects`).
-8. Получи дизассемблирование через MCP (`debug_disassemble`). Начни исследование с `0x0000` — это точка входа ROM mapping, не `_main`.
-9. Для анализа эмулятора используй **MCP vector-debugger** (`debug_*` tools).
-10. Разделяй **Fact / Inference / Hypothesis**.
-11. Не выдавай Emulator Behavior за подтверждённое Hardware Behavior.
-12. Проверяй важные гипотезы дополнительными MCP-запросами.
-13. Создай/обнови объекты RDB (`debug_add_rdb_object`, `debug_set_rdb_comment`).
-14. Создай подтверждённые связи RDB (`debug_add_rdb_link`) — обязательно при наличии evidence.
-15. Сохрани RDB (`debug_save_rdb`) — обязательно, не жди команды пользователя.
-16. Проверь результат сохранения.
-17. Формируй итоговый отчёт по `debugger/agent/AI_AGENT_WORKFLOW.md` (с objects count, links count, save status).
+7. Определи точку входа (обычно `0x0000` — ROM mapping entry).
+8. Выполни `debug_analyze_code` от точки входа — определи достижимый код, code ranges, references.
+9. Inspect discovered code: используй `debug_disassemble` для деталей, `debug_read_memory_range` для данных.
+10. Прочитай RDB (`debug_get_rdb_info`, `debug_list_rdb_objects`).
+11. Для анализа эмулятора используй **MCP vector-debugger** (`debug_*` tools).
+12. Разделяй **Fact / Inference / Hypothesis**.
+13. Не выдавай Emulator Behavior за подтверждённое Hardware Behavior.
+14. Проверяй важные гипотезы дополнительными MCP-запросами.
+15. Создай/обнови объекты RDB (`debug_add_rdb_object`, `debug_set_rdb_comment`).
+16. Создай подтверждённые связи RDB (`debug_add_rdb_link`) — обязательно при наличии evidence.
+17. Сохрани RDB (`debug_save_rdb`) — обязательно, не жди команды пользователя.
+18. Проверь результат сохранения.
+19. Формируй итоговый отчёт по `debugger/agent/AI_AGENT_WORKFLOW.md` (с objects count, links count, save status).
 
-Шаги 6–8 обязательны. Не заменяй их самостоятельным чтением ROM.
+Шаги 6–9 обязательны. Не заменяй их самостоятельным чтением ROM.
+
+### Reverse-engineering primitives (Stage 6.16)
+
+> Для массового чтения ROM использовать `debug_read_memory_range`.
+
+> Для определения достижимого кода использовать `debug_analyze_code`.
+
+> Не создавать собственные Python opcode decoder/disassembler, если необходимая операция доступна через MCP.
 
 ### RDB — рабочая база ROM
 
@@ -115,14 +125,14 @@ ROM mapping незавершён без:
 
 ## MCP Tools
 
-Сервер `vector-debugger` предоставляет 52 инструмента `debug_*`:
+Сервер `vector-debugger` предоставляет 54 инструмента `debug_*`:
 
 - **Execution**: `debug_run`, `debug_pause`, `debug_step`, `debug_reset`, `debug_is_running`
 - **CPU**: `debug_get_cpu_state`, `debug_get_registers`, `debug_set_register`
-- **Memory**: `debug_read_memory`, `debug_write_memory`
+- **Memory**: `debug_read_memory`, `debug_write_memory`, `debug_read_memory_range`
 - **I/O**: `debug_read_io`, `debug_write_io`
 - **Breakpoints**: `debug_set_breakpoint`, `debug_remove_breakpoint`, `debug_list_breakpoints`, `debug_clear_breakpoints`
-- **Disassembly**: `debug_disassemble`, `debug_get_instruction_history`, `debug_get_execution_trace`
+- **Disassembly & Analysis**: `debug_disassemble`, `debug_analyze_code`, `debug_get_instruction_history`, `debug_get_execution_trace`
 - **Stack**: `debug_get_stack`
 - **Symbols**: `debug_get_symbols`, `debug_get_function`, `debug_get_function_context`, `debug_get_xrefs`, `debug_get_call_graph`
 - **Memory Map / Video**: `debug_get_memory_map`, `debug_get_vram_info`, `debug_get_screen_info`

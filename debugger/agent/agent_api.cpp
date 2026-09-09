@@ -409,6 +409,46 @@ AgentApi::disassemble(uint16_t address, size_t count)
 }
 
 // ---------------------------------------------------------------------------
+// Code Analysis (Stage 6.16 — control-flow analysis via existing disassembler)
+// ---------------------------------------------------------------------------
+
+AgentApiResult<CodeAnalysisResult>
+AgentApi::analyzeCode(uint16_t startAddress, size_t maxInstructions)
+{
+    auto t0 = std::chrono::steady_clock::now();
+
+    if (maxInstructions == 0) {
+        log_.record("analyzeCode", "max=0", "invalid",
+                    elapsedMs(t0), false, "maxInstructions must be > 0");
+        return AgentApiResult<CodeAnalysisResult>::fail(
+            ErrorCode::InvalidArgument, "maxInstructions must be > 0");
+    }
+
+    if (maxInstructions > AgentLimits::MAX_CODE_ANALYSIS_INSTRUCTIONS) {
+        maxInstructions = AgentLimits::MAX_CODE_ANALYSIS_INSTRUCTIONS;
+    }
+
+    auto readByte = [this](uint16_t addr) -> uint8_t {
+        return backend_.readMemory(addr);
+    };
+
+    CodeAnalysisResult analysis = ::analyzeCode(startAddress, readByte, maxInstructions);
+
+    std::ostringstream oss;
+    oss << "entry=" << std::hex << startAddress
+        << " instructions=" << std::dec << analysis.instructionCount
+        << " ranges=" << analysis.ranges.size()
+        << " refs=" << analysis.references.size()
+        << " conflicts=" << analysis.conflicts.size();
+    if (analysis.truncated) oss << " TRUNCATED";
+    log_.record("analyzeCode", oss.str(),
+                std::to_string(analysis.instructionCount) + " instructions",
+                elapsedMs(t0));
+
+    return AgentApiResult<CodeAnalysisResult>::ok(std::move(analysis));
+}
+
+// ---------------------------------------------------------------------------
 // Instruction History (Stage 6.1 §11)
 // ---------------------------------------------------------------------------
 
