@@ -627,6 +627,28 @@ if(ENABLE_AI_AGENT)
         pthread
     )
 
+    # ROM Load Breakpoint Reset tests (Stage 6.20.1)
+    # Uses real DebugBackend + NoBoardTarget — needs CORE_SOURCES + options.
+    add_executable(test_agent_rom_load_breakpoints
+        ${AGENT_DIR}/tests/test_agent_rom_load_breakpoints.cpp
+        ${DBG_SOURCES}
+        ${RDB_SOURCES}
+        ${CORE_SOURCES}
+        ${SRC_DIR}/options.cpp
+    )
+
+    target_include_directories(test_agent_rom_load_breakpoints PRIVATE
+        ${AGENT_DIR}
+        ${DBG_SRC_DIR}
+        ${SRC_DIR}
+    )
+
+    target_link_libraries(test_agent_rom_load_breakpoints
+        debugger_agent
+        ${Boost_LIBRARIES}
+        pthread
+    )
+
     # -----------------------------------------------------------------------
     # MCP Adapter Module (Stage 6.4)
     # -----------------------------------------------------------------------

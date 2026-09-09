@@ -117,6 +117,14 @@ bool DebugBackend::loadRom(const std::string &path, uint32_t org)
     clearHistory();
     instructionSequence_ = 0;
 
+    // Stage 6.20.1: Clear breakpoints from previous ROM session.
+    // Breakpoints belong to the debug session, not the ROM —
+    // stale breakpoints must not carry over to the newly loaded ROM.
+    // syncBreakpointsToTarget() propagates empty list to DebugAdapter
+    // and Board, clearing syncedBreakpoints_ as well.
+    clearBreakpoints();
+    syncBreakpointsToTarget();
+
     // Stage 6.20: Invalidate runtime analysis state from previous ROM
     clearRuntimeAccessMap();
     invalidateAllSnapshots();
