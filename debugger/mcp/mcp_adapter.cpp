@@ -710,12 +710,11 @@ void McpServer::registerDisassemblyTools() {
             
             mcp::json instrs = mcp::json::array();
             for (const auto &inst : result.instructions) {
-                mcp::json instrJson = {
-                    {"address",   mcp_json::hex16(inst.address)},
-                    {"mnemonic",  inst.mnemonic},
-                    {"operands",  inst.operands},
-                    {"size",      inst.size}
-                };
+                mcp::json instrJson;
+                instrJson["address"] = mcp_json::hex16(inst.address);
+                instrJson["mnemonic"] = inst.mnemonic;
+                instrJson["operands"] = inst.operands;
+                instrJson["size"] = inst.size;
                 
                 // Add bytes array
                 mcp::json bytesArr = mcp::json::array();
@@ -728,7 +727,12 @@ void McpServer::registerDisassemblyTools() {
                 } else {
                     instrJson["branch_target"] = nullptr;
                 }
-                instrJson["branch_type"] = inst.branch_type.empty() ? nullptr : inst.branch_type;
+                
+                if (inst.branch_type.empty()) {
+                    instrJson["branch_type"] = nullptr;
+                } else {
+                    instrJson["branch_type"] = inst.branch_type;
+                }
                 
                 instrs.push_back(instrJson);
             }
