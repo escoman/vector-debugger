@@ -65,6 +65,15 @@ private:
     char addNameBuffer_[128] = "";
     int addTypeIndex_ = 0;  // index into type names
 
+    // Object details dialog (double-click)
+    bool showObjectDialog_ = false;
+    uint16_t objectDialogAddress_ = 0;
+    char objDlgNameBuffer_[128] = "";
+    int objDlgTypeIndex_ = 0;
+    char objDlgSizeBuffer_[16] = "";
+    bool objDlgHasSize_ = false;
+    char objDlgCommentBuffer_[256] = "";
+
     // Context menu state
     uint16_t contextAddress_ = 0;
 
@@ -81,4 +90,10 @@ private:
 
     void refreshCache(const RdbController &rdb);
     bool matchesFilter(const CachedObject &obj) const;
+
+    // Open object details dialog for given address
+    void openObjectDialog(const RdbController &rdb, uint16_t address);
+
+    // Render the object details modal dialog
+    void renderObjectDialog(RdbController &rdb);
 };

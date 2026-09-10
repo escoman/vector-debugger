@@ -257,8 +257,8 @@ void RomDatabaseWindow::render(IDebugBackend &backend)
             if (ImGui::Selectable(addrBuf, isSelected,
                     ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick))
             {
-                if (ImGui::IsMouseDoubleClicked(0) && onGoToDisassembly) {
-                    onGoToDisassembly(obj->address);
+                if (ImGui::IsMouseDoubleClicked(0)) {
+                    openObjectDialog(rdb, obj->address);
                 }
             }
 
@@ -358,5 +358,189 @@ void RomDatabaseWindow::render(IDebugBackend &backend)
     }
 
     ImGui::EndChild();
+
+    // -- Object Details Dialog -----------------------------------------------
+
+    renderObjectDialog(rdb);
+
     ImGui::End();
+}
+
+// ---------------------------------------------------------------------------
+// Object Details Dialog
+// ---------------------------------------------------------------------------
+
+static int typeToIndex(RdbObjectType type)
+{
+    switch (type) {
+        case RdbObjectType::Function:  return 0;
+        case RdbObjectType::Variable:  return 1;
+        case RdbObjectType::Data:      return 2;
+        case RdbObjectType::Table:     return 3;
+        case RdbObjectType::String:    return 4;
+        case RdbObjectType::Code:      return 5;
+        case RdbObjectType::Label:     return 6;
+        default:                       return 7;
+    }
+}
+
+void RomDatabaseWindow::openObjectDialog(const RdbController &rdb, uint16_t address)
+{
+    const RdbObject *obj = rdb.getObject(address);
+    if (!obj) return;
+
+    objectDialogAddress_ = address;
+    snprintf(objDlgNameBuffer_, sizeof(objDlgNameBuffer_), "%s", obj->name.c_str());
+    objDlgTypeIndex_ = typeToIndex(obj->type);
+    if (obj->hasSize) {
+        objDlgHasSize_ = true;
+        snprintf(objDlgSizeBuffer_, sizeof(objDlgSizeBuffer_), "%u", obj->size);
+    } else {
+        objDlgHasSize_ = false;
+        objDlgSizeBuffer_[0] = '\0';
+    }
+    snprintf(objDlgCommentBuffer_, sizeof(objDlgCommentBuffer_), "%s", obj->comment.c_str());
+    showObjectDialog_ = true;
+}
+
+void RomDatabaseWindow::renderObjectDialog(RdbController &rdb)
+{
+    if (showObjectDialog_) {
+        ImGui::OpenPopup("Object Details");
+        showObjectDialog_ = false;
+    }
+
+    if (ImGui::BeginPopupModal("Object Details", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        const RdbObject *obj = rdb.getObject(objectDialogAddress_);
+        if (!obj) {
+            ImGui::TextDisabled("(object not found)");
+            if (ImGui::Button("Close")) {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+            return;
+        }
+
+        // -- Main Fields -----------------------------------------------------
+
+        ImGui::Text("Address:");
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "%04X", obj->address);
+
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        ImGui::Text("Name:");
+        ImGui::SetNextItemWidth(350);
+        ImGui::InputText("##Name", objDlgNameBuffer_, sizeof(objDlgNameBuffer_));
+        ImGui::Spacing();
+
+        ImGui::Text("Type:");
+        ImGui::SetNextItemWidth(350);
+        ImGui::Combo("##Type", &objDlgTypeIndex_, RDB_TYPE_NAMES, RDB_TYPE_COUNT);
+        ImGui::Spacing();
+
+        ImGui::Checkbox("Has Size", &objDlgHasSize_);
+        if (objDlgHasSize_) {
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(100);
+            ImGui::InputText("##Size", objDlgSizeBuffer_, sizeof(objDlgSizeBuffer_));
+        }
+        ImGui::Spacing();
+
+        ImGui::Text("Comment:");
+        ImGui::SetNextItemWidth(350);
+        ImGui::InputTextMultiline("##Comment", objDlgCommentBuffer_, sizeof(objDlgCommentBuffer_),
+                                   ImVec2(350, 90), ImGuiInputTextFlags_WordWrap);
+
+        // -- Properties ------------------------------------------------------
+
+        ImGui::Separator();
+        if (ImGui::CollapsingHeader("Properties", ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (obj->properties.empty()) {
+                ImGui::TextDisabled("(no properties)");
+            } else {
+                ImGui::BeginChild("PropertiesList", ImVec2(350, 120), ImGuiChildFlags_Borders);
+                for (const auto &kv : obj->properties) {
+                    ImGui::Text("%s:", kv.first.c_str());
+                    ImGui::SameLine(120);
+                    switch (kv.second.type) {
+                        case RdbPropertyValue::Type::String:
+                            ImGui::TextColored(ImVec4(0.8f, 1.0f, 0.8f, 1.0f),
+                                               "\"%s\"", kv.second.stringValue.c_str());
+                            break;
+                        case RdbPropertyValue::Type::Integer:
+                            ImGui::TextColored(ImVec4(1.0f, 0.9f, 0.6f, 1.0f),
+                                               "%lld", (long long)kv.second.intValue);
+                            break;
+                        case RdbPropertyValue::Type::Boolean:
+                            ImGui::TextColored(ImVec4(0.6f, 1.0f, 1.0f, 1.0f),
+                                               "%s", kv.second.boolValue ? "true" : "false");
+                            break;
+                        case RdbPropertyValue::Type::Double:
+                            ImGui::TextColored(ImVec4(1.0f, 0.7f, 1.0f, 1.0f),
+                                               "%.4f", kv.second.doubleValue);
+                            break;
+                    }
+                }
+                ImGui::EndChild();
+            }
+        }
+
+        // -- Links -----------------------------------------------------------
+
+        if (ImGui::CollapsingHeader("Links", ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto links = rdb.getLinks(obj->address);
+            if (links.empty()) {
+                ImGui::TextDisabled("(no links)");
+            } else {
+                ImGui::BeginChild("LinksList", ImVec2(350, 100), ImGuiChildFlags_Borders);
+                for (uint16_t target : links) {
+                    const RdbObject *targetObj = rdb.getObject(target);
+                    if (targetObj && !targetObj->name.empty()) {
+                        ImGui::Text("%04X  %s", target, targetObj->name.c_str());
+                    } else {
+                        ImGui::Text("%04X", target);
+                    }
+                    ImGui::SameLine();
+                    char btnId[32];
+                    snprintf(btnId, sizeof(btnId), "Go##%04X", target);
+                    if (ImGui::SmallButton(btnId)) {
+                        if (onGoToDisassembly) onGoToDisassembly(target);
+                    }
+                }
+                ImGui::EndChild();
+            }
+        }
+
+        // -- Buttons ---------------------------------------------------------
+
+        ImGui::Separator();
+        if (ImGui::Button("Save", ImVec2(120, 0))) {
+            RdbObject updated = *obj;
+            updated.name = objDlgNameBuffer_;
+            updated.type = indexToType(objDlgTypeIndex_);
+            if (objDlgHasSize_) {
+                unsigned int sz = 0;
+                if (sscanf(objDlgSizeBuffer_, "%u", &sz) == 1) {
+                    updated.size = sz;
+                    updated.hasSize = true;
+                } else {
+                    updated.hasSize = false;
+                }
+            } else {
+                updated.hasSize = false;
+            }
+            updated.comment = objDlgCommentBuffer_;
+            rdb.updateObject(updated);
+            needsRefresh_ = true;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
+    }
 }
