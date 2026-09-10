@@ -1209,36 +1209,20 @@ AgentApiResult<VramInfoResult> AgentApi::getVramInfo()
     result.vram_base = video.vramBase;
     result.scroll_value = video.scrollValue;
 
-    // Vector-06C VRAM plane layout depends on video mode:
-    //   256-mode: 1 screen plane at vramBase (typically 0xC000), 8 KB
-    //   512-mode: 2 screen planes at 0xC000 (16 KB) and 0xE000 (16 KB)
-    //
-    // Derive from actual video mode parameters (visibleWidth, pixelsPerByte).
-    int numCols = video.visibleWidth / video.pixelsPerByte;
-    uint16_t planeSize = static_cast<uint16_t>(numCols * 256);
-
-    if (!video.mode512) {
-        // 256-mode: single screen plane
+    // Vector-06C VRAM has 4 bit-planes at fixed addresses (32 KB total):
+    //   Plane 0: 0xE000  (8 KB)
+    //   Plane 1: 0xC000  (8 KB)
+    //   Plane 2: 0xA000  (8 KB)
+    //   Plane 3: 0x8000  (8 KB)
+    // Each plane: 32 byte-columns × 256 bytes = 8192 bytes
+    // Each byte: 8 horizontal pixels, bit 7 = left, bit 0 = right
+    static const uint16_t planeAddresses[] = { 0xE000, 0xC000, 0xA000, 0x8000 };
+    for (int i = 0; i < 4; ++i) {
         VramPlaneInfo plane;
-        plane.plane = 0;
-        plane.address = video.vramBase;
-        plane.size = planeSize;
+        plane.plane = i;
+        plane.address = planeAddresses[i];
+        plane.size = 8192;
         result.planes.push_back(plane);
-    } else {
-        // 512-mode: two screen planes
-        // Plane 0: 0xC000 (16 KB)
-        // Plane 1: 0xE000 (16 KB)
-        VramPlaneInfo plane0;
-        plane0.plane = 0;
-        plane0.address = 0xC000;
-        plane0.size = 16384;
-        result.planes.push_back(plane0);
-
-        VramPlaneInfo plane1;
-        plane1.plane = 1;
-        plane1.address = 0xE000;
-        plane1.size = 16384;
-        result.planes.push_back(plane1);
     }
 
     std::ostringstream oss;
