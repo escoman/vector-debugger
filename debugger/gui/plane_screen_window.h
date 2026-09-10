@@ -1,6 +1,8 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 // Forward declarations
@@ -35,6 +37,19 @@ private:
 
     // Selected plane (0–3)
     int selectedPlane_ = 0;
+
+    // Live mode: color pixels by recent memory access
+    bool liveMode_ = false;
+
+    // Track last read/write times per VRAM byte address (for live mode)
+    struct AccessTimes {
+        std::chrono::steady_clock::time_point lastRead;
+        std::chrono::steady_clock::time_point lastWrite;
+    };
+    std::unordered_map<uint16_t, AccessTimes> accessTimes_;
+
+    // Activity duration for live mode coloring
+    static constexpr auto ACTIVITY_DURATION = std::chrono::milliseconds(500);
 
     // Zoom
     int zoomLevel_ = 0;  // 0=1x, 1=2x, 2=4x, 3=8x

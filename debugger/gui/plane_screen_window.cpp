@@ -1,5 +1,6 @@
 #include "plane_screen_window.h"
 #include "idebug_backend.h"
+#include "events.h"
 
 // Dear ImGui
 #include "imgui.h"
@@ -57,13 +58,50 @@ void PlaneScreenWindow::buildPlanePixels(IDebugBackend &backend)
 
     const uint8_t *vram = snapshot.data.data();
 
+    // Update access times from memory history (for live mode)
+    if (liveMode_) {
+        auto events = backend.memoryHistorySnapshot();
+        auto now = std::chrono::steady_clock::now();
+        for (const auto &evt : events) {
+            uint16_t addr = evt.virt;
+            // Only track accesses within current plane's range
+            if (addr >= base && addr < base + 8192) {
+                auto &times = accessTimes_[addr];
+                if (evt.type == MemoryAccessType::Read || evt.type == MemoryAccessType::Fetch) {
+                    times.lastRead = now;
+                } else if (evt.type == MemoryAccessType::Write) {
+                    times.lastWrite = now;
+                }
+            }
+        }
+    }
+
     int stride = currentStride();
     int newW = BASE_SIZE * stride;
     int newH = BASE_SIZE * stride;
 
+    // Normal colors (black and white)
     static constexpr uint32_t kColorSet   = 0xFFCCCCCC;  // light gray
     static constexpr uint32_t kColorUnset = 0xFF000000;  // black
     static constexpr uint32_t kColorGrid  = 0xFF404040;  // dark gray
+
+    // Live mode colors (bright and dark variants for set/unset bits)
+    // ARGB format: 0xAARRGGBB
+    // Write: red
+    static constexpr uint32_t kWriteSet   = 0xFFE04040;  // bright red
+    static constexpr uint32_t kWriteUnset = 0xFF402020;  // dark red
+    // Read: green
+    static constexpr uint32_t kReadSet    = 0xFF40E040;  // bright green
+    static constexpr uint32_t kReadUnset  = 0xFF204020;  // dark green
+    // Read+Write: yellow
+    static constexpr uint32_t kBothSet    = 0xFFE0E040;  // bright yellow
+    static constexpr uint32_t kBothUnset  = 0xFF404020;  // dark yellow
+
+    auto now = std::chrono::steady_clock::now();
+    auto isActive = [&](std::chrono::steady_clock::time_point tp) -> bool {
+        if (tp == std::chrono::steady_clock::time_point()) return false;
+        return (now - tp) < ACTIVITY_DURATION;
+    };
 
     // Resize pixel buffer if texture dimensions changed (zoom changed).
     if ((int)planePixels_.size() != newW * newH) {
@@ -89,9 +127,29 @@ void PlaneScreenWindow::buildPlanePixels(IDebugBackend &backend)
             } else {
                 int byteCol = pixelX / 8;
                 int bit     = 7 - (pixelX % 8);
-                uint8_t byteVal = vram[byteCol * 256 + byteRow];
+                int vramOffset = byteCol * 256 + byteRow;
+                uint16_t vramAddr = base + vramOffset;
+                uint8_t byteVal = vram[vramOffset];
                 bool pixelSet = (byteVal >> bit) & 1;
-                color = pixelSet ? kColorSet : kColorUnset;
+
+                if (liveMode_) {
+                    // Check access times for this VRAM byte
+                    auto it = accessTimes_.find(vramAddr);
+                    bool readActive = (it != accessTimes_.end()) && isActive(it->second.lastRead);
+                    bool writeActive = (it != accessTimes_.end()) && isActive(it->second.lastWrite);
+
+                    if (readActive && writeActive) {
+                        color = pixelSet ? kBothSet : kBothUnset;
+                    } else if (readActive) {
+                        color = pixelSet ? kReadSet : kReadUnset;
+                    } else if (writeActive) {
+                        color = pixelSet ? kWriteSet : kWriteUnset;
+                    } else {
+                        color = pixelSet ? kColorSet : kColorUnset;
+                    }
+                } else {
+                    color = pixelSet ? kColorSet : kColorUnset;
+                }
             }
             planePixels_[ty * newW + tx] = color;
         }
@@ -212,6 +270,17 @@ void PlaneScreenWindow::renderToolbar()
     static const uint16_t planeBases[] = { 0xE000, 0xC000, 0xA000, 0x8000 };
     uint16_t baseAddr = planeBases[selectedPlane_];
     ImGui::Text("Addr: %04X–%04X", baseAddr, (uint16_t)(baseAddr + 0x1FFF));
+
+    // Live mode checkbox
+    ImGui::SameLine();
+    ImGui::Text("|");
+    ImGui::SameLine();
+    if (ImGui::Checkbox("Live", &liveMode_)) {
+        // Clear access times when toggling live mode
+        if (!liveMode_) {
+            accessTimes_.clear();
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
