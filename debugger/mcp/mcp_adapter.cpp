@@ -85,10 +85,15 @@ void McpServer::registerAllTools() {
     registerAnnotationTools();
     registerRdbTools();
     registerRuntimeAnalysisTools();  // Stage 6.20
+    registerServerTools();           // shutdown
 }
 
 void McpServer::runStdio() {
     server_->start_stdio();
+}
+
+void McpServer::shutdown() {
+    server_->stop();
 }
 
 std::vector<std::string> McpServer::registeredToolNames() const {
@@ -1499,6 +1504,29 @@ void McpServer::registerRuntimeAnalysisTools() {
             diffJson["snapshot_a"] = static_cast<int>(idA);
             diffJson["snapshot_b"] = static_cast<int>(idB);
             return textContent(diffJson);
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Server management tools
+// ---------------------------------------------------------------------------
+
+void McpServer::registerServerTools() {
+    // debug_shutdown
+    {
+        auto tool = mcp::tool_builder("debug_shutdown")
+            .with_description("Shut down the MCP server. The agent can use this to trigger a server restart. "
+                              "After calling this tool, the server will stop accepting new requests.")
+            .build();
+        registerTool(tool, [this](const mcp::json &, const std::string &) -> mcp::json {
+            // Return success message before shutting down
+            auto result = textContent({{"status", "shutting_down"}});
+            // Schedule shutdown after response is sent
+            // Note: The actual shutdown happens when this handler returns
+            // and the server processes the stop() call
+            shutdown();
+            return result;
         });
     }
 }

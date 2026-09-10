@@ -30,6 +30,9 @@ public:
     // Run stdio transport (blocks until stdin closes).
     void runStdio();
 
+    // Stop the MCP server (triggers shutdown).
+    void shutdown();
+
     // Access the underlying cpp-mcp server (for testing).
     mcp::server &server() { return *server_; }
     const mcp::server &server() const { return *server_; }
@@ -66,6 +69,7 @@ private:
     void registerAnnotationTools();
     void registerRdbTools();
     void registerRuntimeAnalysisTools();  // Stage 6.20
+    void registerServerTools();           // shutdown
 
     // Register a tool with both cpp-mcp server and local handler map.
     void registerTool(const mcp::tool &tool, mcp::tool_handler handler);

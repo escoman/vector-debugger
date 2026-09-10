@@ -119,11 +119,11 @@ static mcp::json parseTextAsJson(const mcp::json &result) {
 // Tool Registration Tests
 // ---------------------------------------------------------------------------
 
-void test_all_55_tools_registered() {
-    TEST_BEGIN("all 55 tools registered");
+void test_all_61_tools_registered() {
+    TEST_BEGIN("all 61 tools registered");
     Fixture f;
     auto names = f.mcp.registeredToolNames();
-    CHECK_EQ(static_cast<int>(names.size()), 55, "should have 55 tools");
+    CHECK_EQ(static_cast<int>(names.size()), 61, "should have 61 tools");
     TEST_END();
 }
 
@@ -175,7 +175,13 @@ void test_expected_tools_exist() {
         // Stage 6.16: Reverse Engineering Primitives
         "debug_read_memory_range", "debug_analyze_code",
         // Stage 6.18: Range Disassembly
-        "debug_disassemble_range"
+        "debug_disassemble_range",
+        // Stage 6.20: Runtime Memory Analysis
+        "debug_clear_memory_access_map", "debug_get_memory_access_map",
+        "debug_get_memory_access_log", "debug_create_memory_snapshot",
+        "debug_compare_memory_snapshots",
+        // Server management
+        "debug_shutdown"
     };
 
     for (auto &e : expected) {
@@ -1056,7 +1062,7 @@ int main()
     printf("\033[1;33m========================================\033[0m\n\n");
 
     // Registration
-    test_all_55_tools_registered();
+    test_all_61_tools_registered();
     test_tool_names_have_debug_prefix();
     test_expected_tools_exist();
 
