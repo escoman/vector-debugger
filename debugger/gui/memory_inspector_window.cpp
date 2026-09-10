@@ -263,9 +263,14 @@ void MemoryInspectorWindow::renderMemoryView(IDebugBackend &backend)
                 }
             }
             
-            // Right-click context menu for breakpoints (Stage 3.7) + navigation (Stage 3.9)
+            // Right-click context menu for breakpoints (Stage 3.7) + navigation (Stage 3.9) + byte edit
             if (ImGui::BeginPopupContextItem("bpctx")) {
-                // Use the selectedAddress_ as the target
+                // Edit byte
+                if (ImGui::MenuItem("Edit Byte")) {
+                    beginEditByte(selectedAddress_);
+                }
+                ImGui::Separator();
+                // Breakpoint toggle
                 if (backend.hasBreakpoint(selectedAddress_)) {
                     if (ImGui::MenuItem("Remove Breakpoint")) {
                         backend.removeBreakpoint(selectedAddress_);
