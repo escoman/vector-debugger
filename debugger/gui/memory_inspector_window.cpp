@@ -17,6 +17,13 @@ void MemoryInspectorWindow::render(IDebugBackend &backend)
 {
     if (!visible_) return;
     
+    // Bring dock tab to front when navigated to from another window
+    // Must be called BEFORE Begin()
+    if (pendingFocus_) {
+        ImGui::SetNextWindowFocus();
+        pendingFocus_ = false;
+    }
+    
     // Window flags: movable, resizable, with title bar
     ImGuiWindowFlags flags = ImGuiWindowFlags_None;
     
@@ -25,12 +32,6 @@ void MemoryInspectorWindow::render(IDebugBackend &backend)
     if (!ImGui::Begin("Memory Inspector", &visible_, flags)) {
         ImGui::End();
         return;
-    }
-
-    // Bring dock tab to front when navigated to from another window
-    if (pendingFocus_) {
-        ImGui::SetWindowFocus();
-        pendingFocus_ = false;
     }
     
     // Refresh snapshot if needed
@@ -183,6 +184,19 @@ void MemoryInspectorWindow::renderMemoryView(IDebugBackend &backend)
                 if (backend.hasBreakpoint(addr)) containsBp = true;
             }
 
+            // Check if this line contains the selected address
+            bool containsSelected = false;
+            int selectedByteIndex = -1;
+            for (int i = 0; i < bytesPerLine; ++i) {
+                size_t offset = lineOffset + i;
+                if (offset >= totalBytes) break;
+                uint16_t addr = static_cast<uint16_t>((snapshot_.start + offset) & 0xFFFF);
+                if (addr == selectedAddress_) {
+                    containsSelected = true;
+                    selectedByteIndex = i;
+                }
+            }
+
             // Highlight line with PC
             if (containsPc) {
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 0.5f, 1.0f));
@@ -201,8 +215,12 @@ void MemoryInspectorWindow::renderMemoryView(IDebugBackend &backend)
             }
             pos += snprintf(lineBuf + pos, sizeof(lineBuf) - pos, "%04X: ", lineAddr);
             
+            // Track byte positions in lineBuf for accurate highlight positioning
+            int hexBytePos[16];  // byte position in lineBuf for each hex byte
+            
             // Hex column
             for (int i = 0; i < bytesPerLine; ++i) {
+                hexBytePos[i] = pos;  // record position before this byte
                 size_t offset = lineOffset + i;
                 if (offset >= totalBytes) {
                     pos += snprintf(lineBuf + pos, sizeof(lineBuf) - pos, "   ");
@@ -211,12 +229,18 @@ void MemoryInspectorWindow::renderMemoryView(IDebugBackend &backend)
                     pos += snprintf(lineBuf + pos, sizeof(lineBuf) - pos, "%02X ", byte);
                 }
             }
+            int hexEndPos = pos;  // position after hex section
             
             // Separator
             pos += snprintf(lineBuf + pos, sizeof(lineBuf) - pos, " |");
+            int asciiStartPos = pos;  // position where ASCII section starts
+            
+            // Track ASCII byte positions
+            int asciiBytePos[16];  // byte position in lineBuf for each ASCII char
             
             // ASCII column
             for (int i = 0; i < bytesPerLine; ++i) {
+                asciiBytePos[i] = pos;  // record position before this char
                 size_t offset = lineOffset + i;
                 if (offset >= totalBytes) {
                     lineBuf[pos++] = ' ';
@@ -232,25 +256,69 @@ void MemoryInspectorWindow::renderMemoryView(IDebugBackend &backend)
             lineBuf[pos++] = '|';
             lineBuf[pos] = '\0';
             
-            // Render the full line as selectable
-            bool lineClicked = ImGui::Selectable(lineBuf, false, ImGuiSelectableFlags_AllowDoubleClick);
+            // Render the full line as text (not selectable — we draw cell highlight manually)
+            ImGui::TextUnformatted(lineBuf);
             
-            if (lineClicked) {
-                // Calculate which byte was clicked based on mouse X position
+            // Draw highlight rectangle over the selected byte cell
+            if (containsSelected && selectedByteIndex >= 0) {
+                ImDrawList *drawList = ImGui::GetWindowDrawList();
+                ImVec2 textStart = ImGui::GetItemRectMin();
+                float lineH = ImGui::GetTextLineHeight();
+                
+                // Measure actual pixel positions using CalcTextSize
+                float hexCellStartX = textStart.x + ImGui::CalcTextSize(lineBuf, lineBuf + hexBytePos[selectedByteIndex]).x;
+                float hexCellEndX = textStart.x + ImGui::CalcTextSize(lineBuf, lineBuf + hexBytePos[selectedByteIndex] + 3).x;  // "XX " = 3 chars
+                
+                // Hex cell highlight
+                ImColor highlightCol(ImGui::GetStyle().Colors[ImGuiCol_FrameBgActive]);
+                highlightCol.Value.w = 0.5f;
+                drawList->AddRectFilled(
+                    ImVec2(hexCellStartX, textStart.y),
+                    ImVec2(hexCellEndX, textStart.y + lineH),
+                    highlightCol);
+                
+                // ASCII cell highlight
+                float asciiCellStartX = textStart.x + ImGui::CalcTextSize(lineBuf, lineBuf + asciiBytePos[selectedByteIndex]).x;
+                float asciiCellEndX = textStart.x + ImGui::CalcTextSize(lineBuf, lineBuf + asciiBytePos[selectedByteIndex] + 1).x;  // 1 char
+                
+                drawList->AddRectFilled(
+                    ImVec2(asciiCellStartX, textStart.y),
+                    ImVec2(asciiCellEndX, textStart.y + lineH),
+                    highlightCol);
+            }
+            
+            // Handle clicks on the line
+            if (ImGui::IsItemClicked()) {
                 ImVec2 textStart = ImGui::GetItemRectMin();
                 float mouseX = ImGui::GetIO().MousePos.x;
-                float offset = mouseX - textStart.x;
+                float mouseRelX = mouseX - textStart.x;
                 
-                // Address field: "XXXX: " = 6 chars
-                float addrWidth = 6.0f * charWidth;
+                // Find which byte was clicked by comparing mouse X with measured byte positions
+                int byteIndex = -1;
                 
-                if (offset >= addrWidth) {
-                    float byteOffset = offset - addrWidth;
-                    // Each byte cell: "XX " = 3 chars wide
-                    float cellWidth = 3.0f * charWidth;
-                    int byteIndex = static_cast<int>(byteOffset / cellWidth);
-                    byteIndex = std::max(0, std::min(byteIndex, bytesPerLine - 1));
-                    
+                // Check hex section
+                for (int i = 0; i < bytesPerLine; ++i) {
+                    float cellStartX = ImGui::CalcTextSize(lineBuf, lineBuf + hexBytePos[i]).x;
+                    float cellEndX = ImGui::CalcTextSize(lineBuf, lineBuf + hexBytePos[i] + 3).x;
+                    if (mouseRelX >= cellStartX && mouseRelX < cellEndX) {
+                        byteIndex = i;
+                        break;
+                    }
+                }
+                
+                // Check ASCII section if not found in hex
+                if (byteIndex < 0) {
+                    for (int i = 0; i < bytesPerLine; ++i) {
+                        float cellStartX = ImGui::CalcTextSize(lineBuf, lineBuf + asciiBytePos[i]).x;
+                        float cellEndX = ImGui::CalcTextSize(lineBuf, lineBuf + asciiBytePos[i] + 1).x;
+                        if (mouseRelX >= cellStartX && mouseRelX < cellEndX) {
+                            byteIndex = i;
+                            break;
+                        }
+                    }
+                }
+                
+                if (byteIndex >= 0) {
                     size_t clickOffset = lineOffset + byteIndex;
                     if (clickOffset < totalBytes) {
                         uint16_t clickedAddr = static_cast<uint16_t>((snapshot_.start + clickOffset) & 0xFFFF);
@@ -297,6 +365,27 @@ void MemoryInspectorWindow::renderMemoryView(IDebugBackend &backend)
         }
     }
     clipper.End();
+    
+    // Handle arrow key navigation
+    if (ImGui::IsWindowFocused()) {
+        if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) {
+            selectedAddress_--;
+            needsRefresh_ = false;  // don't need full refresh, just scroll
+            pendingScroll_ = true;
+        } else if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) {
+            selectedAddress_++;
+            needsRefresh_ = false;
+            pendingScroll_ = true;
+        } else if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) {
+            selectedAddress_ -= bytesPerLine;
+            needsRefresh_ = false;
+            pendingScroll_ = true;
+        } else if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) {
+            selectedAddress_ += bytesPerLine;
+            needsRefresh_ = false;
+            pendingScroll_ = true;
+        }
+    }
     
     // Stage 3.9: real scroll to selected address
     if (pendingScroll_) {

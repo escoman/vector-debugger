@@ -31,17 +31,18 @@ void DisassemblyWindow::render(IDebugBackend &backend)
 {
     if (!visible_) return;
     
+    // Bring dock tab to front when navigated to from another window
+    // Must be called BEFORE Begin()
+    if (pendingFocus_) {
+        ImGui::SetNextWindowFocus();
+        pendingFocus_ = false;
+    }
+    
     ImGui::SetNextWindowSize(ImVec2(500, 400), ImGuiCond_FirstUseEver);
     
     if (!ImGui::Begin("Disassembly", &visible_)) {
         ImGui::End();
         return;
-    }
-
-    // Bring dock tab to front when navigated to from another window
-    if (pendingFocus_) {
-        ImGui::SetWindowFocus();
-        pendingFocus_ = false;
     }
     
     // Detect PC changes for Follow PC
