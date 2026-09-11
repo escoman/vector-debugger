@@ -6,9 +6,11 @@
 // ---------------------------------------------------------------------------
 // Sound Window
 //
-// Displays sound controls (Mute) and visual audio tracker showing
-// waveform activity for AY-3-8912 channels (A, B, C), noise,
-// and i8253 timer channels (0, 1, 2).
+// Displays sound controls (Mute) and a scrolling "sound log" showing
+// output level over time for all channels:
+//   i8253 Timer 0-2, Noise, AY-3-8912 Ch A-C
+//
+// Bars scroll right-to-left while emulation runs; frozen when paused.
 // ---------------------------------------------------------------------------
 
 class SoundWindow
@@ -27,17 +29,14 @@ public:
 private:
     bool visible_ = true;
     bool muted_ = false;
-    bool visualize_ = false;  // off by default: no waveform generation
+    bool visualize_ = false;  // off by default: no level tracking
 
-    // Persistent tone/noise generator state for phase continuity across frames.
-    // Without this, the waveform restarts from phase 0 every frame and looks frozen.
-    float toneCountA_ = 0, toneCountB_ = 0, toneCountC_ = 0;
-    int toneOutA_ = 1, toneOutB_ = 1, toneOutC_ = 1;
-    int noiseShift_ = 1;
-    int noiseBit_ = 1;
-    float noiseCount_ = 0;
+    // Sound log ring buffer
+    // Channel order: Timer 0, Timer 1, Timer 2, Noise, AY A, AY B, AY C
+    static constexpr int SOUND_LOG_CAPACITY = 1024;
+    static constexpr int NUM_CHANNELS = 7;
 
-    // Timer channel generator state (phase continuity)
-    float timerCount_[3] = {};
-    int   timerOut_[3]   = {};
+    float soundLog_[NUM_CHANNELS][SOUND_LOG_CAPACITY] = {};
+    int   soundLogWrite_ = 0;    // next write position
+    int   soundLogCount_ = 0;    // number of valid samples (<= capacity)
 };

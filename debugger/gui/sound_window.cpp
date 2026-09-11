@@ -2,12 +2,102 @@
 
 // Dear ImGui
 #include "imgui.h"
+#include "imgui_internal.h"  // for ImDrawList access
 
 #include <cstdio>
 #include <cmath>
 #include <cstring>
+#include <algorithm>
 
-static constexpr int WAVEFORM_SIZE = 256;
+// ---------------------------------------------------------------------------
+// Channel color table
+// ---------------------------------------------------------------------------
+
+static const ImVec4 kChannelColors[7] = {
+    ImVec4(0.9f, 0.5f, 0.2f, 1.0f),  // Timer 0 — orange
+    ImVec4(0.7f, 0.3f, 0.9f, 1.0f),  // Timer 1 — purple
+    ImVec4(0.5f, 0.8f, 0.5f, 1.0f),  // Timer 2 — green
+    ImVec4(1.0f, 1.0f, 0.3f, 1.0f),  // Noise   — yellow
+    ImVec4(1.0f, 0.3f, 0.3f, 1.0f),  // AY A    — red
+    ImVec4(0.3f, 1.0f, 0.3f, 1.0f),  // AY B    — green
+    ImVec4(0.4f, 0.6f, 1.0f, 1.0f),  // AY C    — blue
+};
+
+static constexpr float kBarWidth     = 2.0f;
+static constexpr float kChartHeight  = 36.0f;
+static constexpr float kGridAlpha    = 0.15f;
+
+// ---------------------------------------------------------------------------
+// Draw a scrolling sound-log bar chart for one channel
+// ---------------------------------------------------------------------------
+
+static void drawSoundLog(const char *name, int channelIdx,
+                         const float *ringBuffer, int writePos, int count,
+                         bool active, float chartHeight)
+{
+    ImGui::PushID(channelIdx);
+
+    // Label (dimmed when inactive)
+    ImVec4 textColor = active ? ImVec4(1, 1, 1, 1) : ImVec4(0.5f, 0.5f, 0.5f, 1);
+    ImGui::PushStyleColor(ImGuiCol_Text, textColor);
+    ImGui::Text("%s", name);
+    ImGui::PopStyleColor();
+
+    // Allocate space for the bar chart
+    ImVec2 canvasSize(ImGui::GetContentRegionAvail().x, chartHeight);
+    ImVec2 cursorPos = ImGui::GetCursorScreenPos();
+    ImDrawList *drawList = ImGui::GetWindowDrawList();
+
+    // Background
+    ImU32 bgColor = IM_COL32(20, 20, 20, 255);
+    drawList->AddRectFilled(cursorPos,
+                            ImVec2(cursorPos.x + canvasSize.x, cursorPos.y + canvasSize.y),
+                            bgColor);
+
+    // Horizontal grid lines at 0.25, 0.5, 0.75
+    ImU32 gridColor = ImGui::GetColorU32(ImVec4(1, 1, 1, kGridAlpha));
+    for (int g = 1; g <= 3; ++g) {
+        float gy = cursorPos.y + canvasSize.y - (g * 0.25f) * canvasSize.y;
+        drawList->AddLine(ImVec2(cursorPos.x, gy),
+                          ImVec2(cursorPos.x + canvasSize.x, gy),
+                          gridColor);
+    }
+
+    // Bars
+    if (count > 0) {
+        float availWidth = canvasSize.x;
+        int maxBars = static_cast<int>(availWidth / kBarWidth);
+        int numVisible = std::min(count, maxBars);
+        ImVec4 col = kChannelColors[channelIdx];
+        ImU32 barColor = ImGui::GetColorU32(col);
+
+        for (int i = 0; i < numVisible; ++i) {
+            // i=0 is the oldest visible sample, i=numVisible-1 is the newest
+            int bufIdx = (writePos - numVisible + i + 1024) % 1024;
+            float level = ringBuffer[bufIdx];
+
+            if (level > 0.001f) {
+                float barHeight = level * canvasSize.y;
+                float x0 = cursorPos.x + (availWidth - numVisible * kBarWidth) + i * kBarWidth;
+                float y0 = cursorPos.y + canvasSize.y - barHeight;
+                float x1 = x0 + kBarWidth - 0.5f;  // small gap between bars
+                float y1 = cursorPos.y + canvasSize.y;
+                drawList->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), barColor);
+            }
+        }
+    }
+
+    // Border
+    ImU32 borderColor = ImGui::GetColorU32(ImVec4(0.4f, 0.4f, 0.4f, 0.6f));
+    drawList->AddRect(cursorPos,
+                      ImVec2(cursorPos.x + canvasSize.x, cursorPos.y + canvasSize.y),
+                      borderColor);
+
+    // Invisible dummy to reserve space in the ImGui layout
+    ImGui::Dummy(canvasSize);
+
+    ImGui::PopID();
+}
 
 // ---------------------------------------------------------------------------
 // Main render
@@ -47,8 +137,6 @@ void SoundWindow::render(IDebugBackend &backend)
     // Extract register values
     // -----------------------------------------------------------------------
 
-    const int N = WAVEFORM_SIZE;
-
     int periodA = (snap.registers[0] & 0xFF) | ((snap.registers[1] & 0x0F) << 8);
     int periodB = (snap.registers[2] & 0xFF) | ((snap.registers[3] & 0x0F) << 8);
     int periodC = (snap.registers[4] & 0xFF) | ((snap.registers[5] & 0x0F) << 8);
@@ -66,167 +154,83 @@ void SoundWindow::render(IDebugBackend &backend)
     };
 
     // -----------------------------------------------------------------------
-    // Determine which channels are actually "active"
-    // (i.e. the emulated program has configured them to produce sound)
+    // Determine channel activity and compute levels
     // -----------------------------------------------------------------------
 
-    // AY channels are active when amplitude > 0 and tone/noise enabled
     bool chAActive = ampA > 0 && (snap.toneAEnabled || snap.noiseAEnabled);
     bool chBActive = ampB > 0 && (snap.toneBEnabled || snap.noiseBEnabled);
     bool chCActive = ampC > 0 && (snap.toneCEnabled || snap.noiseCEnabled);
-    // Noise is audible if a channel has noise enabled AND amplitude > 0
+
     bool anyNoiseEnabled = (snap.noiseAEnabled && ampA > 0) ||
                            (snap.noiseBEnabled && ampB > 0) ||
                            (snap.noiseCEnabled && ampC > 0);
-    bool anySoundActive = chAActive || chBActive || chCActive;
 
-    // -----------------------------------------------------------------------
-    // Timer channel state (i8253)
-    // -----------------------------------------------------------------------
-
+    // Timer channel state — activity based on dirty flag (ROM wrote since last snapshot)
     bool timerChActive[3] = {};
-    int  timerPeriod[3] = {};
-    bool anyTimerActive = false;
     for (int ch = 0; ch < 3; ++ch) {
-        timerPeriod[ch] = snap.timerChannels[ch].loadValue;
-        // Channel active if period > 0 (ROM disables by writing 0)
-        timerChActive[ch] = timerPeriod[ch] > 0;
-        if (timerChActive[ch]) anyTimerActive = true;
+        timerChActive[ch] = snap.timerChannels[ch].dirty;
     }
 
     // -----------------------------------------------------------------------
-    // Generate waveforms (only when Visualize is enabled AND channel is active)
+    // Compute per-channel levels and push into ring buffer
     // -----------------------------------------------------------------------
 
-    float waveA[N], waveB[N], waveC[N], waveNoise[N];
-    float waveTimer[3][N];
-    memset(waveA, 0, sizeof(waveA));
-    memset(waveB, 0, sizeof(waveB));
-    memset(waveC, 0, sizeof(waveC));
-    memset(waveNoise, 0, sizeof(waveNoise));
-    memset(waveTimer, 0, sizeof(waveTimer));
-
-    float levelA = 0, levelB = 0, levelC = 0;
-
-    // Don't advance waveform generators while paused — CPU is stopped
     bool paused = backend.isPaused();
 
     if (visualize_ && !paused) {
-        const float clocksPerSample = 31.25f;  // ~1.5MHz / 48kHz
+        float levels[NUM_CHANNELS];
 
-        for (int i = 0; i < N; ++i) {
-            // --- Tone generators (phase-continuous) ---
-            toneCountA_ += clocksPerSample;
-            if (periodA > 0 && toneCountA_ >= periodA) {
-                toneCountA_ -= periodA;
-                toneOutA_ ^= 1;
-            }
-
-            toneCountB_ += clocksPerSample;
-            if (periodB > 0 && toneCountB_ >= periodB) {
-                toneCountB_ -= periodB;
-                toneOutB_ ^= 1;
-            }
-
-            toneCountC_ += clocksPerSample;
-            if (periodC > 0 && toneCountC_ >= periodC) {
-                toneCountC_ -= periodC;
-                toneOutC_ ^= 1;
-            }
-
-            // --- Noise generator (phase-continuous) ---
-            noiseCount_ += clocksPerSample;
-            int noiseThreshold = noisePeriod > 0 ? noisePeriod * 2 : 2;
-            if (noiseCount_ >= noiseThreshold) {
-                noiseCount_ -= noiseThreshold;
-                noiseBit_ = noiseShift_ & 1;
-                noiseShift_ = (noiseShift_ ^ ((noiseBit_) * 0x24000)) >> 1;
-            }
-
-            // --- Timer square wave generators (phase-continuous) ---
-            for (int ch = 0; ch < 3; ++ch) {
-                if (timerPeriod[ch] > 0) {
-                    timerCount_[ch] += clocksPerSample;
-                    if (timerCount_[ch] >= timerPeriod[ch]) {
-                        timerCount_[ch] -= timerPeriod[ch];
-                        timerOut_[ch] ^= 1;
-                    }
-                    waveTimer[ch][i] = timerOut_[ch] ? 0.5f : 0.0f;
-                }
-            }
-
-            // --- AY mixer logic (only for active channels) ---
-            auto chOutput = [&](bool toneEn, int toneOut,
-                                bool noiseEn, int noiseOut, float amp) -> float {
-                float mix = static_cast<float>((toneEn | toneOut) & (noiseEn | noiseOut));
-                return mix * amp;
-            };
-
-            if (chAActive) {
-                waveA[i] = chOutput(snap.toneAEnabled, toneOutA_,
-                                    snap.noiseAEnabled, noiseBit_,
-                                    ampTable[ampA]);
-            }
-            if (chBActive) {
-                waveB[i] = chOutput(snap.toneBEnabled, toneOutB_,
-                                    snap.noiseBEnabled, noiseBit_,
-                                    ampTable[ampB]);
-            }
-            if (chCActive) {
-                waveC[i] = chOutput(snap.toneCEnabled, toneOutC_,
-                                    snap.noiseCEnabled, noiseBit_,
-                                    ampTable[ampC]);
-            }
-            if (anyNoiseEnabled && noisePeriod > 0) {
-                waveNoise[i] = noiseBit_ * 0.5f;
+        // Timer 0-2: bar when ROM wrote to counter (dirty), height = frequency
+        for (int ch = 0; ch < 3; ++ch) {
+            if (timerChActive[ch]) {
+                uint16_t load = snap.timerChannels[ch].loadValue;
+                float freq = load > 0 ? 1500000.0f / load : 0.0f;
+                // Logarithmic mapping: 30Hz..15kHz → 0.3..1.0
+                float norm = (freq > 0.0f) ?
+                    (logf(freq / 30.0f) / logf(500.0f)) : 0.0f;
+                levels[ch] = 0.3f + 0.7f * std::min(1.0f, std::max(0.0f, norm));
+            } else {
+                levels[ch] = 0.0f;
             }
         }
 
-        // Compute RMS levels
-        auto rms = [&](const float *data) -> float {
-            float sum = 0;
-            for (int i = 0; i < N; ++i) sum += data[i] * data[i];
-            return sqrtf(sum / N);
-        };
-        levelA = chAActive ? rms(waveA) : 0.0f;
-        levelB = chBActive ? rms(waveB) : 0.0f;
-        levelC = chCActive ? rms(waveC) : 0.0f;
+        // Noise: max amplitude among channels with noise enabled
+        if (anyNoiseEnabled && noisePeriod > 0) {
+            int maxNoiseAmp = 0;
+            if (snap.noiseAEnabled) maxNoiseAmp = std::max(maxNoiseAmp, ampA);
+            if (snap.noiseBEnabled) maxNoiseAmp = std::max(maxNoiseAmp, ampB);
+            if (snap.noiseCEnabled) maxNoiseAmp = std::max(maxNoiseAmp, ampC);
+            levels[3] = ampTable[maxNoiseAmp];
+        } else {
+            levels[3] = 0.0f;
+        }
+
+        // AY A/B/C: amplitude from table when active
+        levels[4] = chAActive ? ampTable[ampA] : 0.0f;
+        levels[5] = chBActive ? ampTable[ampB] : 0.0f;
+        levels[6] = chCActive ? ampTable[ampC] : 0.0f;
+
+        // Write into ring buffer
+        for (int ch = 0; ch < NUM_CHANNELS; ++ch) {
+            soundLog_[ch][soundLogWrite_] = levels[ch];
+        }
+        soundLogWrite_ = (soundLogWrite_ + 1) % SOUND_LOG_CAPACITY;
+        if (soundLogCount_ < SOUND_LOG_CAPACITY) ++soundLogCount_;
     }
 
     // -----------------------------------------------------------------------
-    // Draw waveforms
+    // Draw sound log bar charts
     // -----------------------------------------------------------------------
 
-    // Helper: draw a channel waveform with status indicator
-    auto drawChannel = [&](const char *name, const float *wave, float level,
-                           bool active, int col, float height) {
-        ImVec4 c(col == 0 ? ImVec4(1.0f, 0.3f, 0.3f, 1.0f) :
-                 col == 1 ? ImVec4(0.3f, 1.0f, 0.3f, 1.0f) :
-                 col == 2 ? ImVec4(0.4f, 0.6f, 1.0f, 1.0f) :
-                 col == 3 ? ImVec4(1.0f, 1.0f, 0.3f, 1.0f) :
-                 col == 4 ? ImVec4(0.9f, 0.5f, 0.2f, 1.0f) :
-                 col == 5 ? ImVec4(0.7f, 0.3f, 0.9f, 1.0f) :
-                            ImVec4(0.5f, 0.8f, 0.5f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, c);
-        char label[64];
-        if (active) {
-            snprintf(label, sizeof(label), "%s", name);
-        } else {
-            snprintf(label, sizeof(label), "%s (idle)", name);
-        }
-        ImGui::PlotLines(label, wave, N, 0, nullptr,
-                         0.0f, 1.0f, ImVec2(0, height));
-        ImGui::PopStyleColor();
-    };
-
-    // Timer channels (standard Vector-06C hardware)
+    // Timer channels
     ImGui::Text("i8253 Timer Channels:");
     ImGui::Spacing();
     {
         static const char *timerNames[] = { "Timer 0", "Timer 1", "Timer 2" };
         for (int ch = 0; ch < 3; ++ch) {
-            drawChannel(timerNames[ch], waveTimer[ch], 0.0f,
-                        timerChActive[ch], 4 + ch, 40);
+            drawSoundLog(timerNames[ch], ch,
+                         soundLog_[ch], soundLogWrite_, soundLogCount_,
+                         timerChActive[ch], kChartHeight);
         }
     }
     ImGui::Spacing();
@@ -234,16 +238,23 @@ void SoundWindow::render(IDebugBackend &backend)
     // Noise generator
     ImGui::Text("Noise Generator:");
     ImGui::Spacing();
-    drawChannel("Noise", waveNoise, 0.0f, anyNoiseEnabled && noisePeriod > 0, 3, 40);
+    drawSoundLog("Noise", 3,
+                 soundLog_[3], soundLogWrite_, soundLogCount_,
+                 anyNoiseEnabled && noisePeriod > 0, kChartHeight);
     ImGui::Spacing();
 
-    // AY-3-8912 tone channels (optional expansion)
+    // AY-3-8912 tone channels
     ImGui::Text("AY-3-8912 Tone Channels:");
     ImGui::Spacing();
-
-    drawChannel("Ch A", waveA, levelA, chAActive,       0, 50);
-    drawChannel("Ch B", waveB, levelB, chBActive,       1, 50);
-    drawChannel("Ch C", waveC, levelC, chCActive,       2, 50);
+    {
+        static const char *ayNames[] = { "Ch A", "Ch B", "Ch C" };
+        bool ayActive[] = { chAActive, chBActive, chCActive };
+        for (int ch = 0; ch < 3; ++ch) {
+            drawSoundLog(ayNames[ch], 4 + ch,
+                         soundLog_[4 + ch], soundLogWrite_, soundLogCount_,
+                         ayActive[ch], kChartHeight + 10);
+        }
+    }
 
     ImGui::Spacing();
     ImGui::Separator();
@@ -251,10 +262,11 @@ void SoundWindow::render(IDebugBackend &backend)
 
     // Timer register summary
     for (int ch = 0; ch < 3; ++ch) {
+        int timerPeriod = snap.timerChannels[ch].loadValue;
         if (timerChActive[ch]) {
-            float freq = 1500000.0f / timerPeriod[ch];
+            float freq = 1500000.0f / timerPeriod;
             ImGui::Text("Timer %d: load=%d  mode=%d  freq=%.0f Hz",
-                        ch, timerPeriod[ch], snap.timerChannels[ch].mode, freq);
+                        ch, timerPeriod, snap.timerChannels[ch].mode, freq);
         } else {
             ImGui::Text("Timer %d: idle", ch);
         }
