@@ -162,6 +162,50 @@ void DebugAdapter::init()
         ruslatState_ = rus;
     };
 
+    // Track i8253 timer writes for Sound window visualization.
+    // The io.onwrite hook fires BEFORE the actual write, giving us raw
+    // port/value pairs.  We interpret the i8253 protocol here.
+    io.onwrite = [this](uint32_t port, uint8_t value) -> void {
+        // Track AY writes (ports 0x14 = data, 0x15 = latch)
+        if (port == 0x14 || port == 0x15) {
+            ayDirty_ = true;
+            return;
+        }
+        if (port == 0x0B) {
+            // Timer control word
+            int ctr = (value >> 6) & 3;
+            if (ctr < 3) {
+                int latch = (value >> 4) & 3;
+                int mode  = (value >> 1) & 7;
+                timerLatchModes_[ctr] = latch;
+                timerModes_[ctr] = mode;
+                timerWriteStates_[ctr] = 0;
+            }
+        } else if (port >= 0x08 && port <= 0x0A) {
+            int ctr = port - 0x08;
+            int latch = timerLatchModes_[ctr];
+            if (latch == 3) {
+                // LSB then MSB
+                if (timerWriteStates_[ctr] == 0) {
+                    timerWriteLsb_[ctr] = value;
+                    timerWriteStates_[ctr] = 1;
+                } else {
+                    timerLoadValues_[ctr] = (static_cast<uint16_t>(value) << 8) | timerWriteLsb_[ctr];
+                    timerWriteStates_[ctr] = 0;
+                    timerDirty_[ctr] = true;  // complete write — mark dirty
+                }
+            } else if (latch == 1) {
+                // LSB only
+                timerLoadValues_[ctr] = value;
+                timerDirty_[ctr] = true;
+            } else if (latch == 2) {
+                // MSB only
+                timerLoadValues_[ctr] = static_cast<uint16_t>(value) << 8;
+                timerDirty_[ctr] = true;
+            }
+        }
+    };
+
     board.reset(Board::ResetMode::BLKVVOD);
 
     initialized_ = true;
@@ -393,13 +437,11 @@ SoundSnapshot DebugAdapter::soundSnapshot() const
     SoundSnapshot snap;
     snap.available = true;
 
-    // AY registers are accessed via IO ports 0x14 (data) and 0x15 (address)
-    IO &ioRef = const_cast<IO&>(io);
-
-    // Read all 16 AY registers
+    // Read AY registers directly — bypass IO port layer to avoid side effects
+    AY &ayRef = const_cast<AY&>(ay);
     for (int i = 0; i < 16; ++i) {
-        ioRef.realoutput(0x15, i);   // Select register
-        snap.registers[i] = static_cast<uint8_t>(ioRef.input(0x14));
+        ayRef.write(1, i);                  // select register
+        snap.registers[i] = static_cast<uint8_t>(ayRef.read(0));
     }
 
     // Parse mixer register (7):
@@ -412,6 +454,18 @@ SoundSnapshot DebugAdapter::soundSnapshot() const
     snap.noiseAEnabled = !(mixer & 0x08);
     snap.noiseBEnabled = !(mixer & 0x10);
     snap.noiseCEnabled = !(mixer & 0x20);
+
+    // Populate AY dirty flag and clear it
+    snap.ayDirty = ayDirty_;
+    const_cast<DebugAdapter*>(this)->ayDirty_ = false;
+
+    // Populate i8253 timer channel state (tracked via io.onwrite callback)
+    for (int i = 0; i < 3; ++i) {
+        snap.timerChannels[i].loadValue = timerLoadValues_[i];
+        snap.timerChannels[i].mode      = timerModes_[i];
+        snap.timerChannels[i].dirty     = timerDirty_[i];
+        const_cast<DebugAdapter*>(this)->timerDirty_[i] = false;
+    }
 
     return snap;
 }

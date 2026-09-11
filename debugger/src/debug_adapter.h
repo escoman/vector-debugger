@@ -113,6 +113,18 @@ private:
     // РУС/LAT LED state — updated by io.onruslat callback
     bool ruslatState_ = false;
 
+    // Timer write tracking (i8253 ports 0x08-0x0B)
+    // Interprets the i8253 write protocol to extract counter load values.
+    int  timerLatchModes_[3] = {3, 3, 3};  // latch mode per counter (default: LSB+MSB)
+    int  timerWriteStates_[3] = {};  // write state machine per counter
+    uint16_t timerLoadValues_[3] = {}; // last load value per counter
+    int  timerModes_[3] = {};        // mode per counter (0-5)
+    uint8_t timerWriteLsb_[3] = {};  // temp LSB storage per counter
+    bool timerDirty_[3] = {};        // true if counter was written since last snapshot
+
+    // AY write tracking (ports 0x14/0x15)
+    bool ayDirty_ = false;           // true if AY was written since last snapshot
+
     MemoryReadCallback  memReadCb_;
     MemoryWriteCallback memWriteCb_;
     std::function<void(uint32_t,uint32_t,bool,uint8_t)> prevMemOnRead_;

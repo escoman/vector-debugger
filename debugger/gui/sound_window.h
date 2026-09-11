@@ -7,7 +7,8 @@
 // Sound Window
 //
 // Displays sound controls (Mute) and visual audio tracker showing
-// waveform activity for AY-3-8912 channels (A, B, C) and noise.
+// waveform activity for AY-3-8912 channels (A, B, C), noise,
+// and i8253 timer channels (0, 1, 2).
 // ---------------------------------------------------------------------------
 
 class SoundWindow
@@ -35,4 +36,8 @@ private:
     int noiseShift_ = 1;
     int noiseBit_ = 1;
     float noiseCount_ = 0;
+
+    // Timer channel generator state (phase continuity)
+    float timerCount_[3] = {};
+    int   timerOut_[3]   = {};
 };

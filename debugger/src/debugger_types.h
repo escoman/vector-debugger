@@ -76,8 +76,15 @@ struct PaletteSnapshot
 };
 
 // ---------------------------------------------------------------------------
-// Sound snapshot (AY-3-8912 state)
+// Sound snapshot (AY-3-8912 + i8253 timer state)
 // ---------------------------------------------------------------------------
+
+struct TimerChannelState
+{
+    uint16_t loadValue = 0;   // last loaded counter value
+    int      mode      = 0;   // counter mode (0-5)
+    bool     dirty     = false; // true if written since last snapshot
+};
 
 struct SoundSnapshot
 {
@@ -91,6 +98,12 @@ struct SoundSnapshot
     bool noiseAEnabled = false;
     bool noiseBEnabled = false;
     bool noiseCEnabled = false;
+
+    // AY was written since last snapshot
+    bool ayDirty = false;
+
+    // i8253 timer channels (3 counters)
+    TimerChannelState timerChannels[3] = {};
 
     bool available = false;
 };

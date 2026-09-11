@@ -70,25 +70,48 @@ void SoundWindow::render(IDebugBackend &backend)
     // (i.e. the emulated program has configured them to produce sound)
     // -----------------------------------------------------------------------
 
+    // AY channels are active when amplitude > 0 and tone/noise enabled
     bool chAActive = ampA > 0 && (snap.toneAEnabled || snap.noiseAEnabled);
     bool chBActive = ampB > 0 && (snap.toneBEnabled || snap.noiseBEnabled);
     bool chCActive = ampC > 0 && (snap.toneCEnabled || snap.noiseCEnabled);
-    bool anyNoiseEnabled = snap.noiseAEnabled || snap.noiseBEnabled || snap.noiseCEnabled;
+    // Noise is audible if a channel has noise enabled AND amplitude > 0
+    bool anyNoiseEnabled = (snap.noiseAEnabled && ampA > 0) ||
+                           (snap.noiseBEnabled && ampB > 0) ||
+                           (snap.noiseCEnabled && ampC > 0);
     bool anySoundActive = chAActive || chBActive || chCActive;
+
+    // -----------------------------------------------------------------------
+    // Timer channel state (i8253)
+    // -----------------------------------------------------------------------
+
+    bool timerChActive[3] = {};
+    int  timerPeriod[3] = {};
+    bool anyTimerActive = false;
+    for (int ch = 0; ch < 3; ++ch) {
+        timerPeriod[ch] = snap.timerChannels[ch].loadValue;
+        // Channel active if period > 0 (ROM disables by writing 0)
+        timerChActive[ch] = timerPeriod[ch] > 0;
+        if (timerChActive[ch]) anyTimerActive = true;
+    }
 
     // -----------------------------------------------------------------------
     // Generate waveforms (only when Visualize is enabled AND channel is active)
     // -----------------------------------------------------------------------
 
     float waveA[N], waveB[N], waveC[N], waveNoise[N];
+    float waveTimer[3][N];
     memset(waveA, 0, sizeof(waveA));
     memset(waveB, 0, sizeof(waveB));
     memset(waveC, 0, sizeof(waveC));
     memset(waveNoise, 0, sizeof(waveNoise));
+    memset(waveTimer, 0, sizeof(waveTimer));
 
     float levelA = 0, levelB = 0, levelC = 0;
 
-    if (visualize_) {
+    // Don't advance waveform generators while paused — CPU is stopped
+    bool paused = backend.isPaused();
+
+    if (visualize_ && !paused) {
         const float clocksPerSample = 31.25f;  // ~1.5MHz / 48kHz
 
         for (int i = 0; i < N; ++i) {
@@ -118,6 +141,18 @@ void SoundWindow::render(IDebugBackend &backend)
                 noiseCount_ -= noiseThreshold;
                 noiseBit_ = noiseShift_ & 1;
                 noiseShift_ = (noiseShift_ ^ ((noiseBit_) * 0x24000)) >> 1;
+            }
+
+            // --- Timer square wave generators (phase-continuous) ---
+            for (int ch = 0; ch < 3; ++ch) {
+                if (timerPeriod[ch] > 0) {
+                    timerCount_[ch] += clocksPerSample;
+                    if (timerCount_[ch] >= timerPeriod[ch]) {
+                        timerCount_[ch] -= timerPeriod[ch];
+                        timerOut_[ch] ^= 1;
+                    }
+                    waveTimer[ch][i] = timerOut_[ch] ? 0.5f : 0.0f;
+                }
             }
 
             // --- AY mixer logic (only for active channels) ---
@@ -162,28 +197,20 @@ void SoundWindow::render(IDebugBackend &backend)
     // Draw waveforms
     // -----------------------------------------------------------------------
 
-    if (!visualize_) {
-        ImGui::TextDisabled("(visualization off — enable \"Visualize\" to see waveforms)");
-        ImGui::Spacing();
-    } else if (!anySoundActive && !anyNoiseEnabled) {
-        ImGui::TextDisabled("(no sound output — AY registers are idle)");
-        ImGui::Spacing();
-    }
-
-    ImGui::Text("AY-3-8912 Channel Waveforms:");
-    ImGui::Spacing();
-
     // Helper: draw a channel waveform with status indicator
     auto drawChannel = [&](const char *name, const float *wave, float level,
                            bool active, int col, float height) {
         ImVec4 c(col == 0 ? ImVec4(1.0f, 0.3f, 0.3f, 1.0f) :
                  col == 1 ? ImVec4(0.3f, 1.0f, 0.3f, 1.0f) :
                  col == 2 ? ImVec4(0.4f, 0.6f, 1.0f, 1.0f) :
-                            ImVec4(1.0f, 1.0f, 0.3f, 1.0f));
+                 col == 3 ? ImVec4(1.0f, 1.0f, 0.3f, 1.0f) :
+                 col == 4 ? ImVec4(0.9f, 0.5f, 0.2f, 1.0f) :
+                 col == 5 ? ImVec4(0.7f, 0.3f, 0.9f, 1.0f) :
+                            ImVec4(0.5f, 0.8f, 0.5f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_PlotHistogram, c);
         char label[64];
         if (active) {
-            snprintf(label, sizeof(label), "%s (level %.3f)", name, level);
+            snprintf(label, sizeof(label), "%s", name);
         } else {
             snprintf(label, sizeof(label), "%s (idle)", name);
         }
@@ -192,14 +219,46 @@ void SoundWindow::render(IDebugBackend &backend)
         ImGui::PopStyleColor();
     };
 
-    //                  name    wave   level  active        colorId  height
+    // Timer channels (standard Vector-06C hardware)
+    ImGui::Text("i8253 Timer Channels:");
+    ImGui::Spacing();
+    {
+        static const char *timerNames[] = { "Timer 0", "Timer 1", "Timer 2" };
+        for (int ch = 0; ch < 3; ++ch) {
+            drawChannel(timerNames[ch], waveTimer[ch], 0.0f,
+                        timerChActive[ch], 4 + ch, 40);
+        }
+    }
+    ImGui::Spacing();
+
+    // Noise generator
+    ImGui::Text("Noise Generator:");
+    ImGui::Spacing();
+    drawChannel("Noise", waveNoise, 0.0f, anyNoiseEnabled && noisePeriod > 0, 3, 40);
+    ImGui::Spacing();
+
+    // AY-3-8912 tone channels (optional expansion)
+    ImGui::Text("AY-3-8912 Tone Channels:");
+    ImGui::Spacing();
+
     drawChannel("Ch A", waveA, levelA, chAActive,       0, 50);
     drawChannel("Ch B", waveB, levelB, chBActive,       1, 50);
     drawChannel("Ch C", waveC, levelC, chCActive,       2, 50);
-    drawChannel("Noise", waveNoise, 0.0f, anyNoiseEnabled && noisePeriod > 0, 3, 40);
 
     ImGui::Spacing();
     ImGui::Separator();
+    ImGui::Spacing();
+
+    // Timer register summary
+    for (int ch = 0; ch < 3; ++ch) {
+        if (timerChActive[ch]) {
+            float freq = 1500000.0f / timerPeriod[ch];
+            ImGui::Text("Timer %d: load=%d  mode=%d  freq=%.0f Hz",
+                        ch, timerPeriod[ch], snap.timerChannels[ch].mode, freq);
+        } else {
+            ImGui::Text("Timer %d: idle", ch);
+        }
+    }
     ImGui::Spacing();
 
     // AY register summary
