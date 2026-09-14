@@ -171,7 +171,25 @@ void AsmExporter::runAnalysis()
         return readByte(addr);
     };
 
-    analysis_ = ::analyzeCode(0x0000, readFn, config_.maxAnalysisInstructions);
+    // Entry points: the ROM mapping vector at 0x0000 plus every function
+    // recorded in the RDB.  Seeding all function addresses guarantees coverage
+    // for routines that static BFS from 0x0000 cannot reach through a
+    // self-modified entry vector or an indirect computed jump (PCHL).
+    std::vector<uint16_t> entries;
+    entries.push_back(0x0000);
+    if (hasRdb_) {
+        for (const auto &obj : rdb_.listObjects()) {
+            if (obj.type == RdbObjectType::Function ||
+                obj.type == RdbObjectType::Label ||
+                obj.type == RdbObjectType::Code) {
+                entries.push_back(obj.address);
+            }
+        }
+    }
+    std::sort(entries.begin(), entries.end());
+    entries.erase(std::unique(entries.begin(), entries.end()), entries.end());
+
+    analysis_ = ::analyzeCodeMulti(entries, readFn, config_.maxAnalysisInstructions);
 
     // Build code address set
     for (const auto &instr : analysis_.instructions) {
@@ -439,6 +457,11 @@ std::string AsmExporter::emitDataAsm()
                   return a->address < b->address;
               });
 
+    // rom_ holds the file bytes starting at the load origin; a CPU address maps
+    // to buffer offset (addr - origin).  romEndAbs is the last ROM address.
+    const size_t origin   = config_.origin;
+    const size_t romEndAbs = static_cast<size_t>(config_.origin) + rom_.size();
+
     // Emit each data object
     for (const auto *obj : dataObjects) {
         if (!obj->hasSize || obj->size == 0) {
@@ -449,8 +472,8 @@ std::string AsmExporter::emitDataAsm()
             continue;
         }
 
-        // Check bounds
-        if (static_cast<size_t>(obj->address) + obj->size > rom_.size()) {
+        // Check bounds against the absolute ROM window [origin, romEndAbs)
+        if (static_cast<size_t>(obj->address) + obj->size > romEndAbs) {
             char buf[16];
             snprintf(buf, sizeof(buf), "%04X", obj->address);
             os << "; WARNING: data object at " << buf
@@ -458,8 +481,8 @@ std::string AsmExporter::emitDataAsm()
         }
 
         size_t emitSize = obj->size;
-        if (static_cast<size_t>(obj->address) + emitSize > rom_.size()) {
-            emitSize = rom_.size() - obj->address;
+        if (static_cast<size_t>(obj->address) + emitSize > romEndAbs) {
+            emitSize = romEndAbs - obj->address;
         }
 
         std::string label = resolveName(obj->address);
@@ -467,8 +490,9 @@ std::string AsmExporter::emitDataAsm()
             label = generateLabel(obj->address);
         }
 
+        size_t off = static_cast<size_t>(obj->address) - origin;
         os << emitDataBlock(label, obj->comment,
-                            &rom_[obj->address], emitSize);
+                            &rom_[off], emitSize);
         os << "\n";
     }
 
@@ -482,6 +506,17 @@ std::string AsmExporter::emitDataAsm()
         if (obj->hasSize && obj->size > 0) {
             coveredRanges.push_back({obj->address,
                 static_cast<uint16_t>(obj->address + obj->size - 1)});
+        }
+    }
+    // Treat every RDB function's [address, address+size) as code so that the
+    // interior continuation blocks (branch/PCHL targets that BFS range-merging
+    // may split) are not re-emitted as unknown data.
+    if (hasRdb_) {
+        for (const auto &obj : rdb_.listObjects()) {
+            if (obj.type == RdbObjectType::Function && obj.size > 0) {
+                coveredRanges.push_back({obj.address,
+                    static_cast<uint16_t>(static_cast<uint32_t>(obj.address) + obj.size - 1)});
+            }
         }
     }
     std::sort(coveredRanges.begin(), coveredRanges.end());
@@ -498,31 +533,32 @@ std::string AsmExporter::emitDataAsm()
         }
     }
 
-    // Emit gaps as unknown data
-    uint16_t pos = config_.origin;
+    // Emit gaps as unknown data (addresses are absolute; rom_ indexed from origin)
+    size_t romEndAbsU = static_cast<size_t>(config_.origin) + rom_.size();
+    size_t pos = config_.origin;
     for (const auto &r : merged) {
-        if (r.first > pos) {
+        if (static_cast<size_t>(r.first) > pos) {
             // Gap from pos to r.first - 1
-            size_t gapSize = r.first - pos;
+            size_t gapSize = static_cast<size_t>(r.first) - pos;
             char labelBuf[16];
-            snprintf(labelBuf, sizeof(labelBuf), "%04X", pos);
+            snprintf(labelBuf, sizeof(labelBuf), "%04X", static_cast<uint16_t>(pos));
             os << "; Unknown region at " << labelBuf << "\n";
             os << emitDataBlock(std::string("unknown_") + labelBuf, "",
-                                &rom_[pos], gapSize);
+                                &rom_[pos - config_.origin], gapSize);
             os << "\n";
         }
-        pos = r.second + 1;
-        if (pos == 0) break; // wrapped around 0xFFFF
+        pos = static_cast<size_t>(r.second) + 1;
+        if (pos > romEndAbsU) break;
     }
 
     // Trailing unknown region
-    if (pos < rom_.size() && pos != 0) {
-        size_t tailSize = rom_.size() - pos;
+    if (pos < romEndAbsU) {
+        size_t tailSize = romEndAbsU - pos;
         char labelBuf[16];
-        snprintf(labelBuf, sizeof(labelBuf), "%04X", pos);
+        snprintf(labelBuf, sizeof(labelBuf), "%04X", static_cast<uint16_t>(pos));
         os << "; Unknown region at " << labelBuf << "\n";
         os << emitDataBlock(std::string("unknown_") + labelBuf, "",
-                            &rom_[pos], tailSize);
+                            &rom_[pos - config_.origin], tailSize);
     }
 
     return os.str();
@@ -741,7 +777,18 @@ std::string AsmExporter::resolveName(uint16_t address) const
 
 uint8_t AsmExporter::readByte(uint16_t addr) const
 {
-    if (addr < rom_.size()) return rom_[addr];
+    // NOTE: origin-relative mapping fix (found via MCP ROM-analysis agent).
+    // The agent reported it as "relative addresses not accounted for", but the
+    // real defect was that rom_ was indexed by absolute CPU address while it
+    // actually holds file bytes mapped at config_.origin (default 0x0100) —
+    // causing an off-by-origin misread for any non-zero origin.  i8080 has no
+    // PC-relative jumps; the fix below maps addr -> (addr - origin) instead.
+    //
+    // rom_ holds the file bytes mapped at config_.origin, so a CPU address maps
+    // to buffer offset (addr - origin).  Outside the ROM window -> 0x00 (NOP).
+    if (addr < config_.origin) return 0x00;
+    size_t off = static_cast<size_t>(addr) - config_.origin;
+    if (off < rom_.size()) return rom_[off];
     return 0x00; // NOP for addresses beyond ROM
 }
 
