@@ -157,9 +157,10 @@ void SoundWindow::render(IDebugBackend &backend)
     // Determine channel activity and compute levels
     // -----------------------------------------------------------------------
 
-    bool chAActive = ampA > 0 && (snap.toneAEnabled || snap.noiseAEnabled);
-    bool chBActive = ampB > 0 && (snap.toneBEnabled || snap.noiseBEnabled);
-    bool chCActive = ampC > 0 && (snap.toneCEnabled || snap.noiseCEnabled);
+    // AY channel bars show TONE output only; noise is shown in the separate Noise row
+    bool chAActive = ampA > 0 && snap.toneAEnabled;
+    bool chBActive = ampB > 0 && snap.toneBEnabled;
+    bool chCActive = ampC > 0 && snap.toneCEnabled;
 
     bool anyNoiseEnabled = (snap.noiseAEnabled && ampA > 0) ||
                            (snap.noiseBEnabled && ampB > 0) ||
