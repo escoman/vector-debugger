@@ -86,6 +86,7 @@ DebugBackend::~DebugBackend()
     // Clear memory callbacks before destroying
     if (target_) {
         target_->setMemoryCallbacks(nullptr, nullptr);
+        target_->setInstructionBeginCallback(nullptr);
     }
     delete runtimeAccessLog_;
     delete impl_;
@@ -116,6 +117,7 @@ bool DebugBackend::loadRom(const std::string &path, uint32_t org)
     // Clear debug history
     clearHistory();
     instructionSequence_ = 0;
+    freeRunSequenceStarted_ = false;
 
     // Stage 6.20.1: Clear breakpoints from previous ROM session.
     // Breakpoints belong to the debug session, not the ROM —
@@ -261,6 +263,7 @@ bool DebugBackend::loadWav(const std::string &path)
     // Clear debug history
     clearHistory();
     instructionSequence_ = 0;
+    freeRunSequenceStarted_ = false;
 
     return true;
 }
@@ -325,6 +328,10 @@ void DebugBackend::installMemoryCallbacks()
         };
 
     target_->setMemoryCallbacks(readCb, writeCb);
+
+    // Stage 6.22 §1: the same treatment for instruction boundaries.
+    target_->setInstructionBeginCallback(
+        [self](uint16_t pc) { self->onInstructionBegin(pc); });
 }
 
 // ---------------------------------------------------------------------------
@@ -425,6 +432,7 @@ void DebugBackend::reset()
     stopReason_ = StopReason::Reset;
 
     instructionSequence_ = 0;
+    freeRunSequenceStarted_ = false;
     impl_->instrHistory.clear();
     impl_->memHistory.clear();
     impl_->ioHistory.clear();
@@ -444,6 +452,7 @@ void DebugBackend::restart()
     stopReason_ = StopReason::Reset;
 
     instructionSequence_ = 0;
+    freeRunSequenceStarted_ = false;
     impl_->instrHistory.clear();
     impl_->memHistory.clear();
     impl_->ioHistory.clear();
@@ -479,10 +488,15 @@ StepResult DebugBackend::stepInstructionDetailed()
     if (r.length >= 3) operandBytes[1] = target_->peekMemory((r.pcBefore + 2) & 0xffff);
 
     // Set fetch window
+    fetchBasePc_    = r.pcBefore;
     fetchRemaining_ = r.length;
 
     // --- execute exactly one 8080 instruction ---
+    // The board/target announces the instruction through onInstructionBegin();
+    // while stepping, that hook must not touch the counters owned here.
+    steppingInProgress_ = true;
     target_->stepInstruction();
+    steppingInProgress_ = false;
     int cycles = target_->getCpuState().cycles;
 
     // Fetch window should be consumed; reset defensively.
@@ -529,8 +543,33 @@ StepResult DebugBackend::stepInstructionDetailed()
     }
 
     instructionSequence_++;
+    // Stage 6.22 §2: from now on the free-run hook continues the numbering.
+    freeRunSequenceStarted_ = true;
 
     return r;
+}
+
+void DebugBackend::onInstructionBegin(uint16_t pc)
+{
+    // Stage 6.22 §1/§2/§4: the free-run loop (Board::single_step ->
+    // i8080_instruction) never went through stepInstructionDetailed(), so the
+    // fetch window, the instruction sequence and the per-address execute
+    // counters only ever existed while stepping.  The board now announces every
+    // instruction here, which is also the only honest place to tell a code
+    // fetch from a data read: the bytes at pc..pc+length-1 ARE the instruction.
+    if (!steppingInProgress_) {
+        // Keep the numbering identical to the step path, where the counter is
+        // advanced after the instruction is accounted for: the first
+        // instruction of a run keeps the current value, the next one advances.
+        if (freeRunSequenceStarted_) instructionSequence_++;
+        freeRunSequenceStarted_ = true;
+        executeCount_[pc]++;
+    }
+
+    fetchBasePc_    = pc;
+    // readMemoryRaw() is the thread-safe peek: no onread callback and no
+    // temporary removal of it, unlike peekMemory().
+    fetchRemaining_ = opcode_info::get_length(target_->readMemoryRaw(pc));
 }
 
 void DebugBackend::requestSkipInstruction()
@@ -774,7 +813,12 @@ void DebugBackend::onMemoryRead(uint32_t virt, uint32_t phys,
         logEntry.address = addr;
         logEntry.type = isFetch ? RuntimeAccessLogEntry::Fetch
                                 : RuntimeAccessLogEntry::Read;
-        logEntry.pc = target_->getCpuState().pc;
+        // Stage 6.22 §1: pc of the ACCESSING INSTRUCTION, not the CPU's
+        // in-flight PC - otherwise a fetch of pc+1 is logged against a
+        // different pc and the reader cannot tell fetch from data.  Also drops
+        // a state query per access on a path that runs tens of millions of
+        // times per minute.
+        logEntry.pc = fetchBasePc_;
         logEntry.value = value;
         runtimeAccessLog_->push(logEntry);
     }
@@ -819,7 +863,7 @@ void DebugBackend::onMemoryWrite(uint32_t virt, uint32_t phys,
         RuntimeAccessLogEntry logEntry;
         logEntry.address = addr;
         logEntry.type = RuntimeAccessLogEntry::Write;
-        logEntry.pc = target_->getCpuState().pc;
+        logEntry.pc = fetchBasePc_;   // Stage 6.22 §1 — same rule as reads
         logEntry.value = value;
         runtimeAccessLog_->push(logEntry);
     }

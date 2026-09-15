@@ -207,6 +207,31 @@ target_link_libraries(test_map_integration
 )
 
 # ---------------------------------------------------------------------------
+# Runtime memory accounting tests (Stage 6.22 §1–§4)
+# ---------------------------------------------------------------------------
+
+add_executable(test_runtime_accounting
+    ${DBG_TST_DIR}/test_runtime_accounting.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/mcp/mcp_json.cpp
+    ${DBG_SOURCES}
+    ${RDB_SOURCES}
+    ${CORE_SOURCES}
+    ${SRC_DIR}/options.cpp
+)
+
+target_include_directories(test_runtime_accounting PRIVATE
+    ${DBG_SRC_DIR}
+    ${SRC_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/mcp
+    ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/cpp-mcp/common
+)
+
+target_link_libraries(test_runtime_accounting
+    ${Boost_LIBRARIES}
+    pthread
+)
+
+# ---------------------------------------------------------------------------
 # Board integration test executable (Stage 3.2)
 # ---------------------------------------------------------------------------
 
@@ -823,6 +848,31 @@ target_include_directories(test_asm_exporter PRIVATE
 )
 
 target_link_libraries(test_asm_exporter
+    debugger_core
+    ${Boost_LIBRARIES}
+    pthread
+)
+
+# ---------------------------------------------------------------------------
+# Code-analyzer tests (Stage 6.22 §7.4)
+#
+# classifyControlFlow() / analyzeCodeMulti() are inline in
+# agent/code_analyzer.h; the target only needs debugger_core for disassemble().
+# Guards the conditional-family mask: before Stage 6.22 the classifier matched
+# only Rcc, so Jcc/Ccc/RST targets were never reached by the BFS.
+# ---------------------------------------------------------------------------
+
+add_executable(test_code_analyzer
+    ${AGENT_DIR}/tests/test_code_analyzer.cpp
+)
+
+target_include_directories(test_code_analyzer PRIVATE
+    ${AGENT_DIR}
+    ${DBG_SRC_DIR}
+    ${SRC_DIR}
+)
+
+target_link_libraries(test_code_analyzer
     debugger_core
     ${Boost_LIBRARIES}
     pthread

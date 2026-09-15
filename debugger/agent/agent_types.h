@@ -401,9 +401,9 @@ struct MemoryMapBlock
     uint16_t end = 0;            // inclusive
     enum class Classification { Unknown, Code, Data };
     Classification classification = Classification::Unknown;
-    uint64_t read_activity = 0;
-    uint64_t write_activity = 0;
-    uint64_t execute_activity = 0;
+    uint64_t read_activity = 0;   // 1 if any byte of the block was read
+    uint64_t write_activity = 0;  // 1 if any byte of the block was written
+    uint64_t execute_activity = 0;  // instructions that started in the block
     bool     has_content = false; // true if any byte != 0
 };
 
@@ -643,7 +643,7 @@ struct DisassembledRangeInstruction
     std::string operands;
     uint8_t     size = 0;
     std::optional<uint16_t> branch_target;  // null for non-branch instructions
-    std::string branch_type;                // "JMP", "JCC", "CALL", "RET", "RST", or empty
+    std::string branch_type;                // "JMP", "JCC", "CALL", "CALLCC", "RET", "RST", or empty
 };
 
 // ---------------------------------------------------------------------------

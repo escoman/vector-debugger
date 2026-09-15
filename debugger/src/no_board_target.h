@@ -23,6 +23,7 @@ public:
     void    writeMemory(uint16_t addr, uint8_t val) override;
     void setMemoryCallbacks(MemoryReadCallback onRead,
                             MemoryWriteCallback onWrite) override;
+    void setInstructionBeginCallback(InstructionBeginCallback cb) override;
 
     CpuState getCpuState() override;
     void     writeCpuRegister(int reg, uint16_t val) override;
@@ -56,4 +57,5 @@ private:
 
     MemoryReadCallback  prevOnRead_;
     MemoryWriteCallback prevOnWrite_;
+    InstructionBeginCallback instrBeginCb_;
 };

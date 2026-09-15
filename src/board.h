@@ -62,6 +62,12 @@ private:
 public:
     std::function<void(void)> poll_debugger;
     std::function<void(void)> onbreakpoint;
+    // Stage 6.22 §1: called once per instruction, immediately before the
+    // opcode is fetched, with the PC that instruction starts at.  This is the
+    // M1 bus cycle: everything the CPU reads up to `length` bytes from that PC
+    // belongs to the instruction itself.  Nothing in the board depends on the
+    // hook; it is purely an observation point for the debugger.
+    std::function<void(int pc)> oninstrbegin;
     
     std::function<void(void)> onframetimer;
     

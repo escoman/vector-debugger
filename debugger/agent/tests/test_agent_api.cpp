@@ -1163,6 +1163,32 @@ static void test_get_memory_map_has_content()
     TEST_END();
 }
 
+
+// ---------------------------------------------------------------------------
+// Stage 6.22 §4 — execute_activity is a measurement, not a constant zero
+// ---------------------------------------------------------------------------
+
+static void test_get_memory_map_execute_activity()
+{
+    TEST_BEGIN("getMemoryMap sums execute_activity per block");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    // Regression guard: the summation runs start..end inclusive and the last
+    // block ends at 0xFFFF.  A 16-bit loop counter wraps there and never
+    // leaves the loop, so this call would hang instead of returning.
+    auto r = api.getMemoryMap();
+    CHECK(r.success, "succeeds (and returns at all)");
+    CHECK_EQ(256u, (unsigned)r.value.size(), "256 blocks");
+
+    // The mock program started 3 instructions inside block 1 and 6 inside block 2.
+    CHECK_EQ(3u, (unsigned)r.value[1].execute_activity, "block 1 = 3 instructions started in it");
+    CHECK_EQ(6u, (unsigned)r.value[2].execute_activity, "block 2 = 6 instructions started in it");
+    CHECK_EQ(0u, (unsigned)r.value[0].execute_activity, "block 0 executed nothing");
+    CHECK_EQ(0u, (unsigned)r.value[255].execute_activity, "last block executed nothing");
+    TEST_END();
+}
+
 // ---------------------------------------------------------------------------
 // Stage 6.1 Iteration 2 — getScreenInfo (§20)
 // ---------------------------------------------------------------------------
@@ -2235,6 +2261,7 @@ int main()
     // Stage 6.1 Iteration 2 — getMemoryMap (§18)
     test_get_memory_map();
     test_get_memory_map_has_content();
+    test_get_memory_map_execute_activity();
 
     // Stage 6.1 Iteration 2 — getScreenInfo (§20)
     test_get_screen_info();

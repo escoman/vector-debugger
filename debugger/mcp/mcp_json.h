@@ -131,6 +131,7 @@ json rdbLinksToJson(uint16_t source, const std::vector<uint16_t> &links);
 
 // -- Runtime Memory Analysis types (Stage 6.20) ------------------------------
 
+bool runtimeBlockActive(const RuntimeAccessBlock &block);   // Stage 6.22 §3
 json runtimeAccessBlockToJson(const RuntimeAccessBlock &block);
 json runtimeAccessBlocksToJson(const std::vector<RuntimeAccessBlock> &blocks);
 json runtimeAccessLogEntryToJson(const RuntimeAccessLogEntry &entry);

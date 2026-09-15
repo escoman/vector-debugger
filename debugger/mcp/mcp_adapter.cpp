@@ -279,7 +279,9 @@ void McpServer::registerCpuTools() {
     // debug_get_cpu_state
     {
         auto tool = mcp::tool_builder("debug_get_cpu_state")
-            .with_description("Get the current CPU register state.")
+            .with_description("Get the current CPU register state. "
+                              "'cycles' is the duration in T-states of the last "
+                              "executed instruction, not a cumulative counter.")
             .build();
         registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
             auto r = api_.getCpuState();
@@ -1012,7 +1014,9 @@ void McpServer::registerMemoryMapTools() {
     // debug_get_memory_map
     {
         auto tool = mcp::tool_builder("debug_get_memory_map")
-            .with_description("Get the 256-block memory map.")
+            .with_description("Get the 256-block memory map. "
+                              "execute_activity = instructions started in the block "
+                              "(cumulative); read_activity/write_activity are 0/1 flags.")
             .build();
         registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
             auto r = api_.getMemoryMap();
@@ -1080,7 +1084,9 @@ void McpServer::registerDebugStateTools() {
     // debug_get_state
     {
         auto tool = mcp::tool_builder("debug_get_state")
-            .with_description("Get full debugger state snapshot.")
+            .with_description("Get full debugger state snapshot. "
+                              "'cycles' inside cpu_state is the T-state count of "
+                              "the last executed instruction, not a total.")
             .build();
         registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
             auto r = api_.getDebugState();
@@ -1515,9 +1521,16 @@ void McpServer::registerRuntimeAnalysisTools() {
         registerTool(tool, [this](const mcp::json &, const std::string &) -> mcp::json {
             auto r = api_.getMemoryAccessMap();
             if (!r.success) return errorContent("get_memory_access_map_failed", r.error_message);
+            // Stage 6.22 §3: "active_blocks" used to be the size of the whole
+            // 256-entry map while the payload was filtered by activity, so the
+            // two disagreed by orders of magnitude.  Count with the very same
+            // predicate the payload uses.
+            int active = 0;
+            for (const auto &b : r.value)
+                if (mcp_json::runtimeBlockActive(b)) ++active;
             return textContent({
-                {"total_blocks", 256},
-                {"active_blocks", static_cast<int>(r.value.size())},
+                {"total_blocks", static_cast<int>(r.value.size())},
+                {"active_blocks", active},
                 {"blocks", mcp_json::runtimeAccessBlocksToJson(r.value)}
             });
         });

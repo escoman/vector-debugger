@@ -75,6 +75,11 @@ void NoBoardTarget::setMemoryCallbacks(MemoryReadCallback onRead,
     }
 }
 
+void NoBoardTarget::setInstructionBeginCallback(InstructionBeginCallback cb)
+{
+    instrBeginCb_ = cb;
+}
+
 // ---------------------------------------------------------------------------
 // CPU state
 // ---------------------------------------------------------------------------
@@ -135,6 +140,10 @@ void NoBoardTarget::writeCpuRegister(int reg, uint16_t val)
 
 void NoBoardTarget::stepInstruction()
 {
+    // Stage 6.22 §1: mirror Board::single_step() — announce the instruction
+    // before its bytes are fetched, so tests see the same accounting as the
+    // GUI and the MCP server do.
+    if (instrBeginCb_) instrBeginCb_(static_cast<uint16_t>(i8080_pc()));
     int report_opcode = 0;
     i8080_instruction(&report_opcode);
 }

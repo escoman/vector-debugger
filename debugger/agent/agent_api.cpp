@@ -804,7 +804,8 @@ AgentApi::disassembleRange(uint16_t address, uint16_t size)
             ri.branch_target = di.target;
             break;
         case ControlFlowType::ConditionalCall:
-            ri.branch_type = "CALL";
+            // Stage 6.22 §7: не путать с безусловным CALL
+            ri.branch_type = "CALLCC";
             ri.branch_target = di.target;
             break;
         case ControlFlowType::UnconditionalRet:
@@ -1226,6 +1227,7 @@ AgentApi::getMemoryMap()
     auto t0 = std::chrono::steady_clock::now();
 
     auto activity = backend_.liveActivitySnapshot();
+    const auto exec = backend_.activitySnapshot();   // per-address execute counts
     const auto &db = backend_.symbolDatabase();
     auto regions = db.allRegions();
 
@@ -1260,6 +1262,18 @@ AgentApi::getMemoryMap()
             ? 1 : 0;  // simplified: 1 = accessed, 0 = not
         block.write_activity = activity.blocks[i].lastWriteTime.time_since_epoch().count() > 0
             ? 1 : 0;
+
+        // Stage 6.22 §4: execute_activity was declared and serialised but never
+        // filled, so it reached every consumer as a constant zero that reads as
+        // a measurement.  It is now the number of instructions that started in
+        // this block — cumulative and monotonic while the ROM runs.  read_ and
+        // write_activity above stay 0/1 flags; the asymmetry is deliberate and
+        // documented in agent_types.h.
+        block.execute_activity = 0;
+        if (exec.executeCount.size() == 65536) {
+            for (int a = block.start; a <= block.end; ++a)   // int: end is 0xFFFF for the last block
+                block.execute_activity += exec.executeCount[a];
+        }
 
         // Check if block has non-zero content
         auto data = backend_.readMemorySnapshot(block.start, 256);

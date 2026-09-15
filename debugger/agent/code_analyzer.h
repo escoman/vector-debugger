@@ -95,34 +95,26 @@ inline ControlFlowType classifyControlFlow(uint8_t opcode)
     default: break;
     }
 
-    uint8_t lo = opcode & 0x0F;
+    // Stage 6.22 §7: в 8080 условное семейство — это страница 0xC0..0xFF,
+    // где условие занимает биты 5-3, а биты 2-0 выбирают породу:
+    //     000 -> Rcc,  010 -> Jcc,  100 -> Ccc,  111 -> RST n
+    // Безусловные формы той же страницы (C3/C9/CD) и E9/76 возвращены выше.
+    // Остальные значения бит 2-0 (001/003/005/006) — не ветвление:
+    // D3/E3/F3, DD/ED/FD-префиксы, недокументированные D9/F9 и т. п.
+    //
+    // Предыдущая проверка (opcode & 0xC7) == 0xC0 требовала нулевых бит 0-2,
+    // что верно только для Rcc: ветви ConditionalJmp/ConditionalCall/Restart
+    // не выполнялись никогда, условный переход попадал в Sequential и BFS шёл
+    // только по fall-through — цели Jcc/Ccc/RST не разбирались вовсе.
+    if ((opcode & 0xC0) != 0xC0) return ControlFlowType::Sequential;
 
-    // Jcc: C2,JNZ  CA,JZ  D2,JNC  DA,JC  E2,JPO  EA,JPE  F2,JP  FA,JM
-    if ((opcode & 0xC7) == 0xC0 && lo != 0x09 && lo != 0x01 &&
-        lo != 0x0B && lo != 0x03 && opcode != 0xC9) {
-        // Distinguish JMP-family from RET/CALL-family
-        if (lo == 0x02 || lo == 0x0A)
-            return ControlFlowType::ConditionalJmp;
+    switch (opcode & 0x07) {
+    case 0x00: return ControlFlowType::ConditionalRet;   // C0 C8 D0 D8 E0 E8 F0 F8
+    case 0x02: return ControlFlowType::ConditionalJmp;   // C2 CA D2 DA E2 EA F2 FA
+    case 0x04: return ControlFlowType::ConditionalCall;  // C4 CC D4 DC E4 EC F4 FC
+    case 0x07: return ControlFlowType::Restart;          // C7 CF D7 DF E7 EF F7 FF
+    default:   return ControlFlowType::Sequential;
     }
-
-    // Ccc: C4,CNZ  CC,CZ  D4,CNC  DC,CC  E4,CPO  EC,CPE  F4,CP  FC,CM
-    if ((opcode & 0xC7) == 0xC0 &&
-        (lo == 0x04 || lo == 0x0C)) {
-        return ControlFlowType::ConditionalCall;
-    }
-
-    // Rcc: C0,RNZ  C8,RZ  D0,RNC  D8,RC  E0,RPO  E8,RPE  F0,RP  F8,RM
-    if ((opcode & 0xC7) == 0xC0 &&
-        (lo == 0x00 || lo == 0x08)) {
-        return ControlFlowType::ConditionalRet;
-    }
-
-    // RST n: C7,CF,D7,DF,E7,EF,F7,FF
-    if ((opcode & 0xC7) == 0xC0 && (lo == 0x07 || lo == 0x0F)) {
-        return ControlFlowType::Restart;
-    }
-
-    return ControlFlowType::Sequential;
 }
 
 // ---------------------------------------------------------------------------

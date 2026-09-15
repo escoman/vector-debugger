@@ -23,6 +23,8 @@ json cpuStateToJson(const CpuState &cpu) {
         {"l",      hex8(cpu.l)},
         {"flags",  hex8(cpu.flags)},
         {"iff",    cpu.iff},
+        // Stage 6.22 §5: T-states of the LAST EXECUTED instruction, not a
+        // running total — the field used to read like one.
         {"cycles", cpu.cycles}
     };
 }
@@ -448,6 +450,13 @@ json rdbLinksToJson(uint16_t source, const std::vector<uint16_t> &links) {
 // Runtime Memory Analysis types (Stage 6.20)
 // ---------------------------------------------------------------------------
 
+// Stage 6.22 §3: single definition of "this block belongs in the answer".
+// The counter in debug_get_memory_access_map and the payload must agree, so
+// both call this instead of repeating the predicate.
+bool runtimeBlockActive(const RuntimeAccessBlock &block) {
+    return block.read || block.write || block.fetch;
+}
+
 json runtimeAccessBlockToJson(const RuntimeAccessBlock &block) {
     return {
         {"address",     mcp_json::hex16(block.address)},
@@ -465,7 +474,7 @@ json runtimeAccessBlocksToJson(const std::vector<RuntimeAccessBlock> &blocks) {
     json arr = json::array();
     // Only return blocks that have any activity (to reduce MCP traffic)
     for (const auto &b : blocks) {
-        if (b.read || b.write || b.fetch) {
+        if (runtimeBlockActive(b)) {
             arr.push_back(runtimeAccessBlockToJson(b));
         }
     }

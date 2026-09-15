@@ -36,6 +36,11 @@ public:
     virtual void setMemoryCallbacks(MemoryReadCallback onRead,
                                     MemoryWriteCallback onWrite) {}
 
+    // Stage 6.22 §1/§2: one call per instruction, before its bytes are
+    // fetched, from whichever thread currently runs the CPU.
+    using InstructionBeginCallback = std::function<void(uint16_t pc)>;
+    virtual void setInstructionBeginCallback(InstructionBeginCallback cb) {}
+
     // -- CPU state ----------------------------------------------------------
 
     virtual CpuState getCpuState() = 0;

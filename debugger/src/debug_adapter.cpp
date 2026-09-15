@@ -286,6 +286,26 @@ void DebugAdapter::setMemoryCallbacks(MemoryReadCallback onRead,
 }
 
 // ---------------------------------------------------------------------------
+// IDebugTarget: instruction-begin hook (Stage 6.22 §1/§2)
+// ---------------------------------------------------------------------------
+
+void DebugAdapter::setInstructionBeginCallback(InstructionBeginCallback cb)
+{
+    instrBeginCb_ = cb;
+
+    if (cb) {
+        prevOnInstrBegin_ = board.oninstrbegin;
+        board.oninstrbegin = [this](int pc) {
+            if (instrBeginCb_) instrBeginCb_(static_cast<uint16_t>(pc));
+            if (prevOnInstrBegin_) prevOnInstrBegin_(pc);
+        };
+    } else {
+        board.oninstrbegin = prevOnInstrBegin_;
+        prevOnInstrBegin_  = nullptr;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // IDebugTarget: CPU state
 // ---------------------------------------------------------------------------
 
