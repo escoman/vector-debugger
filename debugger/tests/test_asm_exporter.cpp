@@ -10,6 +10,7 @@
 #include "rdb_controller.h"
 
 #include <cassert>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -100,10 +101,12 @@ TEST_END()
 
 TEST_BEGIN(format_byte)
 {
+    // A z80asm literal must start with a digit: bytes >= 0xA0 get a '0' guard.
     CHECK(AsmExporter::formatByte(0x00) == "00h", "00h");
     CHECK(AsmExporter::formatByte(0x0A) == "0Ah", "0Ah");
-    CHECK(AsmExporter::formatByte(0xFF) == "FFh", "FFh");
-    CHECK(AsmExporter::formatByte(0xD3) == "D3h", "D3h");
+    CHECK(AsmExporter::formatByte(0xFF) == "0FFh", "0FFh (leading-0 guard)");
+    CHECK(AsmExporter::formatByte(0xD3) == "0D3h", "0D3h (leading-0 guard)");
+    CHECK(AsmExporter::formatByte(0xA1) == "0A1h", "0A1h (leading-0 guard)");
 TEST_END()
 }
 
@@ -113,15 +116,16 @@ TEST_END()
 
 TEST_BEGIN(convert_operands_registers)
 {
-    // Single register
+    // Single register.  M/PSW stay 8080 names (m/psw): the Z80 "(hl)"/"af"
+    // forms are rejected by `z80asm -m=8080_strict`.
     CHECK(AsmExporter::convertOperands("MOV", "A") == "a", "MOV A");
-    CHECK(AsmExporter::convertOperands("INR", "M") == "(hl)", "INR M");
-    CHECK(AsmExporter::convertOperands("PUSH", "PSW") == "af", "PUSH PSW");
+    CHECK(AsmExporter::convertOperands("INR", "M") == "m", "INR M");
+    CHECK(AsmExporter::convertOperands("PUSH", "PSW") == "psw", "PUSH PSW");
     CHECK(AsmExporter::convertOperands("INR", "B") == "b", "INR B");
 
-    // Two registers (MOV A,B)
+    // Two registers (MOV A,B etc.)
     CHECK(AsmExporter::convertOperands("MOV", "A,B") == "a,b", "MOV A,B");
-    CHECK(AsmExporter::convertOperands("MOV", "M,A") == "(hl),a", "MOV M,A");
+    CHECK(AsmExporter::convertOperands("MOV", "M,A") == "m,a", "MOV M,A");
 TEST_END()
 }
 
@@ -131,13 +135,13 @@ TEST_END()
 
 TEST_BEGIN(convert_operands_hex)
 {
-    // LXI H,0100 → h,0100h
+    // LXI H,0100 -> h,0100h  (starts with a digit: no guard needed)
     CHECK(AsmExporter::convertOperands("LXI", "H,0100") == "h,0100h", "LXI H,0100");
-    // MVI A,D3 → a,d3h
-    CHECK(AsmExporter::convertOperands("MVI", "A,D3") == "a,d3h", "MVI A,D3");
-    // ADI D3 → d3h
-    CHECK(AsmExporter::convertOperands("ADI", "D3") == "d3h", "ADI D3");
-    // CPI 00 → 00h
+    // MVI A,D3 -> a,0d3h  (leading hex letter -> '0' guard so it is not a symbol)
+    CHECK(AsmExporter::convertOperands("MVI", "A,D3") == "a,0d3h", "MVI A,D3");
+    // ADI D3 -> 0d3h
+    CHECK(AsmExporter::convertOperands("ADI", "D3") == "0d3h", "ADI D3");
+    // CPI 00 -> 00h
     CHECK(AsmExporter::convertOperands("CPI", "00") == "00h", "CPI 00");
 TEST_END()
 }
@@ -154,6 +158,135 @@ TEST_BEGIN(convert_operands_address)
     CHECK(AsmExporter::convertOperands("LDA", "8000") == "8000h", "LDA 8000");
     // OUT 02 → 02h
     CHECK(AsmExporter::convertOperands("OUT", "02") == "02h", "OUT 02");
+TEST_END()
+}
+
+// ---------------------------------------------------------------------------
+// Test: convertOperands — REAL disassembler format (space after comma)
+// The producer emits "B, 082A" / "E, M"; fixtures must match it exactly, not a
+// spaceless form (that mismatch is why the old tests stayed green on broken code).
+// ---------------------------------------------------------------------------
+
+TEST_BEGIN(convert_operands_realistic)
+{
+    // LXI emits "B, 082A" -> trims, keeps hex, adds h (starts with digit: no guard)
+    CHECK(AsmExporter::convertOperands("LXI", "B, 082A") == "b,082ah", "LXI B, 082A");
+    // MOV emits "E, M" -> trims; M stays 8080 "m" (not "(hl)")
+    CHECK(AsmExporter::convertOperands("MOV", "E, M") == "e,m", "MOV E, M");
+    CHECK(AsmExporter::convertOperands("MOV", "A, M") == "a,m", "MOV A, M");
+    CHECK(AsmExporter::convertOperands("MOV", "M, A") == "m,a", "MOV M, A");
+    // POP emits "PSW" -> "psw" (not "af")
+    CHECK(AsmExporter::convertOperands("POP", "PSW") == "psw", "POP PSW");
+    // The silent-corruption case: MVI "C, 10" must become hex 10h (=0x10),
+    // never a bare "10" which z80asm reads as DECIMAL ten.
+    CHECK(AsmExporter::convertOperands("MVI", "C, 10") == "c,10h", "MVI C, 10 -> 10h");
+    // Immediate whose value starts with a hex letter gets the '0' guard
+    CHECK(AsmExporter::convertOperands("MVI", "A, FF") == "a,0ffh", "MVI A, FF");
+    // 16-bit address starting with a letter: "A1FF" -> "0a1ffh"
+    CHECK(AsmExporter::convertOperands("STA", "A1FF") == "0a1ffh", "STA A1FF");
+TEST_END()
+}
+
+// ---------------------------------------------------------------------------
+// Test: hex-literal invariant — no emitted literal may start with a hex letter
+// (item 8.3).  Checks convertOperands and formatByte outputs directly.
+// ---------------------------------------------------------------------------
+
+static bool isHexLetter(char c) {
+    return c=='a'||c=='b'||c=='c'||c=='d'||c=='e'||c=='f'
+        || c=='A'||c=='B'||c=='C'||c=='D'||c=='E'||c=='F';
+}
+
+// Returns true if token is a hex literal that wrongly starts with a letter,
+// i.e. matches /^[0-9A-Fa-f]*h$/ but first char is a-f (would be a symbol).
+static bool isBadHexLiteral(const std::string &tok) {
+    if (tok.size() < 2) return false;
+    if (tok.back() != 'h' && tok.back() != 'H') return false;
+    if (!isHexLetter(tok[0])) return false;          // must start with a-f to be bad
+    for (size_t i = 0; i + 1 < tok.size(); ++i)      // body must be all hex digits
+        if (!std::isxdigit(static_cast<unsigned char>(tok[i]))) return false;
+    return true;
+}
+
+TEST_BEGIN(hex_literal_invariant)
+{
+    // formatByte: every byte value yields a literal starting with a digit.
+    for (int b = 0; b <= 0xFF; ++b) {
+        std::string s = AsmExporter::formatByte(static_cast<uint8_t>(b));
+        CHECK(s.back() == 'h', "formatByte ends with h");
+        if (!std::isdigit(static_cast<unsigned char>(s[0]))) { testsFailed++; \
+            fprintf(stderr, "  FAIL: formatByte(0x%02X)='%s' not digit-led\n", b, s.c_str()); }
+        CHECK(!isBadHexLiteral(s), "formatByte no letter-led literal");
+    }
+    // convertOperands over representative high-address/high-immediate operands.
+    const char* addrs[] = {"A1FF","FFFF","B0C0","D3","FF","82A"};
+    for (auto a : addrs) {
+        std::string s = AsmExporter::convertOperands("STA", a);
+        CHECK(!isBadHexLiteral(s), "convertOperands addr no letter-led literal");
+    }
+TEST_END()
+}
+
+// ---------------------------------------------------------------------------
+// Test: full export emits only buildable literals (space-format + high bytes)
+// Wires a synthetic ROM with the tricky constructs through the real pipeline
+// and scans code.asm for any letter-led hex literal (item 8.3 / 8.4 end-to-end).
+// ---------------------------------------------------------------------------
+
+TEST_BEGIN(export_hex_literals_buildable)
+{
+    std::vector<uint8_t> rom(64, 0x00);
+    rom[0] = 0x3E; rom[1] = 0xFF;               // MVI A,FF   -> mvi a,0ffh
+    rom[2] = 0x21; rom[3] = 0xFF; rom[4] = 0xFF; // LXI H,FFFF -> lxi h,0ffffh
+    rom[5] = 0x06; rom[6] = 0x10;               // MVI B,10   -> mvi b,10h (not dec 16)
+    rom[7] = 0x7E;                              // MOV A,M    -> mov a,m  (not (hl))
+    rom[8] = 0xBE;                              // CMP M      -> cmp m
+    rom[9] = 0x87;                              // ADD A      -> add a
+    rom[10] = 0xAF;                             // XRA A      -> xra a
+    rom[11] = 0xC3; rom[12] = 0x20; rom[13] = 0x00; // JMP 0020 (in ROM)
+    rom[14] = 0xC9;                             // RET
+
+    std::string romPath = writeTempFile("buildable.rom", rom.data(), rom.size());
+    AsmExportConfig config;
+    config.romPath = romPath;
+    config.outputDir = "/tmp/test_asm_export_buildable";
+    config.origin = 0x0000;
+
+    AsmExporter exporter(config);
+    AsmExportReport report = exporter.run();
+    CHECK(!report.hasErrors(), "buildable export succeeds");
+
+    std::ifstream cf("/tmp/test_asm_export_buildable/code/code.asm");
+    CHECK(cf.is_open(), "code.asm readable");
+    std::string content((std::istreambuf_iterator<char>(cf)),
+                         std::istreambuf_iterator<char>());
+
+    // Tokenize on separators; flag any letter-led hex literal (the bug class).
+    std::string tok;
+    bool foundBad = false;
+    auto feed = [&](char sep) {
+        if (!tok.empty()) { if (isBadHexLiteral(tok)) foundBad = true; tok.clear(); }
+    };
+    for (char c : content) {
+        if (c==' '||c=='\t'||c==','||c==';'||c==':'||c=='\n'||c=='\r') feed(c);
+        else tok += c;
+    }
+    feed('\0');
+    CHECK(!foundBad, "no letter-led hex literal anywhere in code.asm");
+
+    // Positive: the corrected 8080 forms appear (not the Z80/decimal bugs).
+    // Mnemonic and operand are separated by a TAB in the emitted text.
+    CHECK(content.find("mov\ta,m") != std::string::npos, "has 'mov a,m' (not (hl))");
+    CHECK(content.find("cmp\tm")   != std::string::npos, "has 'cmp m'");
+    CHECK(content.find("add\ta")   != std::string::npos, "has 'add a'");
+    CHECK(content.find("xra\ta")   != std::string::npos, "has 'xra a'");
+    CHECK(content.find("mvi\ta,0ffh") != std::string::npos, "has 'mvi a,0ffh'");
+    CHECK(content.find("mvi\tb,10h")  != std::string::npos, "has 'mvi b,10h' (hex, not decimal)");
+    CHECK(content.find("(hl)") == std::string::npos, "no Z80 '(hl)' emitted");
+    CHECK(content.find("\taf") == std::string::npos &&
+          content.find(" af") == std::string::npos, "no Z80 'af' emitted");
+
+    cleanupTempFiles();
 TEST_END()
 }
 
@@ -473,6 +606,9 @@ int main()
     RUN_TEST(convert_operands_registers);
     RUN_TEST(convert_operands_hex);
     RUN_TEST(convert_operands_address);
+    RUN_TEST(convert_operands_realistic);
+    RUN_TEST(hex_literal_invariant);
+    RUN_TEST(export_hex_literals_buildable);
     RUN_TEST(full_export_synthetic);
     RUN_TEST(export_with_rdb);
     RUN_TEST(deterministic_export);

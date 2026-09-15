@@ -87,8 +87,11 @@ public:
 
     // --- Static helpers (testable in isolation) ---
 
-    // Convert debugger operand text to z80asm format.
-    // e.g. "H,0100" → "h,0100h", "A,B" → "a,b"
+    // Convert debugger operand text to z80asm format (target: -m=8080_strict).
+    // Handles the disassembler's "B, 082A" (space after comma) by trimming.
+    // Hex literals always start with a digit and end with 'h'; 8080 register
+    // names M/PSW stay "m"/"psw" (NOT the Z80 "(hl)"/"af", illegal in strict).
+    // e.g. "H, 0100" -> "h,0100h", "A,D3" -> "a,0d3h", "E, M" -> "e,m"
     static std::string convertOperands(const std::string &mnemonic,
                                        const std::string &operands);
 
@@ -98,7 +101,8 @@ public:
     // Sanitize a name for use as z80asm identifier.
     static std::string sanitizeLabel(const std::string &name);
 
-    // Format a byte as z80asm hex: "0AH"
+    // Format a byte as a z80asm hex literal.  A literal must begin with a
+    // digit, so bytes >= 0xA0 get a leading '0': 0x0A -> "0Ah", 0xFF -> "0FFh".
     static std::string formatByte(uint8_t b);
 
 private:

@@ -62,6 +62,31 @@ static bool isAllHex(const std::string &s)
     return true;
 }
 
+// Trim surrounding whitespace.  The disassembler emits operands as "B, 082A"
+// (a space after the comma); without trimming, the right-hand field is seen as
+// " 082A", which is neither all-hex nor the expected width, so it slips through
+// unclassified and the "h" suffix / hex interpretation is lost.
+static std::string trim(const std::string &s)
+{
+    size_t b = 0, e = s.size();
+    while (b < e && std::isspace(static_cast<unsigned char>(s[b]))) ++b;
+    while (e > b && std::isspace(static_cast<unsigned char>(s[e - 1]))) --e;
+    return s.substr(b, e - b);
+}
+
+// Format a hex-digit string as a z80asm numeric literal.  A literal MUST begin
+// with a digit; "A1FFh"/"FFh" are parsed as (undefined) symbols, and a bare
+// "10" is parsed as *decimal* ten, silently corrupting the byte.  So guard a
+// leading hex letter with "0" and always terminate with the "h" suffix.
+// Case of the digits is preserved (callers pass upper- or lower-case).
+static std::string hexLiteral(const std::string &hexDigits)
+{
+    std::string s = hexDigits;
+    if (!s.empty() && std::isalpha(static_cast<unsigned char>(s[0])))
+        s = "0" + s;
+    return s + "h";
+}
+
 // ---------------------------------------------------------------------------
 // AsmExporter — construction
 // ---------------------------------------------------------------------------
@@ -338,7 +363,7 @@ std::string AsmExporter::emitMainAsm()
 
     char buf[16];
     snprintf(buf, sizeof(buf), "%04X", config_.origin);
-    os << "\torg\t" << buf << "h\n";
+    os << "\torg\t" << hexLiteral(buf) << "\n";
     os << "\n";
 
     os << "\tinclude\t\"code/code.asm\"\n";
@@ -609,10 +634,11 @@ std::string AsmExporter::emitInstruction(const AnalyzedInstruction &instr)
         if (!name.empty()) {
             os << "\t" << name;
         } else {
-            // Fallback: numeric address with h suffix
+            // Fallback: numeric address with h suffix (leading digit guard so
+            // targets >= 0xA000, e.g. 0xA1FF -> "0A1FFh", aren't read as symbols)
             char buf[8];
-            snprintf(buf, sizeof(buf), "%04Xh", instr.target);
-            os << "\t" << buf;
+            snprintf(buf, sizeof(buf), "%04X", instr.target);
+            os << "\t" << hexLiteral(buf);
         }
     } else if (!instr.operands.empty()) {
         os << "\t" << convertOperands(instr.mnemonic, instr.operands);
@@ -659,57 +685,38 @@ std::string AsmExporter::emitDataBlock(const std::string &label,
 std::string AsmExporter::convertOperands(const std::string &mnemonic,
                                           const std::string &operands)
 {
-    // Register mapping: 8080 → z80asm lowercase
+    (void)mnemonic;  // kept for API stability / future mnemonic-specific rules
+
+    // Register mapping: 8080 names -> z80asm lowercase.
+    // NOTE: M and PSW map to the 8080 names "m"/"psw", NOT the Z80 "(hl)"/"af".
+    // The latter are rejected by `z80asm -m=8080_strict` (and "(hl)" fails even
+    // in default mode for the two-register MOV), so emitting them made the export
+    // unbuildable.  Verified byte-identical: sub m=96, mov a,m=7e, pop psw=f1.
     static const std::map<std::string, std::string> regMap = {
         {"A", "a"}, {"B", "b"}, {"C", "c"}, {"D", "d"},
-        {"E", "e"}, {"H", "h"}, {"L", "l"}, {"M", "(hl)"},
-        {"PSW", "af"}, {"SP", "sp"},
+        {"E", "e"}, {"H", "h"}, {"L", "l"}, {"M", "m"},
+        {"PSW", "psw"}, {"SP", "sp"},
     };
 
-    // Check for single register operand (e.g., "A", "M", "PSW")
-    auto regIt = regMap.find(operands);
-    if (regIt != regMap.end()) {
-        return regIt->second;
-    }
+    // Classify one already-trimmed operand token: register, hex literal, or
+    // pass-through.  Used for both the single and the two-operand forms so the
+    // register-vs-number decision lives in exactly one place.
+    auto classify = [&](const std::string &tok) -> std::string {
+        auto it = regMap.find(tok);
+        if (it != regMap.end()) return it->second;
+        if (isAllHex(tok) && (tok.size() == 2 || tok.size() == 4))
+            return hexLiteral(toLower(tok));
+        return tok;
+    };
 
-    // Check for "left,right" pattern
     auto commaPos = operands.find(',');
-    if (commaPos != std::string::npos) {
-        std::string left = operands.substr(0, commaPos);
-        std::string right = operands.substr(commaPos + 1);
-
-        // Both single chars → both are registers (MOV A,B etc.)
-        if (left.size() == 1 && right.size() == 1) {
-            std::string lOut, rOut;
-            auto lrIt = regMap.find(left);
-            lOut = (lrIt != regMap.end()) ? lrIt->second : toLower(left);
-            auto rrIt = regMap.find(right);
-            rOut = (rrIt != regMap.end()) ? rrIt->second : toLower(right);
-            return lOut + "," + rOut;
-        }
-
-        // Left is register, right is hex value (MVI A,D3 / LXI H,0100)
-        auto lrIt = regMap.find(left);
-        if (lrIt != regMap.end()) {
-            std::string rightOut;
-            if (isAllHex(right) && (right.size() == 2 || right.size() == 4)) {
-                rightOut = toLower(right) + "h";
-            } else {
-                rightOut = right;
-            }
-            return lrIt->second + "," + rightOut;
-        }
-
-        // Default: pass through
-        return operands;
+    if (commaPos == std::string::npos) {
+        return classify(trim(operands));
     }
 
-    // Default: if it looks like a hex number → add h suffix
-    if (isAllHex(operands) && (operands.size() == 2 || operands.size() == 4)) {
-        return toLower(operands) + "h";
-    }
-
-    return operands;
+    std::string left  = trim(operands.substr(0, commaPos));
+    std::string right = trim(operands.substr(commaPos + 1));
+    return classify(left) + "," + classify(right);
 }
 
 // ---------------------------------------------------------------------------
@@ -755,9 +762,12 @@ std::string AsmExporter::sanitizeLabel(const std::string &name)
 
 std::string AsmExporter::formatByte(uint8_t b)
 {
+    // z80asm hex literal: always starts with a digit and ends with 'h'.
+    // "%02Xh" alone yields "FFh"/"A1h" for bytes >= 0xA0, which z80asm reads as
+    // undefined symbols.  hexLiteral() guards the leading letter with '0'.
     char buf[8];
-    snprintf(buf, sizeof(buf), "%02Xh", b);
-    return buf;
+    snprintf(buf, sizeof(buf), "%02X", b);
+    return hexLiteral(buf);
 }
 
 // ---------------------------------------------------------------------------
