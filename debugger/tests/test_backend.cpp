@@ -1012,10 +1012,10 @@ static void test_disassembler_all_opcodes()
         "MOV","MOV","MOV","MOV","MOV","MOV","MOV","MOV","MOV","MOV","MOV","MOV","MOV","MOV","MOV","MOV",
         "MOV","MOV","MOV","MOV","MOV","MOV","MOV","MOV","MOV","MOV","MOV","MOV","MOV","MOV","MOV","MOV",
         "MOV","MOV","MOV","MOV","MOV","MOV","HLT","MOV","MOV","MOV","MOV","MOV","MOV","MOV","MOV","MOV",
-        "ADD","ADC","SUB","SBB","ANA","XRA","ORA","CMP","ADD","ADC","SUB","SBB","ANA","XRA","ORA","CMP",
-        "ADD","ADC","SUB","SBB","ANA","XRA","ORA","CMP","ADD","ADC","SUB","SBB","ANA","XRA","ORA","CMP",
-        "ADD","ADC","SUB","SBB","ANA","XRA","ORA","CMP","ADD","ADC","SUB","SBB","ANA","XRA","ORA","CMP",
-        "ADD","ADC","SUB","SBB","ANA","XRA","ORA","CMP","ADD","ADC","SUB","SBB","ANA","XRA","ORA","CMP",
+        "ADD","ADD","ADD","ADD","ADD","ADD","ADD","ADD","ADC","ADC","ADC","ADC","ADC","ADC","ADC","ADC",
+        "SUB","SUB","SUB","SUB","SUB","SUB","SUB","SUB","SBB","SBB","SBB","SBB","SBB","SBB","SBB","SBB",
+        "ANA","ANA","ANA","ANA","ANA","ANA","ANA","ANA","XRA","XRA","XRA","XRA","XRA","XRA","XRA","XRA",
+        "ORA","ORA","ORA","ORA","ORA","ORA","ORA","ORA","CMP","CMP","CMP","CMP","CMP","CMP","CMP","CMP",
         "RNZ","POP","JNZ","JMP","CNZ","PUSH","ADI","RST","RZ","RET","JZ","","CZ","CALL","ACI","RST",
         "RNC","POP","JNC","OUT","CNC","PUSH","SUI","RST","RC","","JC","IN","CC","","SBI","RST",
         "RPO","POP","JPO","XTHL","CPO","PUSH","ANI","RST","RPE","PCHL","JPE","XCHG","CPE","","XRI","RST",
@@ -1031,6 +1031,14 @@ static void test_disassembler_all_opcodes()
             CHECK(d.mnemonic == expected[op],
                   ("opcode " + std::to_string(op) + ": mnemonic").c_str());
             checked++;
+        }
+        // ALU group (0x80-0xBF): verify the source-operand field is decoded
+        // from bits 2-0 (not bits 5-3). This is the operand half of the
+        // transposition bug — mnemonic alone did not catch it.
+        if (op >= 0x80 && op <= 0xBF) {
+            static const char *REG_NAME[8] = {"B","C","D","E","H","L","M","A"};
+            CHECK(d.operands == REG_NAME[op & 7],
+                  ("opcode " + std::to_string(op) + ": ALU operand").c_str());
         }
     }
     // Specific checks for critical opcodes
@@ -1053,6 +1061,77 @@ static void test_disassembler_all_opcodes()
         CHECK(d.text == "IN 42", "0xDB = IN port");
     }
     printf("  [info] checked %d defined opcodes\n", checked);
+
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Test: ALU group (0x80-0xBF) decoding — invariant + round-trip
+//
+// Guards against the mnemonic/source transposition bug: opcode 10 GGG SSS
+// must decode to mnemonic = ALU[(op>>3)&7] and operand = REG[op&7].
+// ---------------------------------------------------------------------------
+
+static void test_disassembler_alu_group()
+{
+    TEST_BEGIN("S2.1: Disassembler ALU group 0x80-0xBF invariant + round-trip");
+
+    static const char *ALU_NAME[8] = {"ADD","ADC","SUB","SBB","ANA","XRA","ORA","CMP"};
+    static const char *REG_NAME[8] = {"B","C","D","E","H","L","M","A"};
+
+    auto aluIndexOf = [&](const std::string &m) -> int {
+        for (int i = 0; i < 8; ++i) if (m == ALU_NAME[i]) return i;
+        return -1;
+    };
+    auto regIndexOf = [&](const std::string &r) -> int {
+        for (int i = 0; i < 8; ++i) if (r == REG_NAME[i]) return i;
+        return -1;
+    };
+
+    // Invariant over all 64 opcodes + byte-exact round-trip.
+    for (int g = 0; g < 8; ++g) {
+        for (int r = 0; r < 8; ++r) {
+            uint8_t op = static_cast<uint8_t>(0x80 + 8 * g + r);
+            uint8_t buf[4] = { op, 0x34, 0x12, 0 };
+            auto readFn = [&buf](uint16_t addr) -> uint8_t { return buf[addr & 3]; };
+            auto d = disassemble(0x0000, readFn);
+
+            CHECK(d.mnemonic == ALU_NAME[g],
+                  ("ALU invariant mnemonic for " + std::to_string((int)op)).c_str());
+            CHECK(d.operands == REG_NAME[r],
+                  ("ALU invariant operand for " + std::to_string((int)op)).c_str());
+            // Length must be 1 (register ALU takes no immediate bytes).
+            CHECK_EQ(1, d.length,
+                     ("ALU length for " + std::to_string((int)op)).c_str());
+
+            // Round-trip: rebuild the opcode from the decoded fields.
+            int rg = aluIndexOf(d.mnemonic);
+            int rr = regIndexOf(d.operands);
+            uint8_t rebuilt = static_cast<uint8_t>(0x80 | (rg << 3) | rr);
+            CHECK_EQ(op, rebuilt,
+                     ("ALU round-trip " + std::to_string((int)op)).c_str());
+        }
+    }
+
+    // Regression vectors from the bug report table.
+    {
+        uint8_t buf[] = { 0x87 };
+        auto readFn = [&buf](uint16_t) -> uint8_t { return buf[0]; };
+        auto d = disassemble(0, readFn);
+        CHECK(d.text == "ADD A", "0x87 = ADD A");
+    }
+    {
+        uint8_t buf[] = { 0xBE };
+        auto readFn = [&buf](uint16_t) -> uint8_t { return buf[0]; };
+        auto d = disassemble(0, readFn);
+        CHECK(d.text == "CMP M", "0xBE = CMP M");
+    }
+    {
+        uint8_t buf[] = { 0xAF };
+        auto readFn = [&buf](uint16_t) -> uint8_t { return buf[0]; };
+        auto d = disassemble(0, readFn);
+        CHECK(d.text == "XRA A", "0xAF = XRA A");
+    }
 
     TEST_END();
 }
@@ -4566,6 +4645,7 @@ int main()
 
     // Stage 2.1 new tests
     test_disassembler_all_opcodes();
+    test_disassembler_alu_group();
     test_smoke_real_memory();
     test_performance();
 

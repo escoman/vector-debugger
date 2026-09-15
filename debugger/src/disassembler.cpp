@@ -78,25 +78,25 @@ static const OpEntry optable[256] = {
     /* 78-7F */ { "MOV", F_MOV }, { "MOV", F_MOV }, { "MOV", F_MOV }, { "MOV", F_MOV },
                 { "MOV", F_MOV }, { "MOV", F_MOV }, { "MOV", F_MOV }, { "MOV", F_MOV },
 
-    /* 80 */ { "ADD", F_ALU }, { "ADC", F_ALU }, { "SUB", F_ALU }, { "SBB", F_ALU },
-    /* 84 */ { "ANA", F_ALU }, { "XRA", F_ALU }, { "ORA", F_ALU }, { "CMP", F_ALU },
-    /* 88 */ { "ADD", F_ALU }, { "ADC", F_ALU }, { "SUB", F_ALU }, { "SBB", F_ALU },
-    /* 8C */ { "ANA", F_ALU }, { "XRA", F_ALU }, { "ORA", F_ALU }, { "CMP", F_ALU },
+    /* 80-87 ADD r */ { "ADD", F_ALU }, { "ADD", F_ALU }, { "ADD", F_ALU }, { "ADD", F_ALU },
+                       { "ADD", F_ALU }, { "ADD", F_ALU }, { "ADD", F_ALU }, { "ADD", F_ALU },
+    /* 88-8F ADC r */ { "ADC", F_ALU }, { "ADC", F_ALU }, { "ADC", F_ALU }, { "ADC", F_ALU },
+                       { "ADC", F_ALU }, { "ADC", F_ALU }, { "ADC", F_ALU }, { "ADC", F_ALU },
 
-    /* 90 */ { "ADD", F_ALU }, { "ADC", F_ALU }, { "SUB", F_ALU }, { "SBB", F_ALU },
-    /* 94 */ { "ANA", F_ALU }, { "XRA", F_ALU }, { "ORA", F_ALU }, { "CMP", F_ALU },
-    /* 98 */ { "ADD", F_ALU }, { "ADC", F_ALU }, { "SUB", F_ALU }, { "SBB", F_ALU },
-    /* 9C */ { "ANA", F_ALU }, { "XRA", F_ALU }, { "ORA", F_ALU }, { "CMP", F_ALU },
+    /* 90-97 SUB r */ { "SUB", F_ALU }, { "SUB", F_ALU }, { "SUB", F_ALU }, { "SUB", F_ALU },
+                       { "SUB", F_ALU }, { "SUB", F_ALU }, { "SUB", F_ALU }, { "SUB", F_ALU },
+    /* 98-9F SBB r */ { "SBB", F_ALU }, { "SBB", F_ALU }, { "SBB", F_ALU }, { "SBB", F_ALU },
+                       { "SBB", F_ALU }, { "SBB", F_ALU }, { "SBB", F_ALU }, { "SBB", F_ALU },
 
-    /* A0 */ { "ADD", F_ALU }, { "ADC", F_ALU }, { "SUB", F_ALU }, { "SBB", F_ALU },
-    /* A4 */ { "ANA", F_ALU }, { "XRA", F_ALU }, { "ORA", F_ALU }, { "CMP", F_ALU },
-    /* A8 */ { "ADD", F_ALU }, { "ADC", F_ALU }, { "SUB", F_ALU }, { "SBB", F_ALU },
-    /* AC */ { "ANA", F_ALU }, { "XRA", F_ALU }, { "ORA", F_ALU }, { "CMP", F_ALU },
+    /* A0-A7 ANA r */ { "ANA", F_ALU }, { "ANA", F_ALU }, { "ANA", F_ALU }, { "ANA", F_ALU },
+                       { "ANA", F_ALU }, { "ANA", F_ALU }, { "ANA", F_ALU }, { "ANA", F_ALU },
+    /* A8-AF XRA r */ { "XRA", F_ALU }, { "XRA", F_ALU }, { "XRA", F_ALU }, { "XRA", F_ALU },
+                       { "XRA", F_ALU }, { "XRA", F_ALU }, { "XRA", F_ALU }, { "XRA", F_ALU },
 
-    /* B0 */ { "ADD", F_ALU }, { "ADC", F_ALU }, { "SUB", F_ALU }, { "SBB", F_ALU },
-    /* B4 */ { "ANA", F_ALU }, { "XRA", F_ALU }, { "ORA", F_ALU }, { "CMP", F_ALU },
-    /* B8 */ { "ADD", F_ALU }, { "ADC", F_ALU }, { "SUB", F_ALU }, { "SBB", F_ALU },
-    /* BC */ { "ANA", F_ALU }, { "XRA", F_ALU }, { "ORA", F_ALU }, { "CMP", F_ALU },
+    /* B0-B7 ORA r */ { "ORA", F_ALU }, { "ORA", F_ALU }, { "ORA", F_ALU }, { "ORA", F_ALU },
+                       { "ORA", F_ALU }, { "ORA", F_ALU }, { "ORA", F_ALU }, { "ORA", F_ALU },
+    /* B8-BF CMP r */ { "CMP", F_ALU }, { "CMP", F_ALU }, { "CMP", F_ALU }, { "CMP", F_ALU },
+                       { "CMP", F_ALU }, { "CMP", F_ALU }, { "CMP", F_ALU }, { "CMP", F_ALU },
 
     /* C0 */ { "RNZ", F_RET  }, { "POP",  F_RPAIR }, { "JNZ", F_JMP  }, { "JMP", F_JMP  },
     /* C4 */ { "CNZ", F_CALL }, { "PUSH", F_RPAIR }, { "ADI", F_IMM16 }, { "RST", F_RST  },
@@ -211,7 +211,7 @@ DisassembledInstruction disassemble(uint16_t address, DisasmReadFn readByte)
         break;
 
     case F_ALU:
-        di.operands = reg_name((op >> 3) & 7);  // bits 5-3 for ALU source
+        di.operands = reg_name(op & 7);  // bits 2-0 = source register
         break;
 
     case F_MOV:
