@@ -5,6 +5,7 @@
 #include "rdb_controller.h"
 
 #include <algorithm>
+#include <cctype>
 #include <map>
 #include <set>
 #include <sstream>
@@ -194,6 +195,216 @@ AgentApiResult<void> AgentApi::writeIo(uint8_t port, uint8_t value)
             ErrorCode::OperationFailed, result.error);
     }
     return AgentApiResult<void>::ok();
+}
+
+// ---------------------------------------------------------------------------
+// Virtual keyboard injection
+//
+// Key names map to raw SDL scancodes (the value IDebugBackend::pressKey /
+// releaseKey forward to Keyboard::apply_key).  The table mirrors the emulator
+// keyboard matrix in src/keyboard.h; scancode numbers are the SDL2 standard
+// values, kept literal here so the agent layer stays free of an SDL dependency.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct KeyTableEntry {
+    const char *name;
+    int         scancode;
+    const char *description;
+    bool        modifier;
+};
+
+// SDL2 scancodes (standard enum values).
+enum {
+    SCAN_A = 4,  SCAN_B,  SCAN_C,  SCAN_D,  SCAN_E,  SCAN_F,  SCAN_G,
+    SCAN_H,  SCAN_I,  SCAN_J,  SCAN_K,  SCAN_L,  SCAN_M,  SCAN_N,
+    SCAN_O,  SCAN_P,  SCAN_Q,  SCAN_R,  SCAN_S,  SCAN_T,  SCAN_U,
+    SCAN_V,  SCAN_W,  SCAN_X,  SCAN_Y,  SCAN_Z,
+    SCAN_1 = 30, SCAN_2, SCAN_3, SCAN_4, SCAN_5, SCAN_6, SCAN_7,
+    SCAN_8, SCAN_9, SCAN_0,
+    SCAN_RETURN = 40, SCAN_ESCAPE, SCAN_BACKSPACE, SCAN_TAB, SCAN_SPACE,
+    SCAN_MINUS = 45, SCAN_EQUALS, SCAN_LBRACKET, SCAN_RBRACKET,
+    SCAN_BACKSLASH, SCAN_SEMICOLON = 51, SCAN_APOSTROPHE, SCAN_GRAVE,
+    SCAN_COMMA, SCAN_PERIOD, SCAN_SLASH,
+    SCAN_F1 = 58, SCAN_F2, SCAN_F3, SCAN_F4, SCAN_F5, SCAN_F6, SCAN_F7, SCAN_F8,
+    SCAN_RIGHT = 79, SCAN_LEFT, SCAN_DOWN, SCAN_UP,
+    SCAN_LCTRL = 224, SCAN_LSHIFT, SCAN_LALT,
+    SCAN_RCTRL = 228, SCAN_RSHIFT, SCAN_RALT,
+};
+
+const KeyTableEntry kKeyTable[] = {
+    // Letters (English face / Russian face)
+    {"A", SCAN_A, "A", false},
+    {"B", SCAN_B, "B", false},
+    {"C", SCAN_C, "C", false},
+    {"D", SCAN_D, "D", false},
+    {"E", SCAN_E, "E", false},
+    {"F", SCAN_F, "F", false},
+    {"G", SCAN_G, "G", false},
+    {"H", SCAN_H, "H", false},
+    {"I", SCAN_I, "I", false},
+    {"J", SCAN_J, "J", false},
+    {"K", SCAN_K, "K", false},
+    {"L", SCAN_L, "L", false},
+    {"M", SCAN_M, "M", false},
+    {"N", SCAN_N, "N", false},
+    {"O", SCAN_O, "O", false},
+    {"P", SCAN_P, "P", false},
+    {"Q", SCAN_Q, "Q", false},
+    {"R", SCAN_R, "R", false},
+    {"S", SCAN_S, "S", false},
+    {"T", SCAN_T, "T", false},
+    {"U", SCAN_U, "U", false},
+    {"V", SCAN_V, "V", false},
+    {"W", SCAN_W, "W", false},
+    {"X", SCAN_X, "X", false},
+    {"Y", SCAN_Y, "Y", false},
+    {"Z", SCAN_Z, "Z", false},
+    // Digits
+    {"0", SCAN_0, "digit 0", false},
+    {"1", SCAN_1, "digit 1", false},
+    {"2", SCAN_2, "digit 2", false},
+    {"3", SCAN_3, "digit 3", false},
+    {"4", SCAN_4, "digit 4", false},
+    {"5", SCAN_5, "digit 5", false},
+    {"6", SCAN_6, "digit 6", false},
+    {"7", SCAN_7, "digit 7", false},
+    {"8", SCAN_8, "digit 8", false},
+    {"9", SCAN_9, "digit 9", false},
+    // Punctuation
+    {"MINUS",      SCAN_MINUS,      "- / @",   false},
+    {"EQUALS",     SCAN_EQUALS,     "=",       false},
+    {"LBRACKET",   SCAN_LBRACKET,   "[",       false},
+    {"RBRACKET",   SCAN_RBRACKET,   "]",       false},
+    {"BACKSLASH",  SCAN_BACKSLASH,  "\\",      false},
+    {"SEMICOLON",  SCAN_SEMICOLON,  ";",       false},
+    {"APOSTROPHE", SCAN_APOSTROPHE, "'",       false},
+    {"COMMA",      SCAN_COMMA,      ",",       false},
+    {"PERIOD",     SCAN_PERIOD,     ".",       false},
+    {"SLASH",      SCAN_SLASH,      "/",       false},
+    {"GRAVE",      SCAN_GRAVE,      "^",       false},
+    // Control keys
+    {"SPACE",     SCAN_SPACE,     "space bar", false},
+    {"TAB",       SCAN_TAB,       "tab",       false},
+    {"ENTER",     SCAN_RETURN,    "enter (VK input)", false},
+    {"BACKSPACE", SCAN_BACKSPACE, "backspace / delete", false},
+    {"ESCAPE",    SCAN_ESCAPE,    "escape",    false},
+    {"UP",        SCAN_UP,        "up arrow",   false},
+    {"DOWN",      SCAN_DOWN,      "down arrow", false},
+    {"LEFT",      SCAN_LEFT,      "left arrow", false},
+    {"RIGHT",     SCAN_RIGHT,     "right arrow", false},
+    // Function keys F1-F8 (F6 is the RU/LAT switch pulse)
+    {"F1", SCAN_F1, "F1", false},
+    {"F2", SCAN_F2, "F2", false},
+    {"F3", SCAN_F3, "F3", false},
+    {"F4", SCAN_F4, "F4", false},
+    {"F5", SCAN_F5, "F5", false},
+    {"F6", SCAN_F6, "F6 (RU/LAT switch pulse)", false},
+    {"F7", SCAN_F7, "F7", false},
+    {"F8", SCAN_F8, "F8", false},
+    // Modifier keys (latch until released)
+    {"SS",    SCAN_LSHIFT, "shift (SS)",  true},
+    {"SHIFT", SCAN_LSHIFT, "alias for SS", true},
+    {"US",    SCAN_LCTRL,  "ctrl (US)",   true},
+    {"CTRL",  SCAN_LCTRL,  "alias for US", true},
+    {"RUS",   SCAN_F6,     "RU/LAT toggle (F6)", true},
+    {"PS",    SCAN_RALT,   "matrix key (right-alt slot)", false},
+};
+
+std::string upperKey(const std::string &s)
+{
+    std::string r = s;
+    std::transform(r.begin(), r.end(), r.begin(),
+                   [](unsigned char c) { return std::toupper(c); });
+    return r;
+}
+
+// Resolve a key name to its table entry (nullptr when unknown).
+const KeyTableEntry *findKey(const std::string &keyName)
+{
+    const std::string want = upperKey(keyName);
+    for (const auto &e : kKeyTable) {
+        if (want == e.name) return &e;
+    }
+    return nullptr;
+}
+
+} // namespace
+
+AgentApiResult<void> AgentApi::pressKey(const std::string &keyName)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    const KeyTableEntry *e = findKey(keyName);
+    if (!e) {
+        log_.record("pressKey", keyName, "unknown key", elapsedMs(t0),
+                    false, "unknown key");
+        return AgentApiResult<void>::fail(
+            ErrorCode::InvalidArgument, "unknown key: " + keyName);
+    }
+    backend_.pressKey(e->scancode);
+    log_.record("pressKey", keyName, "ok", elapsedMs(t0));
+    return AgentApiResult<void>::ok();
+}
+
+AgentApiResult<void> AgentApi::releaseKey(const std::string &keyName)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    const KeyTableEntry *e = findKey(keyName);
+    if (!e) {
+        log_.record("releaseKey", keyName, "unknown key", elapsedMs(t0),
+                    false, "unknown key");
+        return AgentApiResult<void>::fail(
+            ErrorCode::InvalidArgument, "unknown key: " + keyName);
+    }
+    backend_.releaseKey(e->scancode);
+    log_.record("releaseKey", keyName, "ok", elapsedMs(t0));
+    return AgentApiResult<void>::ok();
+}
+
+AgentApiResult<void> AgentApi::typeKey(const std::string &keyName)
+{
+    auto t0 = std::chrono::steady_clock::now();
+    const KeyTableEntry *e = findKey(keyName);
+    if (!e) {
+        log_.record("typeKey", keyName, "unknown key", elapsedMs(t0),
+                    false, "unknown key");
+        return AgentApiResult<void>::fail(
+            ErrorCode::InvalidArgument, "unknown key: " + keyName);
+    }
+
+    // The ROM only samples the matrix while the CPU runs and polls the
+    // keyboard port; a press is invisible when paused.  Warn but still latch
+    // the key so it registers once execution resumes.
+    bool running = !backend_.isPaused();
+
+    backend_.pressKey(e->scancode);
+    // Hold long enough for the ROM's periodic keyboard scan to observe it
+    // (~6 frames at 50 Hz).  Real-time sleep; the emulation thread advances
+    // independently and reads the port during that window.
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    backend_.releaseKey(e->scancode);
+
+    std::string note = running ? "ok" : "ok (was paused: ROM did not poll)";
+    log_.record("typeKey", keyName, note, elapsedMs(t0));
+    return AgentApiResult<void>::ok();
+}
+
+AgentApiResult<std::vector<KeyboardKeyInfo>> AgentApi::listKeys()
+{
+    auto t0 = std::chrono::steady_clock::now();
+    std::vector<KeyboardKeyInfo> keys;
+    keys.reserve(sizeof(kKeyTable) / sizeof(kKeyTable[0]));
+    for (const auto &e : kKeyTable) {
+        KeyboardKeyInfo ki;
+        ki.name        = e.name;
+        ki.scancode    = e.scancode;
+        ki.description = e.description;
+        ki.modifier    = e.modifier;
+        keys.push_back(ki);
+    }
+    log_.record("listKeys", "", std::to_string(keys.size()) + " keys", elapsedMs(t0));
+    return AgentApiResult<std::vector<KeyboardKeyInfo>>::ok(std::move(keys));
 }
 
 // ---------------------------------------------------------------------------

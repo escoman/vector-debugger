@@ -62,6 +62,7 @@ VALID_TOOLS = {
     "debug_get_cpu_state", "debug_get_registers", "debug_set_register",
     "debug_read_memory", "debug_write_memory",
     "debug_read_io", "debug_write_io",
+    "debug_list_keys", "debug_press_key", "debug_release_key", "debug_type_key",
     "debug_set_breakpoint", "debug_remove_breakpoint", "debug_list_breakpoints",
     "debug_clear_breakpoints", "debug_set_breakpoint_enabled",
     "debug_disassemble", "debug_get_instruction_history", "debug_get_execution_trace",

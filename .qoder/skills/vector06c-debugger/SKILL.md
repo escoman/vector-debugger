@@ -419,7 +419,7 @@ Hardware status: UNVERIFIED
 
 ## MCP Tools
 
-Сервер `vector-debugger` предоставляет 61 инструмент `debug_*`:
+Сервер `vector-debugger` предоставляет 65 инструмент `debug_*`:
 
 **Execution**: `debug_run`, `debug_pause`, `debug_step`, `debug_reset`, `debug_is_running`
 
@@ -428,6 +428,8 @@ Hardware status: UNVERIFIED
 **Memory**: `debug_read_memory`, `debug_write_memory`, `debug_read_memory_range`
 
 **I/O**: `debug_read_io`, `debug_write_io`
+
+**Клавиатура (виртуальная)**: `debug_list_keys`, `debug_press_key`, `debug_release_key`, `debug_type_key` — эмуляция нажатий клавиш GUI-клавиатуры. Клавиша задаётся именем (регистронезависимо, список — `debug_list_keys`). `debug_type_key` = полный тап (нажать-держать~120мс-отпустить). ROM опрашивает матрицу только при **выполнении** ЦП — перед вводом убедись, что запущено `debug_run`; на паузе клавиша «лачится» до возобновления. `debug_press_key`/`debug_release_key` — примитивы для комбинаций и модификаторов (SS/US/RUS).
 
 **Breakpoints**: `debug_set_breakpoint`, `debug_remove_breakpoint`, `debug_list_breakpoints`, `debug_clear_breakpoints`
 

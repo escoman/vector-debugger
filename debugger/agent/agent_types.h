@@ -523,6 +523,23 @@ struct DebugStateResult
 };
 
 // ---------------------------------------------------------------------------
+// KeyboardKeyInfo — keyboard injection support
+//
+// One entry of the virtual-keyboard key table returned by listKeys().
+// 'scancode' is the raw SDL scancode value that IDebugBackend::pressKey /
+// releaseKey accept; 'name' is the case-insensitive symbolic name the agent
+// passes back to pressKey/releaseKey/typeKey.
+// ---------------------------------------------------------------------------
+
+struct KeyboardKeyInfo
+{
+    std::string name;         // canonical symbolic name (uppercase)
+    int         scancode = 0; // SDL scancode value
+    std::string description;  // human-readable legend (RU/EN key face)
+    bool        modifier = false; // true for SS/US/RUS (held flags, not matrix)
+};
+
+// ---------------------------------------------------------------------------
 // RDB types — Stage 6.11
 // ---------------------------------------------------------------------------
 

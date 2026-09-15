@@ -58,6 +58,7 @@ private:
     void registerCpuTools();
     void registerMemoryTools();
     void registerIoTools();
+    void registerKeyboardTools();       // virtual keyboard injection
     void registerBreakpointTools();
     void registerDisassemblyTools();
     void registerStackTools();

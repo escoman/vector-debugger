@@ -134,12 +134,13 @@ ROM mapping незавершён без:
 
 ## MCP Tools
 
-Сервер `vector-debugger` предоставляет 61 инструмент `debug_*`:
+Сервер `vector-debugger` предоставляет 65 инструмент `debug_*`:
 
 - **Execution**: `debug_run`, `debug_pause`, `debug_step`, `debug_reset`, `debug_is_running`
 - **CPU**: `debug_get_cpu_state`, `debug_get_registers`, `debug_set_register`
 - **Memory**: `debug_read_memory`, `debug_write_memory`, `debug_read_memory_range`
 - **I/O**: `debug_read_io`, `debug_write_io`
+- **Клавиатура (виртуальная)**: `debug_list_keys`, `debug_press_key`, `debug_release_key`, `debug_type_key` — эмуляция нажатий клавиш GUI-клавиатуры (имя клавиши, регистронезависимо; ROM опрашивает матрицу только при работающем ЦП — нужен `debug_run`)
 - **Breakpoints**: `debug_set_breakpoint`, `debug_remove_breakpoint`, `debug_list_breakpoints`, `debug_clear_breakpoints`
 - **Disassembly & Analysis**: `debug_disassemble`, `debug_analyze_code`, `debug_disassemble_range`, `debug_get_instruction_history`, `debug_get_execution_trace`
 - **Stack**: `debug_get_stack`

@@ -74,6 +74,7 @@ void McpServer::registerAllTools() {
     registerCpuTools();
     registerMemoryTools();
     registerIoTools();
+    registerKeyboardTools();
     registerBreakpointTools();
     registerDisassemblyTools();
     registerStackTools();
@@ -190,6 +191,19 @@ static uint8_t getUint8(const mcp::json &params, const char *name) {
             std::string(name) + " out of range 0x00..0xFF");
     }
     return static_cast<uint8_t>(v);
+}
+
+// Required string parameter for the keyboard tools (the key name).
+static std::string getKeyParam(const mcp::json &params) {
+    if (!params.contains("key")) {
+        throw mcp::mcp_exception(mcp::error_code::invalid_params,
+            std::string("missing required parameter: key"));
+    }
+    if (!params["key"].is_string()) {
+        throw mcp::mcp_exception(mcp::error_code::invalid_params,
+            std::string("key must be a string"));
+    }
+    return params["key"].get<std::string>();
 }
 
 // ---------------------------------------------------------------------------
@@ -470,6 +484,78 @@ void McpServer::registerIoTools() {
                 {"port",  mcp_json::hex8(port)},
                 {"value", mcp_json::hex8(value)}
             });
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Virtual keyboard tools (4)
+//
+// Inject key events into the emulated 8x8 keyboard matrix.  Keys are named
+// (case-insensitive); debug_list_keys returns the authoritative table.
+// The ROM only reads the matrix while the CPU runs, so typeKey holds the key
+// in real time; pressKey/releaseKey are the raw primitives for combinations.
+// ---------------------------------------------------------------------------
+
+void McpServer::registerKeyboardTools() {
+    // debug_list_keys
+    {
+        auto tool = mcp::tool_builder("debug_list_keys")
+            .with_description("List all virtual-keyboard key names accepted by the keyboard tools.")
+            .build();
+        registerTool(tool, [this](const mcp::json &, const std::string &) -> mcp::json {
+            auto r = api_.listKeys();
+            if (!r.success) return errorContent("list_keys_failed", r.error_message);
+            mcp::json arr = mcp::json::array();
+            for (const auto &k : r.value) {
+                arr.push_back({
+                    {"name",        k.name},
+                    {"scancode",    k.scancode},
+                    {"description", k.description},
+                    {"modifier",    k.modifier}
+                });
+            }
+            return textContent({{"count", static_cast<int>(r.value.size())},
+                                {"keys", arr}});
+        });
+    }
+
+    // debug_press_key
+    {
+        auto tool = mcp::tool_builder("debug_press_key")
+            .with_description("Press (and hold) a keyboard key. Pair with debug_release_key. Use debug_type_key for a normal tap.")
+            .with_string_param("key", "Key name (see debug_list_keys), e.g. A, 1, SPACE, ENTER, F1, SS, US, RUS")
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            auto r = api_.pressKey(getKeyParam(params));
+            if (!r.success) return errorContent("press_key_failed", r.error_message);
+            return textContent(mcp_json::successVoidResult());
+        });
+    }
+
+    // debug_release_key
+    {
+        auto tool = mcp::tool_builder("debug_release_key")
+            .with_description("Release a previously pressed keyboard key.")
+            .with_string_param("key", "Key name (see debug_list_keys)")
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            auto r = api_.releaseKey(getKeyParam(params));
+            if (!r.success) return errorContent("release_key_failed", r.error_message);
+            return textContent(mcp_json::successVoidResult());
+        });
+    }
+
+    // debug_type_key
+    {
+        auto tool = mcp::tool_builder("debug_type_key")
+            .with_description("Tap a key: press, hold ~120ms (real time), release. Requires the CPU to be running (debug_run) or the ROM will not sample it; on pause it latches until resume.")
+            .with_string_param("key", "Key name (see debug_list_keys)")
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            auto r = api_.typeKey(getKeyParam(params));
+            if (!r.success) return errorContent("type_key_failed", r.error_message);
+            return textContent(mcp_json::successVoidResult());
         });
     }
 }

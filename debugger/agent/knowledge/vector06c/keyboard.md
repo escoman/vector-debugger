@@ -83,6 +83,37 @@ Example: Space = column 7, bit 0x80 → encoded as 0x780.
 | F12 | Soft reset |
 | Pause/Break | Terminate (set terminate flag) |
 
+## Key Injection via MCP Debugger
+
+The debugger exposes the virtual keyboard to the analysis agent through four
+MCP tools (this is a **debugger/emulator** capability, not hardware):
+
+| Tool | Purpose |
+|------|---------|
+| `debug_list_keys` | Authoritative table of accepted key names (case-insensitive) with SDL scancode + legend |
+| `debug_press_key` | Press and **hold** a key (matrix bit or modifier latch stays set) |
+| `debug_release_key` | Release a previously held key |
+| `debug_type_key` | Full tap: press → hold ~120 ms → release |
+
+Key names follow the matrix above: letters `A`–`Z`, digits `0`–`9`,
+`SPACE`, `TAB`, `ENTER` (ВК), `BACKSPACE` (ЗАБ), `ESCAPE` (АР2), arrows
+`UP`/`DOWN`/`LEFT`/`RIGHT`, function keys `F1`–`F8`, punctuation
+(`MINUS`, `EQUALS`, `LBRACKET`, `RBRACKET`, `BACKSLASH`, `SEMICOLON`,
+`APOSTROPHE`, `COMMA`, `PERIOD`, `SLASH`, `GRAVE`), and modifiers `SS`
+(shift), `US` (ctrl), `RUS` (RU/LAT — an F6 pulse toggle). `SHIFT`/`CTRL`
+are aliases for `SS`/`US`. Call `debug_list_keys` for the exact accepted set.
+
+**Timing constraint (important):** the ROM samples the matrix only while the
+CPU is running and polls the keyboard port (Port A mask → Port B read). A
+`debug_type_key`/`debug_press_key` while **paused** latches the key but the ROM
+will not observe it until execution resumes — call `debug_run` first. For a
+key+modifier combination (e.g. shifted symbol) use the primitives: hold `SS`
+via `debug_press_key`, tap the base key with `debug_type_key`, then release
+`SS` via `debug_release_key`.
+
+Status: EMULATOR_FEATURE (VSDL debugger `IDebugBackend::pressKey/releaseKey` →
+`Keyboard::apply_key`)
+
 ## Tape I/O
 
 - Tape output: PIA1 Port C bit 0

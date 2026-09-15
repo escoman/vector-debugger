@@ -119,11 +119,11 @@ static mcp::json parseTextAsJson(const mcp::json &result) {
 // Tool Registration Tests
 // ---------------------------------------------------------------------------
 
-void test_all_61_tools_registered() {
-    TEST_BEGIN("all 61 tools registered");
+void test_all_65_tools_registered() {
+    TEST_BEGIN("all 65 tools registered");
     Fixture f;
     auto names = f.mcp.registeredToolNames();
-    CHECK_EQ(static_cast<int>(names.size()), 61, "should have 61 tools");
+    CHECK_EQ(static_cast<int>(names.size()), 65, "should have 65 tools");
     TEST_END();
 }
 
@@ -153,6 +153,8 @@ void test_expected_tools_exist() {
         "debug_get_cpu_state", "debug_get_registers", "debug_set_register",
         "debug_read_memory", "debug_write_memory",
         "debug_read_io", "debug_write_io",
+        // Virtual keyboard injection
+        "debug_list_keys", "debug_press_key", "debug_release_key", "debug_type_key",
         "debug_set_breakpoint", "debug_remove_breakpoint", "debug_list_breakpoints",
         "debug_clear_breakpoints", "debug_set_breakpoint_enabled",
         "debug_disassemble", "debug_get_instruction_history", "debug_get_execution_trace",
@@ -1062,7 +1064,7 @@ int main()
     printf("\033[1;33m========================================\033[0m\n\n");
 
     // Registration
-    test_all_61_tools_registered();
+    test_all_65_tools_registered();
     test_tool_names_have_debug_prefix();
     test_expected_tools_exist();
 

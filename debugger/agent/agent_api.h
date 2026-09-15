@@ -55,6 +55,18 @@ public:
     AgentApiResult<uint8_t> readIo(uint8_t port);
     AgentApiResult<void> writeIo(uint8_t port, uint8_t value);
 
+    // -- Virtual keyboard injection ------------------------------------------
+    // Keys are named (case-insensitive) — see listKeys() for the authoritative
+    // table.  pressKey/releaseKey drive the raw matrix bits; the ROM only sees
+    // a key while the emulated CPU is running and polls the keyboard port, so
+    // typeKey() presses, holds in real time, then releases.  Modifier keys
+    // (SS/US/RUS) latch until released.
+
+    AgentApiResult<void> pressKey(const std::string &keyName);
+    AgentApiResult<void> releaseKey(const std::string &keyName);
+    AgentApiResult<void> typeKey(const std::string &keyName);
+    AgentApiResult<std::vector<KeyboardKeyInfo>> listKeys();
+
     // -- Breakpoints (Stage 6.3: AgentApiResult<void>) -----------------------
 
     AgentApiResult<void> setBreakpoint(uint16_t address);
