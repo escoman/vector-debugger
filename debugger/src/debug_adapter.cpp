@@ -267,7 +267,11 @@ void DebugAdapter::setMemoryCallbacks(MemoryReadCallback onRead,
 
         memory.onread = [this](uint32_t virt, uint32_t phys,
                                bool stack, uint8_t value) {
-            if (memReadCb_) memReadCb_(virt, phys, stack, value);
+            // Stage 6.24: pass the CPU's PC at callback time.
+            // For RD_BYTE(PC++) the increment is a sequence point before the
+            // function call, so i8080_pc() == virt + 1 for instruction fetches.
+            uint16_t pc = static_cast<uint16_t>(i8080_pc());
+            if (memReadCb_) memReadCb_(virt, phys, stack, value, pc);
             if (prevMemOnRead_) prevMemOnRead_(virt, phys, stack, value);
         };
 
@@ -282,26 +286,6 @@ void DebugAdapter::setMemoryCallbacks(MemoryReadCallback onRead,
         memory.onwrite = prevMemOnWrite_;
         prevMemOnRead_  = nullptr;
         prevMemOnWrite_ = nullptr;
-    }
-}
-
-// ---------------------------------------------------------------------------
-// IDebugTarget: instruction-begin hook (Stage 6.22 §1/§2)
-// ---------------------------------------------------------------------------
-
-void DebugAdapter::setInstructionBeginCallback(InstructionBeginCallback cb)
-{
-    instrBeginCb_ = cb;
-
-    if (cb) {
-        prevOnInstrBegin_ = board.oninstrbegin;
-        board.oninstrbegin = [this](int pc) {
-            if (instrBeginCb_) instrBeginCb_(static_cast<uint16_t>(pc));
-            if (prevOnInstrBegin_) prevOnInstrBegin_(pc);
-        };
-    } else {
-        board.oninstrbegin = prevOnInstrBegin_;
-        prevOnInstrBegin_  = nullptr;
     }
 }
 

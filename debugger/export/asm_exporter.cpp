@@ -201,17 +201,29 @@ void AsmExporter::runAnalysis()
     };
 
     // Entry points: the ROM mapping vector at 0x0000 plus every function
-    // recorded in the RDB.  Seeding all function addresses guarantees coverage
-    // for routines that static BFS from 0x0000 cannot reach through a
-    // self-modified entry vector or an indirect computed jump (PCHL).
+    // recorded in the RDB that lies inside the ROM window.
+    //
+    // Stage 6.24 §9/§10/§11: RDB objects for RAM-resident routines (addresses
+    // outside [origin, origin+romSize)) are kept in the RDB but must NOT be
+    // used as analysis seeds for the ROM export — they would cause the
+    // analyzer to decode RAM data as instructions and pollute the reachability
+    // graph with thousands of phantom code paths.  The 0x0000 reset vector is
+    // always seeded because on real hardware the entry point is reached through
+    // it regardless of where the ROM image is mapped.
     std::vector<uint16_t> entries;
     entries.push_back(0x0000);
     if (hasRdb_) {
+        const uint32_t seedWinStart = config_.origin;
+        const uint32_t seedWinEnd   =
+            seedWinStart + static_cast<uint32_t>(rom_.size());
         for (const auto &obj : rdb_.listObjects()) {
             if (obj.type == RdbObjectType::Function ||
                 obj.type == RdbObjectType::Label ||
                 obj.type == RdbObjectType::Code) {
-                entries.push_back(obj.address);
+                // Filter: only add seeds that fall inside the ROM window.
+                uint32_t addr = obj.address;
+                if (addr >= seedWinStart && addr < seedWinEnd)
+                    entries.push_back(obj.address);
             }
         }
     }

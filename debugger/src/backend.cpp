@@ -86,7 +86,6 @@ DebugBackend::~DebugBackend()
     // Clear memory callbacks before destroying
     if (target_) {
         target_->setMemoryCallbacks(nullptr, nullptr);
-        target_->setInstructionBeginCallback(nullptr);
     }
     delete runtimeAccessLog_;
     delete impl_;
@@ -318,8 +317,9 @@ void DebugBackend::installMemoryCallbacks()
     DebugBackend *self = this;
 
     IDebugTarget::MemoryReadCallback readCb =
-        [self](uint32_t virt, uint32_t phys, bool stack, uint8_t value) {
-            self->onMemoryRead(virt, phys, stack, value);
+        [self](uint32_t virt, uint32_t phys, bool stack, uint8_t value,
+               uint16_t pc) {
+            self->onMemoryRead(virt, phys, stack, value, pc);
         };
 
     IDebugTarget::MemoryWriteCallback writeCb =
@@ -329,9 +329,9 @@ void DebugBackend::installMemoryCallbacks()
 
     target_->setMemoryCallbacks(readCb, writeCb);
 
-    // Stage 6.22 §1: the same treatment for instruction boundaries.
-    target_->setInstructionBeginCallback(
-        [self](uint16_t pc) { self->onInstructionBegin(pc); });
+    // Stage 6.24: instruction-begin detection is now inside onMemoryRead(),
+    // driven by the pc parameter of MemoryReadCallback.  No separate
+    // setInstructionBeginCallback() call is needed.
 }
 
 // ---------------------------------------------------------------------------
@@ -492,8 +492,9 @@ StepResult DebugBackend::stepInstructionDetailed()
     fetchRemaining_ = r.length;
 
     // --- execute exactly one 8080 instruction ---
-    // The board/target announces the instruction through onInstructionBegin();
-    // while stepping, that hook must not touch the counters owned here.
+    // steppingInProgress_ guards the instruction-start detection inside
+    // onMemoryRead() so the fetch counters owned by this function are not
+    // double-counted when the callback fires for each operand byte.
     steppingInProgress_ = true;
     target_->stepInstruction();
     steppingInProgress_ = false;
@@ -543,33 +544,11 @@ StepResult DebugBackend::stepInstructionDetailed()
     }
 
     instructionSequence_++;
-    // Stage 6.22 §2: from now on the free-run hook continues the numbering.
+    // Stage 6.22 §2: from now on the free-run detection in onMemoryRead()
+    // continues the numbering.
     freeRunSequenceStarted_ = true;
 
     return r;
-}
-
-void DebugBackend::onInstructionBegin(uint16_t pc)
-{
-    // Stage 6.22 §1/§2/§4: the free-run loop (Board::single_step ->
-    // i8080_instruction) never went through stepInstructionDetailed(), so the
-    // fetch window, the instruction sequence and the per-address execute
-    // counters only ever existed while stepping.  The board now announces every
-    // instruction here, which is also the only honest place to tell a code
-    // fetch from a data read: the bytes at pc..pc+length-1 ARE the instruction.
-    if (!steppingInProgress_) {
-        // Keep the numbering identical to the step path, where the counter is
-        // advanced after the instruction is accounted for: the first
-        // instruction of a run keeps the current value, the next one advances.
-        if (freeRunSequenceStarted_) instructionSequence_++;
-        freeRunSequenceStarted_ = true;
-        executeCount_[pc]++;
-    }
-
-    fetchBasePc_    = pc;
-    // readMemoryRaw() is the thread-safe peek: no onread callback and no
-    // temporary removal of it, unlike peekMemory().
-    fetchRemaining_ = opcode_info::get_length(target_->readMemoryRaw(pc));
 }
 
 void DebugBackend::requestSkipInstruction()
@@ -770,9 +749,36 @@ void DebugBackend::syncBreakpointsToTarget()
 // ---------------------------------------------------------------------------
 
 void DebugBackend::onMemoryRead(uint32_t virt, uint32_t phys,
-                                 bool stack, uint8_t value)
+                                 bool stack, uint8_t value, uint16_t pc)
 {
     if (!instrumentationEnabled_) return;
+
+    // Stage 6.24: instruction-start detection from the memory read stream.
+    //
+    // In free-run mode (steppingInProgress_ == false), after all operand bytes
+    // of the previous instruction have been consumed (fetchRemaining_ == 0),
+    // a non-stack read from address `virt` where (uint16_t)(virt+1) == pc (the
+    // PC value AFTER the RD_BYTE(PC++) increment was observed via i8080_pc())
+    // is the opcode fetch of the NEXT instruction.
+    //
+    // `value` is the opcode byte at `virt`, so we can use it directly to
+    // determine instruction length without a separate memory read.
+    //
+    // Known limitation: a data read (e.g. ADD M with HL pointing into the
+    // instruction's own bytes) may satisfy this relation spuriously while
+    // fetchRemaining_ == 0.  This is pathological self-referencing code; the
+    // regression test suite documents the actual behaviour explicitly.
+    if (!steppingInProgress_ && fetchRemaining_ == 0 && !stack &&
+        static_cast<uint16_t>(virt + 1) == pc) {
+        uint16_t instrAddr = static_cast<uint16_t>(virt & 0xffff);
+        // Match the step path numbering: the first free-run instruction keeps
+        // the current sequence value; subsequent ones advance it.
+        if (freeRunSequenceStarted_) instructionSequence_++;
+        freeRunSequenceStarted_ = true;
+        executeCount_[instrAddr]++;
+        fetchBasePc_    = instrAddr;
+        fetchRemaining_ = opcode_info::get_length(value);
+    }
 
     MemoryAccessEvent ev;
     ev.instructionSequence = instructionSequence_;
@@ -815,9 +821,7 @@ void DebugBackend::onMemoryRead(uint32_t virt, uint32_t phys,
                                 : RuntimeAccessLogEntry::Read;
         // Stage 6.22 §1: pc of the ACCESSING INSTRUCTION, not the CPU's
         // in-flight PC - otherwise a fetch of pc+1 is logged against a
-        // different pc and the reader cannot tell fetch from data.  Also drops
-        // a state query per access on a path that runs tens of millions of
-        // times per minute.
+        // different pc and the reader cannot tell fetch from data.
         logEntry.pc = fetchBasePc_;
         logEntry.value = value;
         runtimeAccessLog_->push(logEntry);

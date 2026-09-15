@@ -1,10 +1,19 @@
-// Runtime memory accounting tests — Stage 6.22 §1–§4
+// Runtime memory accounting tests — Stage 6.22 §1–§4 / Stage 6.24 §1–§2
 //
 // The free-run path (Board/NoBoardTarget executing instructions without the
 // debugger stepping them) used to report zero fetches, a port-trace sequence
 // that never moved, and an execute_activity field that was always 0.  These
 // tests drive the real DebugBackend + NoBoardTarget over a fixed program and
 // pin the numbers down.
+//
+// Stage 6.24 additions:
+//   • Instruction-start detection via MemoryReadCallback's pc param
+//     replaces the src/-side oninstrbegin hook.
+//   • Regression tests for the virt+1==pc heuristic cover: opcode fetch,
+//     multi-byte instructions, RD_BYTE(HL), stack accesses, step vs free-run,
+//     JMP/CALL/RET, and the 0xFFFF wrap.
+//   • The known false-positive case (ADD M with HL == instruction address)
+//     is documented with its actual observed behaviour, not suppressed.
 //
 // Program (11 instruction bytes, 1 data read + 1 data write per loop):
 //   0x0100  3E 42     MVI A,42h
@@ -320,10 +329,318 @@ static void test_active_blocks_match_payload()
 }
 
 // ---------------------------------------------------------------------------
+// Stage 6.24: helper fixture for custom programs
+// ---------------------------------------------------------------------------
+
+// Fixture2 accepts an arbitrary program blob and origin.
+// It clears the runtime access map after loading so only the run is measured.
+// executeCount_ is zero at this point because program writes do not
+// increment it (only onMemoryRead via instruction detection does).
+struct Fixture2
+{
+    Memory        mem;
+    NoBoardTarget target;
+    DebugBackend  backend;
+
+    Fixture2(const uint8_t *prog, int origin, int len)
+        : target(mem), backend(target)
+    {
+        test_memory = &mem;
+        for (int i = 0; i < len; ++i)
+            mem.write(static_cast<uint32_t>(origin + i), prog[i], false);
+        i8080_init();
+        i8080_jump(origin);
+        i8080_setreg_sp(0xC000);
+        backend.clearRuntimeAccessMap();
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Stage 6.24 Test A — ADD M normal case: HL points to RAM, not self-referencing
+//   0x0100  21 00 02   LXI H,0200h
+//   0x0103  86         ADD M   ← reads [0x0200], a data area
+//   0x0104  00         NOP
+// ---------------------------------------------------------------------------
+
+static void test_624_add_m_hl_ram()
+{
+    TEST_BEGIN("6.24: ADD M with HL in RAM — data read classified as Read");
+    const uint8_t prog[] = {0x21,0x00,0x02, 0x86, 0x00};
+    Fixture2 f(prog, 0x0100, sizeof(prog));
+
+    // 3 free-run instructions: LXI H, ADD M, NOP
+    for (int i = 0; i < 3; ++i) f.target.executeFrame();
+
+    const RuntimeAccessBlock code = blockOf(f.backend, 0x0100 >> 8);
+    const RuntimeAccessBlock data = blockOf(f.backend, 0x0200 >> 8);
+
+    // Code block: 3 + 1 + 1 = 5 fetched bytes (LXI H=3, ADD M opcode=1, NOP=1)
+    CHECK(code.fetch, "code block marked fetch");
+    CHECK_EQ(5, (int)code.fetch_count,
+             "5 instruction bytes fetched (3+1+1)");
+    // Data read from 0x0200 must NOT appear in code block's read_count
+    CHECK_EQ(0, (int)code.read_count,
+             "no data reads in code block (HL points elsewhere)");
+    // Block 0x0200: 1 data read from [HL]
+    CHECK(!data.fetch, "data block 0x0200 not marked fetch");
+    CHECK_EQ(1, (int)data.read_count,
+             "ADD M data read counted as Read in data block");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Stage 6.24 Test B — ADD M self-referencing: HL == instruction address (known FP)
+//   0x0100  21 03 01   LXI H,0103h
+//   0x0103  86         ADD M   ← reads [0x0103] which is the ADD M opcode itself
+//   0x0104  00         NOP
+//
+// Known limitation: after the opcode fetch (fetchRemaining=1→0), the data read
+// from HL=0x0103 satisfies virt+1==cpuPc (0x0103+1=0x0104==i8080_pc()).
+// The heuristic fires a second time, double-counting executeCount_[0x0103].
+// This test documents the ACTUAL behaviour so it is tracked, not suppressed.
+// ---------------------------------------------------------------------------
+
+static void test_624_add_m_false_positive_self_ref()
+{
+    TEST_BEGIN("6.24: ADD M with HL==instr addr — documents false-positive behaviour");
+    const uint8_t prog[] = {0x21,0x03,0x01, 0x86, 0x00};
+    Fixture2 f(prog, 0x0100, sizeof(prog));
+
+    for (int i = 0; i < 3; ++i) f.target.executeFrame();
+
+    auto snap = f.backend.activitySnapshot();
+    // False positive: executeCount_[0x0103] is incremented twice
+    // (once by opcode-fetch detection, once by data-read false-positive).
+    // This is the documented behaviour of the virt+1==pc heuristic.
+    CHECK_EQ(2u, (unsigned)snap.executeCount[0x0103],
+             "FP documented: executeCount[ADD-M-addr]==2 in free-run (opcode fetch + data read both trigger detection)");
+    CHECK_EQ(1u, (unsigned)snap.executeCount[0x0100],
+             "LXI H counted once (no false positive there)");
+
+    // fetch_count for code block: LXI H(3) + ADD-M opcode(1) +
+    // ADD-M data-as-FP-fetch(1) + NOP(1) = 6 (one more than 5 true fetches)
+    const RuntimeAccessBlock code = blockOf(f.backend, 0x0100 >> 8);
+    CHECK_EQ(6, (int)code.fetch_count,
+             "FP documented: 6 fetches in code block (5 true + 1 misclassified data-read)");
+    CHECK_EQ(0, (int)code.read_count,
+             "FP documented: data read appears as FETCH, not Read");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Stage 6.24 Test C — Stack accesses (PUSH/POP) must NOT trigger detection
+//   0x0100  C5   PUSH B
+//   0x0101  D1   POP B
+//   0x0102  00   NOP
+// ---------------------------------------------------------------------------
+
+static void test_624_stack_not_false_positive()
+{
+    TEST_BEGIN("6.24: PUSH/POP stack accesses do not falsely trigger detection");
+    const uint8_t prog[] = {0xC5, 0xD1, 0x00};
+    Fixture2 f(prog, 0x0100, sizeof(prog));
+
+    for (int i = 0; i < 3; ++i) f.target.executeFrame();
+
+    auto snap = f.backend.activitySnapshot();
+    // Each instruction executed exactly once (stack reads don't cause FP)
+    CHECK_EQ(1u, (unsigned)snap.executeCount[0x0100], "PUSH B: 1 execution");
+    CHECK_EQ(1u, (unsigned)snap.executeCount[0x0101], "POP B: 1 execution");
+    CHECK_EQ(1u, (unsigned)snap.executeCount[0x0102], "NOP: 1 execution");
+
+    // Code block: 3 fetches (1+1+1 opcodes). No stack byte is in code block.
+    const RuntimeAccessBlock code = blockOf(f.backend, 0x0100 >> 8);
+    CHECK_EQ(3, (int)code.fetch_count, "3 opcode bytes fetched");
+
+    // Stack block (0xBFFE-0xBFFF is block 0xBF): POP reads 2 stack bytes.
+    const RuntimeAccessBlock stk = blockOf(f.backend, 0xBF);
+    CHECK(stk.read_count >= 1u,
+          "stack area block has at least one read (POP stack accesses)");
+    CHECK(!stk.fetch, "stack block is never marked fetch");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Stage 6.24 Test D — CALL/RET: new instruction at target and after return
+//   0x0100  CD 06 01   CALL 0106h
+//   0x0103  C3 00 01   JMP  0100h
+//   0x0106  C9         RET
+//   After 3 free-run instructions: CALL, RET, JMP (one complete loop)
+// ---------------------------------------------------------------------------
+
+static void test_624_call_ret_sequence()
+{
+    TEST_BEGIN("6.24: CALL/RET — each instruction counted exactly once per loop");
+    // CALL target = 0x0107, JMP target = 0x0100, RET at 0x0107
+    // Execution order: CALL(0x0100) → RET(0x0107) → JMP(0x0103)
+    const uint8_t prog[] = {0xCD,0x07,0x01, 0xC3,0x00,0x01, 0x00, 0xC9};
+    Fixture2 f(prog, 0x0100, sizeof(prog));
+
+    for (int i = 0; i < 3; ++i) f.target.executeFrame();
+
+    auto snap = f.backend.activitySnapshot();
+    CHECK_EQ(1u, (unsigned)snap.executeCount[0x0100], "CALL executed once");
+    CHECK_EQ(1u, (unsigned)snap.executeCount[0x0107], "RET executed once");
+    CHECK_EQ(1u, (unsigned)snap.executeCount[0x0103], "JMP executed once (after return)");
+
+    // CALL operand bytes at 0x0101,0x0102 must be FETCH (fetchRemaining>0)
+    const RuntimeAccessBlock code = blockOf(f.backend, 0x0100 >> 8);
+    // Total fetch: CALL(3) + RET(1) + JMP(3) = 7
+    CHECK_EQ(7, (int)code.fetch_count,
+             "7 total fetch bytes: CALL(3)+RET(1)+JMP(3)");
+    // No data reads in code block
+    CHECK_EQ(0, (int)code.read_count,
+             "no data reads misclassified in code block");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Stage 6.24 Test E — JCC taken and not-taken: correct detection
+//   0x0100  3E 01       MVI A,01h   (Z=0)
+//   0x0102  C2 08 01    JNZ 0108h   (taken: Z=0)
+//   0x0105  00          NOP         (NOT reached)
+//   0x0108  00          NOP         (reached via JNZ taken)
+// ---------------------------------------------------------------------------
+
+static void test_624_jcc_taken_not_taken()
+{
+    TEST_BEGIN("6.24: JCC taken — NOP at target counted, NOP after JCC not counted");
+    const uint8_t prog[] = {0x3E,0x01, 0xC2,0x08,0x01, 0x00, 0x00, 0x00, 0x00};
+    // prog indices: 0=3E,1=01,2=C2,3=08,4=01,5=00(0x0105),6=00,7=00,8=00(0x0108)
+    Fixture2 f(prog, 0x0100, sizeof(prog));
+
+    // 3 instructions: MVI A(1), JNZ taken(2), NOP@0x0108(3)
+    for (int i = 0; i < 3; ++i) f.target.executeFrame();
+
+    auto snap = f.backend.activitySnapshot();
+    CHECK_EQ(1u, (unsigned)snap.executeCount[0x0100], "MVI A counted");
+    CHECK_EQ(1u, (unsigned)snap.executeCount[0x0102], "JNZ counted");
+    CHECK_EQ(1u, (unsigned)snap.executeCount[0x0108], "NOP at JNZ target counted");
+    CHECK_EQ(0u, (unsigned)snap.executeCount[0x0105],
+             "NOP after JNZ (not-taken path) NOT counted");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Stage 6.24 Test F — 0xFFFF boundary: PC wraps, detection still works
+//   0x0000  C3 FF FF   JMP 0FFFFh
+//   0xFFFF  00         NOP
+//   Run 4 instructions: JMP(0x0000), NOP(0xFFFF), JMP(0x0000), NOP(0xFFFF)
+// ---------------------------------------------------------------------------
+
+static void test_624_boundary_ffff()
+{
+    TEST_BEGIN("6.24: NOP at 0xFFFF — PC wrap handled by virt+1 cast correctly");
+    Memory        mem;
+    NoBoardTarget target(mem);
+    DebugBackend  backend(target);
+    test_memory = &mem;
+
+    // JMP 0xFFFF at address 0x0000
+    mem.write(0x0000, 0xC3, false);
+    mem.write(0x0001, 0xFF, false);
+    mem.write(0x0002, 0xFF, false);
+    // NOP at 0xFFFF
+    mem.write(0xFFFF, 0x00, false);
+
+    i8080_init();
+    i8080_jump(0x0000);
+    i8080_setreg_sp(0xC000);
+    backend.clearRuntimeAccessMap();
+    // clearActivityCounters() zeroes executeCount_ (already zero at this
+    // point — mem.write() fires onMemoryWrite, not onMemoryRead).
+    backend.clearActivityCounters();
+
+    // 4 instructions: JMP→NOP(0xFFFF)→JMP→NOP(0xFFFF)
+    for (int i = 0; i < 4; ++i) target.executeFrame();
+
+    auto snap = backend.activitySnapshot();
+    CHECK_EQ(2u, (unsigned)snap.executeCount[0x0000],
+             "JMP at 0x0000 counted twice");
+    CHECK_EQ(2u, (unsigned)snap.executeCount[0xFFFF],
+             "NOP at 0xFFFF counted twice (PC wraps to 0, detection works)");
+
+    // Block 255 (0xFF00–0xFFFF) must be marked fetch
+    const RuntimeAccessBlock last = blockOf(backend, 255);
+    CHECK(last.fetch, "last block (255) marked fetch for NOP at 0xFFFF");
+    CHECK_EQ(2, (int)last.fetch_count,
+             "2 fetch bytes in block 255 (NOP at 0xFFFF × 2)");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Stage 6.24 Test G — Step mode: steppingInProgress_ guard prevents FP detection
+//   Uses same program as Test B (ADD M self-ref) but via backend.stepInstruction()
+// ---------------------------------------------------------------------------
+
+static void test_624_step_mode_no_double_count()
+{
+    TEST_BEGIN("6.24: step mode — steppingInProgress_ prevents FP double-count");
+    const uint8_t prog[] = {0x21,0x03,0x01, 0x86, 0x00};
+    Fixture2 f(prog, 0x0100, sizeof(prog));
+
+    // Same self-referencing ADD M but via step path
+    for (int i = 0; i < 3; ++i) f.backend.stepInstruction();
+
+    auto snap = f.backend.activitySnapshot();
+    // In step mode: executeCount_[0x0103] incremented exactly ONCE
+    // (by stepInstructionDetailed(), NOT by the onMemoryRead() detection
+    //  which is guarded by steppingInProgress_).
+    CHECK_EQ(1u, (unsigned)snap.executeCount[0x0103],
+             "step mode: ADD M addr counted exactly once (FP guard works)");
+
+    // Code block: true fetch bytes only (5), no extra FP fetch
+    const RuntimeAccessBlock code = blockOf(f.backend, 0x0100 >> 8);
+    CHECK_EQ(5, (int)code.fetch_count,
+             "step mode: 5 fetch bytes (no FP extra fetch)");
+    // The data read from 0x0103 IS classified as Read (not FP Fetch)
+    CHECK_EQ(1, (int)code.read_count,
+             "step mode: data read at 0x0103 correctly classified as Read");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
+// Stage 6.24 Test H — Multi-byte instruction: operand bytes are FETCH, not Read
+//   Already tested in Test 1; this pins the specific case of a 3-byte JMP
+//   to verify that operand fetches happen while fetchRemaining_ > 0 and do
+//   not spuriously re-trigger detection.
+//   0x0100  C3 0A 01   JMP 0x010A
+//   0x010A  00         NOP
+// ---------------------------------------------------------------------------
+
+static void test_624_multibyte_no_retrigger()
+{
+    TEST_BEGIN("6.24: JMP operand bytes do not re-trigger detection");
+    // JMP 0x010A at 0x0100 (3 bytes), NOP at 0x010A (index 10)
+    const uint8_t prog[] = {0xC3,0x0A,0x01,
+                            0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+                            0x00 /* 0x010A */};
+    Fixture2 f(prog, 0x0100, sizeof(prog));
+
+    // 2 instructions: JMP at 0x0100, NOP at 0x010A
+    for (int i = 0; i < 2; ++i) f.target.executeFrame();
+
+    auto snap = f.backend.activitySnapshot();
+    CHECK_EQ(1u, (unsigned)snap.executeCount[0x0100], "JMP counted once");
+    CHECK_EQ(1u, (unsigned)snap.executeCount[0x010A], "NOP counted once");
+    // Intermediate operand addresses must NOT have execute counts
+    CHECK_EQ(0u, (unsigned)snap.executeCount[0x0101],
+             "JMP operand byte 0x0101 is not an entry point");
+    CHECK_EQ(0u, (unsigned)snap.executeCount[0x0102],
+             "JMP operand byte 0x0102 is not an entry point");
+
+    // fetch_count: JMP(3) + NOP(1) = 4, read_count in code block = 0
+    const RuntimeAccessBlock code = blockOf(f.backend, 0x0100 >> 8);
+    CHECK_EQ(4, (int)code.fetch_count, "JMP(3)+NOP(1)=4 fetch bytes");
+    CHECK_EQ(0, (int)code.read_count, "operand bytes are Fetch, not Read");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 
 int main()
 {
-    std::printf("[runtime_accounting] Stage 6.22 §1–§4\n");
+    std::printf("[runtime_accounting] Stage 6.22 §1–§4 / Stage 6.24\n");
 
     test_free_run_fetch_accounting();
     test_step_and_free_run_agree();
@@ -331,6 +648,16 @@ int main()
     test_log_pc_and_fetch_window();
     test_execute_activity_in_free_run();
     test_active_blocks_match_payload();
+
+    // Stage 6.24 regression tests for instruction-start detection heuristic
+    test_624_add_m_hl_ram();
+    test_624_add_m_false_positive_self_ref();
+    test_624_stack_not_false_positive();
+    test_624_call_ret_sequence();
+    test_624_jcc_taken_not_taken();
+    test_624_boundary_ffff();
+    test_624_step_mode_no_double_count();
+    test_624_multibyte_no_retrigger();
 
     std::printf("\n[runtime_accounting] %d/%d tests passed (%d failed)\n",
                 tests_passed, tests_run, tests_failed);

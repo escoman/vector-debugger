@@ -149,7 +149,8 @@ public:
             prevOnRead_  = memory_.onread;
             prevOnWrite_ = memory_.onwrite;
             memory_.onread = [this, onRead](uint32_t v, uint32_t p, bool s, uint8_t val) {
-                onRead(v, p, s, val);
+                // Stage 6.24: pass i8080_pc() as the pc argument.
+                onRead(v, p, s, val, static_cast<uint16_t>(i8080_pc()));
                 if (prevOnRead_) prevOnRead_(v, p, s, val);
             };
             memory_.onwrite = [this, onWrite](uint32_t v, uint32_t p, bool s, uint8_t val) {
@@ -204,7 +205,9 @@ public:
 private:
     Memory &memory_;
     Board  &board_;
-    MemoryReadCallback  prevOnRead_;
+    // Stage 6.24: prevOnRead_ chains the RAW Memory::onread type (4-param),
+    // not MemoryReadCallback which now has a 5th pc parameter.
+    std::function<void(uint32_t,uint32_t,bool,uint8_t)> prevOnRead_;
     MemoryWriteCallback prevOnWrite_;
     std::set<uint16_t> syncedBp_;
 };

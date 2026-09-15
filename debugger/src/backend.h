@@ -215,12 +215,11 @@ public:
 
     // -- instrumentation hooks ----------------------------------------------
 
-    void onMemoryRead(uint32_t virt, uint32_t phys, bool stack, uint8_t value);
+    void onMemoryRead(uint32_t virt, uint32_t phys, bool stack, uint8_t value,
+                      uint16_t pc);
     void onMemoryWrite(uint32_t virt, uint32_t phys, bool stack, uint8_t value);
     void onIoInput(uint8_t port, uint8_t value);
     void onIoOutput(uint8_t port, uint8_t value);
-    // Stage 6.22 §1/§2/§4 — the CPU is about to execute the instruction at pc.
-    void onInstructionBegin(uint16_t pc);
 
     void setInstrumentationEnabled(bool enabled);
     bool isInstrumentationEnabled() const;

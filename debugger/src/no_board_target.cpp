@@ -57,7 +57,8 @@ void NoBoardTarget::setMemoryCallbacks(MemoryReadCallback onRead,
 
         memory_.onread = [this, onRead](uint32_t virt, uint32_t phys,
                                         bool stack, uint8_t value) {
-            onRead(virt, phys, stack, value);
+            // Stage 6.24: pass the CPU's PC at callback time (see debug_adapter.cpp).
+            onRead(virt, phys, stack, value, static_cast<uint16_t>(i8080_pc()));
             if (prevOnRead_) prevOnRead_(virt, phys, stack, value);
         };
 
@@ -73,11 +74,6 @@ void NoBoardTarget::setMemoryCallbacks(MemoryReadCallback onRead,
         prevOnRead_  = nullptr;
         prevOnWrite_ = nullptr;
     }
-}
-
-void NoBoardTarget::setInstructionBeginCallback(InstructionBeginCallback cb)
-{
-    instrBeginCb_ = cb;
 }
 
 // ---------------------------------------------------------------------------
@@ -140,10 +136,9 @@ void NoBoardTarget::writeCpuRegister(int reg, uint16_t val)
 
 void NoBoardTarget::stepInstruction()
 {
-    // Stage 6.22 §1: mirror Board::single_step() — announce the instruction
-    // before its bytes are fetched, so tests see the same accounting as the
-    // GUI and the MCP server do.
-    if (instrBeginCb_) instrBeginCb_(static_cast<uint16_t>(i8080_pc()));
+    // Stage 6.24: instruction-boundary detection is now done inside
+    // DebugBackend::onMemoryRead() using the pc passed with MemoryReadCallback.
+    // No separate begin-callback is required here.
     int report_opcode = 0;
     i8080_instruction(&report_opcode);
 }

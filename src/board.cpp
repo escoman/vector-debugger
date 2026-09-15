@@ -187,8 +187,6 @@ void Board::single_step(bool update_screen)
         this->instr_time = 0;
     }
 
-    if (this->oninstrbegin) this->oninstrbegin(i8080_pc());
-
     this->instr_time += i8080_instruction(&this->last_opcode);
 
     int commit_time = -1, commit_time_pal = -1;

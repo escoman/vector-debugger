@@ -30,16 +30,18 @@ public:
     // DebugBackend provides lambdas that record memory access events.
     // The target installs them on the underlying Memory (if any).
     // Pass nullptr to clear (called by DebugBackend destructor).
-    using MemoryReadCallback  = std::function<void(uint32_t virt, uint32_t phys, bool stack, uint8_t value)>;
+    //
+    // Stage 6.24: onRead also receives the CPU's PC at the moment of the
+    // callback (i8080_pc() evaluated inside the target's onread lambda).
+    // For an opcode/operand fetch (RD_BYTE(PC++)), PC has already been
+    // incremented, so isFetchStart ⇔ fetchRemaining==0 && !stack &&
+    // (virt+1 == pc).  For a data read (RD_BYTE(HL) etc.) this relation
+    // does not hold.  No new src/-side callback is required.
+    using MemoryReadCallback  = std::function<void(uint32_t virt, uint32_t phys, bool stack, uint8_t value, uint16_t pc)>;
     using MemoryWriteCallback = std::function<void(uint32_t virt, uint32_t phys, bool stack, uint8_t value)>;
 
     virtual void setMemoryCallbacks(MemoryReadCallback onRead,
                                     MemoryWriteCallback onWrite) {}
-
-    // Stage 6.22 §1/§2: one call per instruction, before its bytes are
-    // fetched, from whichever thread currently runs the CPU.
-    using InstructionBeginCallback = std::function<void(uint16_t pc)>;
-    virtual void setInstructionBeginCallback(InstructionBeginCallback cb) {}
 
     // -- CPU state ----------------------------------------------------------
 

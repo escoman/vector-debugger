@@ -43,7 +43,6 @@ public:
     void    writeMemory(uint16_t addr, uint8_t val) override;
     void setMemoryCallbacks(MemoryReadCallback onRead,
                             MemoryWriteCallback onWrite) override;
-    void setInstructionBeginCallback(InstructionBeginCallback cb) override;
 
     CpuState getCpuState() override;
     void     writeCpuRegister(int reg, uint16_t val) override;
@@ -130,8 +129,6 @@ private:
     MemoryWriteCallback memWriteCb_;
     std::function<void(uint32_t,uint32_t,bool,uint8_t)> prevMemOnRead_;
     std::function<void(uint32_t,uint32_t,bool,uint8_t)> prevMemOnWrite_;
-    std::function<void(int)> prevOnInstrBegin_;
-    InstructionBeginCallback instrBeginCb_;
 
     // Track breakpoints synced to Board (addresses only)
     std::set<uint16_t> syncedBreakpoints_;

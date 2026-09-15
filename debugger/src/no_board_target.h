@@ -23,7 +23,6 @@ public:
     void    writeMemory(uint16_t addr, uint8_t val) override;
     void setMemoryCallbacks(MemoryReadCallback onRead,
                             MemoryWriteCallback onWrite) override;
-    void setInstructionBeginCallback(InstructionBeginCallback cb) override;
 
     CpuState getCpuState() override;
     void     writeCpuRegister(int reg, uint16_t val) override;
@@ -55,7 +54,9 @@ private:
     Memory &memory_;
     bool    cpuInitialized_ = false;
 
-    MemoryReadCallback  prevOnRead_;
+    // prevOnRead_/prevOnWrite_ chain the RAW Memory::onread/onwrite type
+    // (4-parameter). Stage 6.24: MemoryReadCallback grew a 5th pc param, but
+    // the underlying Memory::onread is unchanged, so we must use the raw type.
+    std::function<void(uint32_t,uint32_t,bool,uint8_t)> prevOnRead_;
     MemoryWriteCallback prevOnWrite_;
-    InstructionBeginCallback instrBeginCb_;
 };
