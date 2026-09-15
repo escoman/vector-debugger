@@ -27,6 +27,7 @@ static void printUsage(const char *progname)
         "  --rdb <file>     Path to RDB file (optional, auto-detected)\n"
         "  --output <dir>   Output directory for generated ASM files\n"
         "  --origin <hex>   ROM load origin (default: 0100)\n"
+        "  --strict         exit with code 2 when ROM coverage is incomplete\n"
         "\n"
         "If --rdb is omitted, looks for <rom_basename>.rdb next to the ROM.\n",
         progname);
@@ -35,6 +36,7 @@ static void printUsage(const char *progname)
 int main(int argc, char *argv[])
 {
     AsmExportConfig config;
+    bool strict = false;   // Stage 6.23 §2.3: CI must fail on lost bytes
 
     // Parse arguments
     for (int i = 1; i < argc; ++i) {
@@ -52,6 +54,8 @@ int main(int argc, char *argv[])
                 fprintf(stderr, "Error: invalid origin: %s\n", argv[i]);
                 return 1;
             }
+        } else if (strcmp(argv[i], "--strict") == 0) {
+            strict = true;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             printUsage(argv[0]);
             return 0;
@@ -117,6 +121,21 @@ int main(int argc, char *argv[])
     printf("Unresolved refs:  %d\n", report.unresolvedReferences);
     printf("Generated files:  %d\n", (int)report.generatedFiles.size());
 
+    const AsmCoverage &cov = report.coverage;
+    printf("\nCoverage (Stage 6.23):\n");
+    printf("  code bytes:     %lu / %lu ROM\n", (unsigned long)cov.codeBytes,
+           (unsigned long)cov.romBytes);
+    printf("  data bytes:     %lu\n", (unsigned long)cov.dataBytes);
+    printf("  instructions:   %lu\n", (unsigned long)cov.instructionCount);
+    printf("  outside window: %lu dropped (clipped)\n",
+           (unsigned long)cov.outsideWindowDropped);
+    printf("  uncovered:      %d run(s)\n", (int)cov.uncovered.size());
+    for (const auto &g : cov.uncovered) {
+        printf("    0x%04X-0x%04X (%u bytes)\n", g.first, g.second,
+               (unsigned)(g.second - g.first + 1));
+    }
+    printf("  complete:       %s\n", cov.complete() ? "true" : "FALSE");
+
     for (const auto &f : report.generatedFiles) {
         printf("  + %s\n", f.c_str());
     }
@@ -138,6 +157,13 @@ int main(int argc, char *argv[])
             printf("  %s\n", e.message.c_str());
         }
         return 1;
+    }
+
+    if (!report.coverage.complete()) {
+        printf("\nCOVERAGE INCOMPLETE — %d uncovered run(s)."
+               " Re-run with --strict to fail on this.\n",
+               (int)report.coverage.uncovered.size());
+        if (strict) return 2;
     }
 
     printf("\nExport complete.\n");

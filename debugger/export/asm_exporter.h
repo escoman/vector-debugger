@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,39 @@ struct AsmExportConfig
     std::string outputDir;
     uint16_t    origin = 0x0100; // ROM load origin
     size_t      maxAnalysisInstructions = 10000;
+};
+
+// ---------------------------------------------------------------------------
+// ROM coverage (Stage 6.23 §2.3) — "потеря не должна выглядеть как успех"
+// ---------------------------------------------------------------------------
+
+struct AsmCoverage
+{
+    uint64_t romBytes         = 0;   // размер образа
+    uint64_t codeBytes        = 0;   // байты, занятые инструкциями в окне ROM
+    uint64_t dataBytes        = 0;   // байты, приписанные объектам RDB
+    uint64_t instructionCount = 0;   // инструкций в окне ROM
+    uint64_t outsideWindowDropped = 0;   // инструкций отброшено как вне ROM (§2.1)
+    // Непокрытые интервалы [start, end] включительно — эмитируются как gap_%04X
+    std::vector<std::pair<uint16_t, uint16_t>> uncovered;
+
+    bool complete() const { return uncovered.empty(); }
+};
+
+// ---------------------------------------------------------------------------
+// Attributed ROM data region (Stage 6.23 §2.4)
+//
+// One run of bytes owned by a single RDB object.  A region split by
+// instruction bytes or by an earlier region becomes several units; only the
+// first keeps the RDB name, the rest get address labels.
+// ---------------------------------------------------------------------------
+
+struct AsmDataUnit
+{
+    uint16_t    address = 0;
+    uint32_t    size    = 0;   // always > 0
+    std::string name;          // empty = anonymous continuation run
+    std::string comment;
 };
 
 // ---------------------------------------------------------------------------
@@ -69,6 +103,9 @@ struct AsmExportReport
     std::vector<ExportWarning> errors;
     int conflicts            = 0;
     int unresolvedReferences = 0;
+
+    // Stage 6.23 §2.3 — побайтовое покрытие окна ROM
+    AsmCoverage coverage;
 
     bool hasErrors() const { return !errors.empty(); }
 };
@@ -124,18 +161,41 @@ private:
     // Set of addresses that are code (from analysis)
     std::set<uint16_t> codeAddresses_;
 
+    // Layout state (Stage 6.23) — built once by buildLayout(), after analysis
+    // and name mapping, and consumed by every emitter and by the coverage
+    // report.  owner_ is indexed by (address - origin).
+    std::vector<AsmDataUnit> dataUnits_;   // attributed ROM regions
+    std::vector<uint8_t>     owner_;       // 0 = gap, 1 = code, 2 = data
+    uint64_t droppedOutsideWindow_ = 0;    // clipped instructions (§2.1)
+    // RDB objects whose declared range collided with bytes that were already
+    // owned (by code or by an earlier object) — reported as warnings
+    std::vector<std::pair<uint16_t, std::string>> nameCollisions_;
+
     // --- Pipeline steps ---
 
     bool loadRom();
     bool loadRdb();
     void runAnalysis();
+    void rebuildRanges();     // §2.1: ranges after clipping to the ROM window
     void buildNameMap();
+    void buildLayout();       // §2.2/§2.3/§2.4: byte ownership + data units
+    AsmCoverage computeCoverage() const;
     AsmExportReport emitFiles();
 
     // File emitters
     std::string emitMainAsm();
+    std::string emitLayoutAsm();   // §2.2 — the stream the build actually uses
     std::string emitCodeAsm();
     std::string emitDataAsm();
+
+    // Emission helpers shared by the layout and by the read-only views
+    // Comment + label for an address, or "" when nothing is worth printing.
+    // `defined` collects the labels actually emitted, so that names whose bytes
+    // belong to another unit can be released as `equ` instead (Stage 6.23 §2.4).
+    std::string emitAddressLabel(uint16_t addr,
+                                 std::set<std::string> &defined) const;
+    // defb rows for the absolute inclusive range [start, end]
+    std::string emitByteRows(uint32_t start, uint32_t end) const;
     std::string emitExportJson(const AsmExportReport &report);
 
     // Instruction emitter

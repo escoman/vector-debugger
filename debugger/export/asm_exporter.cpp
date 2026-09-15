@@ -12,6 +12,7 @@
 #include <cctype>
 #include <cstdio>
 #include <fstream>
+#include <iomanip>
 #include <set>
 #include <sstream>
 #include <sys/stat.h>
@@ -131,6 +132,9 @@ AsmExportReport AsmExporter::run()
     // Step 4: Build name map
     buildNameMap();
 
+    // Step 4.5: attribute every ROM byte to code / RDB data / gap (Stage 6.23)
+    buildLayout();
+
     // Step 5: Count RDB stats
     if (hasRdb_) {
         report.objectCount = static_cast<int>(rdb_.objectCount());
@@ -216,12 +220,78 @@ void AsmExporter::runAnalysis()
 
     analysis_ = ::analyzeCodeMulti(entries, readFn, config_.maxAnalysisInstructions);
 
+    // Stage 6.23 §2.1 — clip to the ROM window.
+    // Reaching 0x0000..origin-1 on purpose is correct for the ANALYSER: on real
+    // hardware execution falls through the reset NOP-sled into the entry point,
+    // and dropping that seed would break the reachability graph.  It is wrong
+    // for the EMITTER: those bytes are not part of the image, so emitting them
+    // shifts everything after them by their length and the build no longer
+    // reproduces the ROM (256 phantom NOPs here = 91 % differing bytes).
+    {
+        const uint32_t winStart = config_.origin;
+        const uint32_t winEnd   = winStart + static_cast<uint32_t>(rom_.size());
+        std::vector<AnalyzedInstruction> kept;
+        kept.reserve(analysis_.instructions.size());
+        droppedOutsideWindow_ = 0;
+        for (const auto &instr : analysis_.instructions) {
+            const uint32_t s = instr.address;
+            const uint32_t e = s + instr.size;          // exclusive
+            if (s >= winStart && e <= winEnd) {
+                kept.push_back(instr);
+            } else {
+                ++droppedOutsideWindow_;
+            }
+        }
+        analysis_.instructions.swap(kept);
+        analysis_.instructionCount = analysis_.instructions.size();
+        analysis_.codeBytes = 0;
+        for (const auto &instr : analysis_.instructions) {
+            analysis_.codeBytes += instr.size;
+        }
+        rebuildRanges();
+    }
+
     // Build code address set
     for (const auto &instr : analysis_.instructions) {
         for (uint8_t i = 0; i < instr.size; ++i) {
             codeAddresses_.insert(instr.address + i);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// rebuildRanges — contiguous code ranges (inclusive end) from the clipped
+// instruction list.  analyzeCodeMulti() built ranges over the unclipped set,
+// so after §2.1 clipping they must be recomputed or they still name page 0.
+// ---------------------------------------------------------------------------
+
+void AsmExporter::rebuildRanges()
+{
+    analysis_.ranges.clear();
+    if (analysis_.instructions.empty()) return;
+
+    std::vector<AnalyzedInstruction> sorted = analysis_.instructions;
+    std::sort(sorted.begin(), sorted.end(),
+              [](const AnalyzedInstruction &a, const AnalyzedInstruction &b) {
+                  return a.address < b.address;
+              });
+
+    uint32_t s = sorted.front().address;
+    uint32_t e = s + sorted.front().size - 1;
+    for (size_t i = 1; i < sorted.size(); ++i) {
+        const uint32_t cs = sorted[i].address;
+        const uint32_t ce = cs + sorted[i].size - 1;
+        if (cs <= e + 1) {
+            if (ce > e) e = ce;
+        } else {
+            analysis_.ranges.push_back({static_cast<uint16_t>(s),
+                                        static_cast<uint16_t>(e)});
+            s = cs;
+            e = ce;
+        }
+    }
+    analysis_.ranges.push_back({static_cast<uint16_t>(s),
+                                static_cast<uint16_t>(e)});
 }
 
 // ---------------------------------------------------------------------------
@@ -274,6 +344,17 @@ AsmExportReport AsmExporter::emitFiles()
         }
     }
 
+    // Emit layout.asm — the address-ordered stream that the build consumes
+    // (Stage 6.23 §2.2)
+    {
+        std::string path = config_.outputDir + "/layout.asm";
+        if (writeFile(path, emitLayoutAsm())) {
+            report.generatedFiles.push_back("layout.asm");
+        } else {
+            report.errors.push_back({"Failed to write layout.asm", 0});
+        }
+    }
+
     // Emit code.asm
     {
         std::string path = config_.outputDir + "/code/code.asm";
@@ -290,17 +371,9 @@ AsmExportReport AsmExporter::emitFiles()
         std::string content = emitDataAsm();
         if (writeFile(path, content)) {
             report.generatedFiles.push_back("data/data.asm");
-            // Count data ranges (RDB data objects + unknown regions)
-            if (hasRdb_) {
-                auto objects = rdb_.listObjects();
-                for (const auto &obj : objects) {
-                    if (obj.type == RdbObjectType::Data ||
-                        obj.type == RdbObjectType::Table ||
-                        obj.type == RdbObjectType::String) {
-                        report.dataRanges++;
-                    }
-                }
-            }
+            // Data ranges = ROM regions attributed to an RDB object after
+            // byte-level ownership (Stage 6.23 §2.4); gaps are not data.
+            report.dataRanges = static_cast<int>(dataUnits_.size());
         } else {
             report.errors.push_back({"Failed to write data/data.asm", 0});
         }
@@ -316,6 +389,30 @@ AsmExportReport AsmExporter::emitFiles()
     // Add conflict warnings
     for (const auto &conflict : analysis_.conflicts) {
         report.warnings.push_back({conflict.description, conflict.address});
+    }
+
+    // Stage 6.23 §2.4 — RDB ranges that overlap each other or code
+    for (const auto &nc : nameCollisions_) {
+        char buf[192];
+        snprintf(buf, sizeof(buf),
+                 "RDB object '%s' at 0x%04X overlaps bytes already owned by "
+                 "another unit; name released as `equ`, not emitted as a label",
+                 nc.second.c_str(), nc.first);
+        report.warnings.push_back({std::string(buf), nc.first});
+    }
+
+    // Stage 6.23 §2.3 — coverage.  Before this, export.json reported
+    // "warnings: 0" while 170 ROM bytes were silently missing: a lost byte was
+    // indistinguishable from a successful export.
+    report.coverage = computeCoverage();
+    for (const auto &gap : report.coverage.uncovered) {
+        char buf[160];
+        snprintf(buf, sizeof(buf),
+                 "uncovered %u bytes at 0x%04X-0x%04X — emitted as gap_%04X, "
+                 "not attributed to code or RDB",
+                 static_cast<unsigned>(gap.second - gap.first + 1),
+                 gap.first, gap.second, gap.first);
+        report.warnings.push_back({std::string(buf), gap.first});
     }
 
     // Emit export.json
@@ -366,8 +463,16 @@ std::string AsmExporter::emitMainAsm()
     os << "\torg\t" << hexLiteral(buf) << "\n";
     os << "\n";
 
-    os << "\tinclude\t\"code/code.asm\"\n";
-    os << "\tinclude\t\"data/data.asm\"\n";
+    // Stage 6.23 §2.2 — the build consumes ONE address-ordered stream.
+    // Including code.asm and data.asm back-to-back laid all data after all
+    // code, which does not reproduce the image (ROM interleaves them), and a
+    // second .org to fix the layout is impossible: z80asm allows `org` only
+    // once per module ("ORG redefined").
+    os << "\tinclude\t\"layout.asm\"\n";
+    os << "\n";
+    os << "; Read-only views, not part of the build:\n";
+    os << ";   include \"code/code.asm\"\n";
+    os << ";   include \"data/data.asm\"\n";
 
     return os.str();
 }
@@ -380,72 +485,30 @@ std::string AsmExporter::emitCodeAsm()
 {
     std::ostringstream os;
     os << "; Code section — generated by v06c-asm-export\n";
-    os << "; Instructions discovered by control-flow analysis from 0x0000\n";
+    os << "; View only: the build consumes layout.asm (Stage 6.23 §2.2)\n";
+    os << "; Control-flow analysis, clipped to the ROM window (§2.1)\n";
     os << "\n";
 
-    // Sort instructions by address
-    std::vector<AnalyzedInstruction> sorted = analysis_.instructions;
-    std::sort(sorted.begin(), sorted.end(),
-              [](const AnalyzedInstruction &a, const AnalyzedInstruction &b) {
-                  return a.address < b.address;
-              });
-
-    // Build a set of instruction start addresses for quick lookup
-    std::set<uint16_t> instrStarts;
-    for (const auto &instr : sorted) {
-        instrStarts.insert(instr.address);
-    }
-
-    // Emit instructions grouped by code range
-    size_t instrIdx = 0;
-    for (const auto &range : analysis_.ranges) {
-        char rangeBuf[32];
-        snprintf(rangeBuf, sizeof(rangeBuf), "%04X", range.start);
-        os << "\n; --- Code range: " << rangeBuf << " ---\n";
-
-        while (instrIdx < sorted.size() &&
-               sorted[instrIdx].address >= range.start &&
-               sorted[instrIdx].address <= range.end) {
-            const auto &instr = sorted[instrIdx];
-
-            // Check if there's a label at this address
-            std::string name = resolveName(instr.address);
-            if (!name.empty() && instrStarts.count(instr.address)) {
-                // Check if this address is a reference target
-                bool isTarget = false;
-                for (const auto &ref : analysis_.references) {
-                    if (ref.to == instr.address) {
-                        isTarget = true;
-                        break;
-                    }
-                }
-                // Also check RDB objects
-                if (hasRdb_) {
-                    auto objects = rdb_.listObjects();
-                    for (const auto &obj : objects) {
-                        if (obj.address == instr.address) {
-                            isTarget = true;
-                            break;
-                        }
-                    }
-                }
-
-                if (isTarget || name != generateLabel(instr.address)) {
-                    // Emit RDB comment if available
-                    if (hasRdb_) {
-                        std::string comment = rdb_.getComment(instr.address);
-                        if (!comment.empty()) {
-                            os << "; " << comment << "\n";
-                        }
-                    }
-                    os << name << ":\n";
-                }
-            }
-
-            // Emit instruction
-            os << emitInstruction(instr);
-            ++instrIdx;
+    // analysis_.instructions is already address-sorted (analyzeCodeMulti sorts,
+    // clipping preserves the order).  The previous loop walked the RANGE list
+    // with a monotonic index, which silently dropped instructions whenever the
+    // ranges were unsorted or overlapping.
+    std::set<std::string> defined;
+    size_t ri = 0;
+    for (const auto &instr : analysis_.instructions) {
+        while (ri < analysis_.ranges.size() &&
+               static_cast<uint32_t>(instr.address) > analysis_.ranges[ri].end) {
+            ++ri;
         }
+        if (ri < analysis_.ranges.size() &&
+            static_cast<uint32_t>(instr.address) == analysis_.ranges[ri].start) {
+            char rangeBuf[16];
+            snprintf(rangeBuf, sizeof(rangeBuf), "%04X",
+                     analysis_.ranges[ri].start);
+            os << "\n; --- Code range: " << rangeBuf << " ---\n";
+        }
+        os << emitAddressLabel(instr.address, defined);
+        os << emitInstruction(instr);
     }
 
     return os.str();
@@ -459,6 +522,8 @@ std::string AsmExporter::emitDataAsm()
 {
     std::ostringstream os;
     os << "; Data section — generated by v06c-asm-export\n";
+    os << "; View only: the build consumes layout.asm (Stage 6.23 §2.2)\n";
+    os << "; Regions here are the same byte runs layout.asm emits\n";
     os << "\n";
 
     if (!hasRdb_) {
@@ -467,124 +532,305 @@ std::string AsmExporter::emitDataAsm()
         return os.str();
     }
 
-    // Collect data objects from RDB, sorted by address
-    auto objects = rdb_.listObjects();
-    std::vector<const RdbObject *> dataObjects;
-    for (const auto &obj : objects) {
-        if (obj.type == RdbObjectType::Data ||
-            obj.type == RdbObjectType::Table ||
-            obj.type == RdbObjectType::String) {
-            dataObjects.push_back(&obj);
-        }
-    }
-    std::sort(dataObjects.begin(), dataObjects.end(),
-              [](const RdbObject *a, const RdbObject *b) {
-                  return a->address < b->address;
-              });
-
-    // rom_ holds the file bytes starting at the load origin; a CPU address maps
-    // to buffer offset (addr - origin).  romEndAbs is the last ROM address.
-    const size_t origin   = config_.origin;
-    const size_t romEndAbs = static_cast<size_t>(config_.origin) + rom_.size();
-
-    // Emit each data object
-    for (const auto *obj : dataObjects) {
-        if (!obj->hasSize || obj->size == 0) {
-            char buf[16];
-            snprintf(buf, sizeof(buf), "%04X", obj->address);
-            os << "; WARNING: data object at " << buf
-               << " has no size — skipped\n";
-            continue;
-        }
-
-        // Check bounds against the absolute ROM window [origin, romEndAbs)
-        if (static_cast<size_t>(obj->address) + obj->size > romEndAbs) {
-            char buf[16];
-            snprintf(buf, sizeof(buf), "%04X", obj->address);
-            os << "; WARNING: data object at " << buf
-               << " extends beyond ROM — truncated\n";
-        }
-
-        size_t emitSize = obj->size;
-        if (static_cast<size_t>(obj->address) + emitSize > romEndAbs) {
-            emitSize = romEndAbs - obj->address;
-        }
-
-        std::string label = resolveName(obj->address);
-        if (label.empty()) {
-            label = generateLabel(obj->address);
-        }
-
-        size_t off = static_cast<size_t>(obj->address) - origin;
-        os << emitDataBlock(label, obj->comment,
-                            &rom_[off], emitSize);
+    for (const auto &u : dataUnits_) {
+        if (!u.comment.empty()) os << "; " << u.comment << "\n";
+        os << u.name << ":\n";
+        os << emitByteRows(u.address, u.address + u.size - 1);
         os << "\n";
     }
 
-    // Emit unknown regions (ROM bytes not classified as code or data)
-    // Find gaps between code ranges and data objects
-    std::vector<std::pair<uint16_t, uint16_t>> coveredRanges;
-    for (const auto &range : analysis_.ranges) {
-        coveredRanges.push_back({range.start, range.end});
+    for (const auto &gap : computeCoverage().uncovered) {
+        char buf[24];
+        snprintf(buf, sizeof(buf), "gap_%04X", gap.first);
+        os << "; Uncovered ROM bytes — neither code nor an RDB object\n";
+        os << buf << ":\n";
+        os << emitByteRows(gap.first, gap.second);
+        os << "\n";
     }
-    for (const auto *obj : dataObjects) {
-        if (obj->hasSize && obj->size > 0) {
-            coveredRanges.push_back({obj->address,
-                static_cast<uint16_t>(obj->address + obj->size - 1)});
+
+    return os.str();
+}
+
+// ---------------------------------------------------------------------------
+// buildLayout — byte ownership of the ROM window (Stage 6.23 §2.2-§2.4)
+//
+// owner_[addr - origin]: 0 = nobody (gap), 1 = instruction byte, 2 = RDB data.
+// Code wins over data: an RDB object may legitimately name a location inside
+// an instruction (TESTAY: var_main_loop_target @0x0101 is the operand of the
+// self-modified entry JMP, var_delay_loop_seed @0x04A2 is inside func_main_loop).
+// Such names are released as `equ` at the end of layout.asm (see emitLayoutAsm).
+// ---------------------------------------------------------------------------
+
+void AsmExporter::buildLayout()
+{
+    dataUnits_.clear();
+    nameCollisions_.clear();
+    owner_.assign(rom_.size(), 0);
+    if (rom_.empty()) return;
+
+    const uint32_t origin = config_.origin;
+
+    for (const auto &instr : analysis_.instructions) {          // already clipped
+        for (uint8_t i = 0; i < instr.size; ++i) {
+            const uint32_t off = static_cast<uint32_t>(instr.address) + i - origin;
+            if (off < owner_.size()) owner_[off] = 1;
         }
     }
-    // Treat every RDB function's [address, address+size) as code so that the
-    // interior continuation blocks (branch/PCHL targets that BFS range-merging
-    // may split) are not re-emitted as unknown data.
-    if (hasRdb_) {
+
+    if (!hasRdb_) return;
+
+    // Function/Code/Label are code-ish: their bytes come from the instruction
+    // stream, so they must not also be declared as data (double emission was
+    // the past behaviour and it corrupted the image).  Everything else —
+    // Data/Table/String AND Variable (Stage 6.23 §2.4: Variable used to be
+    // filtered out, so 24 named TESTAY variables surfaced as unknown_%04X
+    // gaps) — owns its bytes.
+    std::vector<RdbObject> objects = rdb_.listObjects();
+    std::sort(objects.begin(), objects.end(),
+              [](const RdbObject &a, const RdbObject &b) {
+                  return a.address < b.address;
+              });
+
+    for (const auto &obj : objects) {
+        if (obj.type == RdbObjectType::Function ||
+            obj.type == RdbObjectType::Code ||
+            obj.type == RdbObjectType::Label) {
+            continue;
+        }
+
+        const uint32_t size = obj.size ? obj.size : 1;   // 0 = one byte (Unknown)
+        uint32_t s = obj.address;
+        if (s < origin || s - origin >= owner_.size()) continue;   // outside ROM
+        uint32_t end = s + size;                                   // exclusive
+        if (end - origin > owner_.size()) {
+            end = origin + static_cast<uint32_t>(owner_.size());
+        }
+
+        std::string baseName = obj.name.empty()
+                             ? generateLabel(obj.address)
+                             : sanitizeLabel(obj.name);
+
+        // A collision is not an error in the RDB (an alias — one byte serving
+        // both a channel state and AY register 0 — is a legitimate finding),
+        // but it must be visible: the loser of the collision cannot become a
+        // label, so its name only survives as an `equ`.
+        if (!obj.name.empty()) {
+            for (uint32_t b = s; b < end; ++b) {
+                if (owner_[b - origin] == 0) continue;
+                nameCollisions_.push_back({static_cast<uint16_t>(s), baseName});
+                break;
+            }
+        }
+
+        bool first = true;
+        uint32_t a = s;
+        while (a < end) {
+            if (owner_[a - origin] != 0) { ++a; continue; }   // owned: skip, splits
+            const uint32_t runStart = a;
+            while (a < end) {
+                const uint32_t off = a - origin;
+                if (owner_[off] != 0) break;
+                owner_[off] = 2;
+                ++a;
+            }
+            AsmDataUnit unit;
+            unit.address = static_cast<uint16_t>(runStart);
+            unit.size    = a - runStart;
+            // A name may only label the address that actually carries the
+            // object.  Attaching it to a later run (when the leading bytes were
+            // already owned) moves the symbol, and every operand that
+            // resolveName() substitutes then assembles to the wrong address —
+            // measured on TESTAY: `shld 048Fh` became `shld 0490h`, one byte of
+            // the image silently corrupted.  The name is released as `equ` at
+            // its true address instead (see emitLayoutAsm).
+            unit.name    = (first && runStart == obj.address)
+                           ? baseName
+                           : generateLabel(static_cast<uint16_t>(runStart));
+            unit.comment = obj.comment;
+            dataUnits_.push_back(unit);
+            first = false;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// computeCoverage — the numbers behind "did the export lose anything?"
+// ---------------------------------------------------------------------------
+
+AsmCoverage AsmExporter::computeCoverage() const
+{
+    AsmCoverage cov;
+    cov.romBytes             = rom_.size();
+    cov.instructionCount     = analysis_.instructionCount;
+    cov.outsideWindowDropped = droppedOutsideWindow_;
+
+    const uint32_t origin = config_.origin;
+    size_t i = 0;
+    while (i < owner_.size()) {
+        if (owner_[i] == 1) { ++cov.codeBytes; ++i; continue; }
+        if (owner_[i] == 2) { ++cov.dataBytes; ++i; continue; }
+        size_t j = i;
+        while (j < owner_.size() && owner_[j] == 0) ++j;
+        cov.uncovered.push_back({static_cast<uint16_t>(origin + i),
+                                 static_cast<uint16_t>(origin + j - 1)});
+        i = j;
+    }
+    return cov;
+}
+
+// ---------------------------------------------------------------------------
+// emitAddressLabel — comment + label in front of an emitted unit
+// ---------------------------------------------------------------------------
+
+std::string AsmExporter::emitAddressLabel(uint16_t addr,
+                                          std::set<std::string> &defined) const
+{
+    const std::string name = resolveName(addr);
+    if (name.empty()) return "";
+
+    bool worthPrinting = (name != generateLabel(addr));       // named by the RDB
+    if (!worthPrinting) {
+        for (const auto &ref : analysis_.references) {
+            if (ref.to == addr) { worthPrinting = true; break; }
+        }
+    }
+    if (!worthPrinting && hasRdb_) {
         for (const auto &obj : rdb_.listObjects()) {
-            if (obj.type == RdbObjectType::Function && obj.size > 0) {
-                coveredRanges.push_back({obj.address,
-                    static_cast<uint16_t>(static_cast<uint32_t>(obj.address) + obj.size - 1)});
-            }
+            if (obj.address == addr) { worthPrinting = true; break; }
         }
     }
-    std::sort(coveredRanges.begin(), coveredRanges.end());
+    if (!worthPrinting) return "";
 
-    // Merge overlapping ranges
-    std::vector<std::pair<uint16_t, uint16_t>> merged;
-    for (const auto &r : coveredRanges) {
-        if (!merged.empty() && r.first <= merged.back().second + 1) {
-            if (r.second > merged.back().second) {
-                merged.back().second = r.second;
-            }
-        } else {
-            merged.push_back(r);
+    std::ostringstream os;
+    if (hasRdb_) {
+        const std::string comment = rdb_.getComment(addr);
+        if (!comment.empty()) os << "; " << comment << "\n";
+    }
+    os << name << ":\n";
+    defined.insert(name);
+    return os.str();
+}
+
+// ---------------------------------------------------------------------------
+// emitByteRows — defb rows for an absolute inclusive address range
+// ---------------------------------------------------------------------------
+
+std::string AsmExporter::emitByteRows(uint32_t start, uint32_t end) const
+{
+    std::ostringstream os;
+    const uint32_t origin = config_.origin;
+    const uint32_t bytesPerLine = 8;
+
+    for (uint32_t a = start; a <= end; a += bytesPerLine) {
+        const uint32_t last = std::min(end + 1, a + bytesPerLine);
+        os << "\tdefb\t";
+        for (uint32_t b = a; b < last; ++b) {
+            if (b > a) os << ",";
+            const uint32_t off = b - origin;
+            os << formatByte(off < rom_.size() ? rom_[off] : 0x00);
         }
+        os << "\n";
     }
+    return os.str();
+}
 
-    // Emit gaps as unknown data (addresses are absolute; rom_ indexed from origin)
-    size_t romEndAbsU = static_cast<size_t>(config_.origin) + rom_.size();
-    size_t pos = config_.origin;
-    for (const auto &r : merged) {
-        if (static_cast<size_t>(r.first) > pos) {
-            // Gap from pos to r.first - 1
-            size_t gapSize = static_cast<size_t>(r.first) - pos;
-            char labelBuf[16];
-            snprintf(labelBuf, sizeof(labelBuf), "%04X", static_cast<uint16_t>(pos));
-            os << "; Unknown region at " << labelBuf << "\n";
-            os << emitDataBlock(std::string("unknown_") + labelBuf, "",
-                                &rom_[pos - config_.origin], gapSize);
-            os << "\n";
+// ---------------------------------------------------------------------------
+// emitLayoutAsm — Stage 6.23 §2.2: one address-ordered stream
+//
+// Units (instruction / data region / gap) are sorted by address and emitted
+// back to back, so PC advances exactly like the ROM image: a gap can never
+// silently shift what follows it.  code.asm and data.asm stay as views.
+// ---------------------------------------------------------------------------
+
+std::string AsmExporter::emitLayoutAsm()
+{
+    const uint32_t origin = config_.origin;
+    const uint32_t winEnd = origin + static_cast<uint32_t>(rom_.size());
+
+    struct Item {
+        uint32_t    start;
+        uint32_t    end;      // inclusive
+        int         kind;     // 0 = code, 1 = data, 2 = gap
+        size_t      instr;    // kind 0: index into analysis_.instructions
+        std::string label;
+        std::string comment;
+    };
+
+    std::vector<Item> items;
+    items.reserve(analysis_.instructions.size() + dataUnits_.size() + 8);
+
+    for (size_t i = 0; i < analysis_.instructions.size(); ++i) {
+        const auto &in = analysis_.instructions[i];
+        items.push_back({in.address,
+                         static_cast<uint32_t>(in.address) + in.size - 1,
+                         0, i, "", ""});
+    }
+    for (const auto &u : dataUnits_) {
+        items.push_back({u.address,
+                         static_cast<uint32_t>(u.address) + u.size - 1,
+                         1, 0, u.name, u.comment});
+    }
+    for (const auto &gap : computeCoverage().uncovered) {
+        char buf[24];
+        snprintf(buf, sizeof(buf), "gap_%04X", gap.first);
+        items.push_back({gap.first, gap.second, 2, 0, buf,
+                         "Uncovered ROM bytes — neither code nor an RDB object"});
+    }
+    std::sort(items.begin(), items.end(),
+              [](const Item &a, const Item &b) { return a.start < b.start; });
+
+    std::ostringstream os;
+    os << "; Address-ordered layout — generated by v06c-asm-export (Stage 6.23)\n";
+    os << "; Every byte of the ROM window is emitted exactly once: instruction,\n";
+    os << "; RDB data region, or explicit gap_ region.  This is what the build\n";
+    os << "; consumes; code/code.asm and data/data.asm are read-only views.\n\n";
+
+    std::set<std::string> defined;
+    uint32_t pc = origin;
+    for (const auto &it : items) {
+        if (it.end < pc) continue;                       // already covered
+        if (it.start > pc) {
+            // Defensive padding: with gaps emitted this must not happen, and a
+            // silent shift is precisely the bug this stage removes.
+            os << "\tdefs\t" << (it.start - pc) << "\n";
         }
-        pos = static_cast<size_t>(r.second) + 1;
-        if (pos > romEndAbsU) break;
-    }
+        pc = it.end + 1;
 
-    // Trailing unknown region
-    if (pos < romEndAbsU) {
-        size_t tailSize = romEndAbsU - pos;
-        char labelBuf[16];
-        snprintf(labelBuf, sizeof(labelBuf), "%04X", static_cast<uint16_t>(pos));
-        os << "; Unknown region at " << labelBuf << "\n";
-        os << emitDataBlock(std::string("unknown_") + labelBuf, "",
-                            &rom_[pos - config_.origin], tailSize);
+        if (it.kind == 0) {
+            const auto &instr = analysis_.instructions[it.instr];
+            os << emitAddressLabel(instr.address, defined);
+            os << emitInstruction(instr);
+            continue;
+        }
+
+        if (!it.comment.empty()) os << "; " << it.comment << "\n";
+        if (!it.label.empty()) {
+            os << it.label << ":\n";
+            defined.insert(it.label);
+        }
+        os << emitByteRows(it.start, it.end);
+        os << "\n";
     }
+    if (pc < winEnd) os << "\tdefs\t" << (winEnd - pc) << "\n";
+
+    // Names that could not become labels because their bytes belong to another
+    // unit (variable inside an instruction, object outside the window).  Every
+    // name used as an operand must be defined somewhere, or z80asm fails with
+    // "undefined symbol" — this block is what makes name substitution safe.
+    std::ostringstream eq;
+    bool header = false;
+    for (const auto &kv : nameMap_) {
+        if (defined.count(kv.second)) continue;
+        if (!header) {
+            eq << "\n; --- Symbols at addresses owned by another unit ---\n";
+            header = true;
+        }
+        char buf[8];
+        snprintf(buf, sizeof(buf), "%04X", kv.first);
+        eq << kv.second << "\tequ\t" << hexLiteral(buf) << "\n";
+        defined.insert(kv.second);
+    }
+    os << eq.str();
 
     return os.str();
 }
@@ -613,7 +859,28 @@ std::string AsmExporter::emitExportJson(const AsmExportReport &report)
     os << "  \"warnings\": " << report.warnings.size() << ",\n";
     os << "  \"errors\": " << report.errors.size() << ",\n";
     os << "  \"conflicts\": " << report.conflicts << ",\n";
-    os << "  \"unresolved_references\": " << report.unresolvedReferences << "\n";
+    os << "  \"unresolved_references\": " << report.unresolvedReferences << ",\n";
+
+    // Stage 6.23 §2.3
+    const AsmCoverage &cov = report.coverage;
+    os << "  \"coverage\": {\n";
+    os << "    \"rom_bytes\": " << cov.romBytes << ",\n";
+    os << "    \"code_bytes\": " << cov.codeBytes << ",\n";
+    os << "    \"data_bytes\": " << cov.dataBytes << ",\n";
+    os << "    \"instruction_count\": " << cov.instructionCount << ",\n";
+    os << "    \"outside_window_dropped\": " << cov.outsideWindowDropped << ",\n";
+    os << "    \"uncovered\": [";
+    for (size_t i = 0; i < cov.uncovered.size(); ++i) {
+        if (i) os << ", ";
+        os << "{\"start\": \"0x" << std::hex << std::uppercase
+           << std::setw(4) << std::setfill('0') << cov.uncovered[i].first
+           << std::dec << "\", \"end\": \"0x" << std::hex << std::uppercase
+           << std::setw(4) << std::setfill('0') << cov.uncovered[i].second
+           << std::dec << "\"}";
+    }
+    os << "],\n";
+    os << "    \"complete\": " << (cov.complete() ? "true" : "false") << "\n";
+    os << "  }\n";
     os << "}\n";
 
     return os.str();
@@ -641,7 +908,25 @@ std::string AsmExporter::emitInstruction(const AnalyzedInstruction &instr)
             os << "\t" << hexLiteral(buf);
         }
     } else if (!instr.operands.empty()) {
-        os << "\t" << convertOperands(instr.mnemonic, instr.operands);
+        std::string text = convertOperands(instr.mnemonic, instr.operands);
+
+        // Stage 6.23 §2.4: LDA/STA/LHLD/SHLD address an absolute location, so a
+        // named RDB object at that address becomes a symbol reference.  Other
+        // 16-bit operands (LXI, imm16) are *values* and must stay numeric — that
+        // distinction is why the substitution is limited to these four opcodes.
+        const std::string &mn = instr.mnemonic;
+        if (mn == "LDA" || mn == "STA" || mn == "LHLD" || mn == "SHLD") {
+            const std::string tok = trim(instr.operands);
+            if (isAllHex(tok) && tok.size() == 4) {
+                unsigned v = 0;
+                if (sscanf(tok.c_str(), "%x", &v) == 1) {
+                    const std::string name = resolveName(static_cast<uint16_t>(v));
+                    if (!name.empty()) text = name;
+                }
+            }
+        }
+
+        os << "\t" << text;
     }
 
     os << "\n";

@@ -593,12 +593,306 @@ TEST_END()
 }
 
 // ---------------------------------------------------------------------------
+// Stage 6.23 additions to test_asm_exporter.cpp
+//
+// Address-ordered layout (2.2), ROM-window clipping (2.1), coverage and gaps
+// (2.3), Variable attribution and safe name substitution (2.4).
+//
+// Inserted before main() by .rt/fix6_exporter_tests.py.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Test: layout.asm is one address-ordered stream; gaps are explicit (2.1-2.3)
+// Fixture ROM (origin 0), 9 bytes:
+//   0000: JMP 0008        code
+//   0003: 00              reachable by nothing -> must become gap_0003
+//   0004: 'A','B','C','D' RDB Data "table_04"
+//   0008: RET             code
+// ---------------------------------------------------------------------------
+
+TEST_BEGIN(layout_stream_and_coverage)
+{
+    std::vector<uint8_t> rom(9, 0x00);
+    rom[0x00] = 0xC3; rom[0x01] = 0x08; rom[0x02] = 0x00;   // JMP 0008
+    rom[0x03] = 0x00;                                           // unreachable byte
+    rom[0x04] = 'A'; rom[0x05] = 'B'; rom[0x06] = 'C'; rom[0x07] = 'D';
+    rom[0x08] = 0xC9;                                           // RET
+
+    std::string romPath = writeTempFile("layout.rom", rom.data(), rom.size());
+
+    RdbController rdb;
+    rdb.initialize("vector06c", {});
+    RdbObject data;
+    data.address = 0x0004;
+    data.type = RdbObjectType::Data;
+    data.name = "table_04";
+    data.size = 4;
+    data.hasSize = true;
+    data.comment = "Interleaved data block";
+    rdb.addObject(data);
+    std::string rdbPath = "/tmp/test_asm_export_layout.rdb";
+    rdb.saveAs(rdbPath);
+
+    AsmExportConfig config;
+    config.romPath = romPath;
+    config.rdbPath = rdbPath;
+    config.outputDir = "/tmp/test_asm_export_layout";
+    config.origin = 0x0000;
+
+    AsmExporter exporter(config);
+    AsmExportReport report = exporter.run();
+    CHECK(!report.hasErrors(), "layout export succeeds");
+
+    // --- coverage numbers (2.3) -------------------------------------------
+    CHECK(report.coverage.romBytes == 9, "coverage: rom bytes = 9");
+    CHECK(report.coverage.codeBytes == 4, "coverage: code bytes = 4");
+    CHECK(report.coverage.dataBytes == 4, "coverage: data bytes = 4");
+    CHECK(report.coverage.uncovered.size() == 1, "coverage: one uncovered run");
+    if (!report.coverage.uncovered.empty()) {
+        CHECK(report.coverage.uncovered[0].first == 0x0003 &&
+              report.coverage.uncovered[0].second == 0x0003,
+              "coverage: uncovered run is 0x0003-0x0003");
+    }
+    CHECK(!report.coverage.complete(), "coverage: not complete");
+
+    bool gapWarned = false;
+    for (const auto &w : report.warnings) {
+        if (w.message.find("gap_0003") != std::string::npos) gapWarned = true;
+    }
+    CHECK(gapWarned, "uncovered byte raised a warning (2.3)");
+
+    // --- layout.asm content and ordering ----------------------------------
+    std::ifstream lf("/tmp/test_asm_export_layout/layout.asm");
+    CHECK(lf.is_open(), "layout.asm generated");
+    std::string layout((std::istreambuf_iterator<char>(lf)),
+                        std::istreambuf_iterator<char>());
+
+    size_t pJmp   = layout.find("jmp");
+    size_t pGap   = layout.find("gap_0003:");
+    size_t pData  = layout.find("table_04:");
+    size_t pRet   = layout.find("ret");
+    CHECK(pGap != std::string::npos, "layout: gap_0003 label present");
+    CHECK(pData != std::string::npos, "layout: data label present");
+    CHECK(pJmp != std::string::npos && pRet != std::string::npos,
+          "layout: both instructions present");
+    CHECK(pJmp < pGap && pGap < pData && pData < pRet,
+          "layout: units are in address order");
+    CHECK(layout.find("41h,42h,43h,44h") != std::string::npos,
+          "layout: data bytes emitted verbatim");
+    CHECK(layout.find("; Interleaved data block") != std::string::npos,
+          "layout: RDB comment carried over");
+
+    // --- main.asm builds the layout, not the two views --------------------
+    std::ifstream mf("/tmp/test_asm_export_layout/main.asm");
+    std::string mainAsm((std::istreambuf_iterator<char>(mf)),
+                         std::istreambuf_iterator<char>());
+    CHECK(mainAsm.find("include\t\"layout.asm\"") != std::string::npos,
+          "main.asm includes layout.asm");
+    CHECK(mainAsm.find("\n\tinclude\t\"code/code.asm\"") == std::string::npos &&
+          mainAsm.find("\n\tinclude\t\"data/data.asm\"") == std::string::npos,
+          "main.asm does not build the views (they stay commented)");
+
+    // --- export.json carries coverage -------------------------------------
+    std::ifstream jf("/tmp/test_asm_export_layout/export.json");
+    std::string json((std::istreambuf_iterator<char>(jf)),
+                     std::istreambuf_iterator<char>());
+    CHECK(json.find("\"coverage\"") != std::string::npos, "json: coverage block");
+    CHECK(json.find("\"code_bytes\": 4") != std::string::npos, "json: code_bytes");
+    CHECK(json.find("\"data_bytes\": 4") != std::string::npos, "json: data_bytes");
+    CHECK(json.find("\"outside_window_dropped\"") != std::string::npos,
+          "json: outside_window_dropped");
+    CHECK(json.find("\"complete\": false") != std::string::npos, "json: complete=false");
+
+    cleanupTempFiles();
+TEST_END()
+}
+
+// ---------------------------------------------------------------------------
+// Test: instructions outside the ROM window are not emitted (2.1)
+//
+// The analyzer seeds 0x0000 on purpose (real hardware falls through the reset
+// NOP sled), but with origin 0x0100 those 256 bytes are not in the image.
+// Emitting them shifted everything after them — that was the 91 %-differing
+// build this item removes.
+// ---------------------------------------------------------------------------
+
+TEST_BEGIN(clipping_outside_window)
+{
+    std::vector<uint8_t> rom(0x100, 0x00);
+    rom[0x00] = 0xC9;                                  // RET at 0x0100
+
+    std::string romPath = writeTempFile("clip.rom", rom.data(), rom.size());
+
+    AsmExportConfig config;
+    config.romPath = romPath;
+    config.outputDir = "/tmp/test_asm_export_clip";
+    config.origin = 0x0100;
+
+    AsmExporter exporter(config);
+    AsmExportReport report = exporter.run();
+    CHECK(!report.hasErrors(), "clipped export succeeds");
+
+    CHECK(report.coverage.instructionCount == 1,
+          "clip: only the in-window instruction is kept");
+    CHECK(report.coverage.outsideWindowDropped == 0x100,
+          "clip: 256 page-0 NOPs dropped");
+    CHECK(report.coverage.codeBytes == 1, "clip: code bytes = 1");
+
+    std::ifstream lf("/tmp/test_asm_export_clip/layout.asm");
+    std::string layout((std::istreambuf_iterator<char>(lf)),
+                        std::istreambuf_iterator<char>());
+    CHECK(layout.find("nop") == std::string::npos,
+          "clip: no phantom NOP emitted");
+    CHECK(layout.find("ret") != std::string::npos, "clip: real instruction emitted");
+
+    cleanupTempFiles();
+TEST_END()
+}
+
+// ---------------------------------------------------------------------------
+// Test: Variable objects own bytes and name their operands (2.4)
+// ---------------------------------------------------------------------------
+
+TEST_BEGIN(variable_attribution_and_operand_name)
+{
+    std::vector<uint8_t> rom(0x14, 0x00);
+    rom[0x00] = 0x3A; rom[0x01] = 0x10; rom[0x02] = 0x00;   // LDA 0010
+    rom[0x03] = 0xC9;                                        // RET
+    rom[0x10] = 0xFF;                                        // the variable itself
+    rom[0x11] = 0x22;
+
+    std::string romPath = writeTempFile("var.rom", rom.data(), rom.size());
+
+    RdbController rdb;
+    rdb.initialize("vector06c", {});
+    RdbObject var;
+    var.address = 0x0010;
+    var.type = RdbObjectType::Variable;
+    var.name = "var_flag";
+    var.size = 2;
+    var.hasSize = true;
+    var.comment = "Named variable, not data";
+    rdb.addObject(var);
+    std::string rdbPath = "/tmp/test_asm_export_var.rdb";
+    rdb.saveAs(rdbPath);
+
+    AsmExportConfig config;
+    config.romPath = romPath;
+    config.rdbPath = rdbPath;
+    config.outputDir = "/tmp/test_asm_export_var";
+    config.origin = 0x0000;
+
+    AsmExporter exporter(config);
+    AsmExportReport report = exporter.run();
+    CHECK(!report.hasErrors(), "variable export succeeds");
+
+    // Before 6.23 Variable was filtered out of attribution: its bytes showed
+    // up as unknown_ gaps and the name appeared only inside comments.
+    CHECK(report.coverage.dataBytes == 2, "variable owns its 2 bytes");
+    // Bytes 0x04..0x0F are a deliberate hole (neither code nor an RDB object);
+    // what must hold is that the variable's own bytes are covered.
+    bool varHole = false;
+    for (const auto &g : report.coverage.uncovered) {
+        if (g.first <= 0x0010 && 0x0010 <= g.second) varHole = true;
+    }
+    CHECK(!varHole, "the variable's own bytes are not an uncovered hole");
+
+    std::ifstream lf("/tmp/test_asm_export_var/layout.asm");
+    std::string layout((std::istreambuf_iterator<char>(lf)),
+                        std::istreambuf_iterator<char>());
+    CHECK(layout.find("var_flag:") != std::string::npos,
+          "layout: variable emitted as a label");
+    CHECK(layout.find("lda\tvar_flag") != std::string::npos,
+          "layout: LDA operand replaced by the variable name");
+    CHECK(layout.find("unknown_0010") == std::string::npos,
+          "layout: variable is not an unknown_ gap");
+    CHECK(layout.find("; Named variable, not data") != std::string::npos,
+          "layout: variable comment carried over");
+
+    cleanupTempFiles();
+TEST_END()
+}
+
+// ---------------------------------------------------------------------------
+// Test: an RDB overlap must not move a symbol (2.4, found by TESTAY acceptance)
+//
+// data_c_channel_state (0x0486+10) and var_ay_ch_a_period (0x048F+2) share one
+// byte in TESTAY.  The loser used to keep its name on the shifted run, so the
+// operand `shld 048Fh` assembled to 0490h — one silently corrupted byte.
+// Fixture reproduces that shape at 0x0004/0x0007.
+// ---------------------------------------------------------------------------
+
+TEST_BEGIN(overlapping_name_keeps_true_address)
+{
+    std::vector<uint8_t> rom(0x10, 0x00);
+    rom[0x00] = 0x3A; rom[0x01] = 0x07; rom[0x02] = 0x00;   // LDA 0007
+    rom[0x03] = 0xC9;                                        // RET
+    for (int i = 0x04; i <= 0x09; ++i) rom[i] = static_cast<uint8_t>(i);
+
+    std::string romPath = writeTempFile("overlap.rom", rom.data(), rom.size());
+
+    RdbController rdb;
+    rdb.initialize("vector06c", {});
+    RdbObject block;
+    block.address = 0x0004;
+    block.type = RdbObjectType::Data;
+    block.name = "block_a";
+    block.size = 4;      // 0x0004..0x0007
+    block.hasSize = true;
+    rdb.addObject(block);
+
+    RdbObject var;
+    var.address = 0x0007;   // overlaps the last byte of block_a
+    var.type = RdbObjectType::Variable;
+    var.name = "var_ptr";
+    var.size = 2;           // 0x0007..0x0008
+    var.hasSize = true;
+    rdb.addObject(var);
+
+    std::string rdbPath = "/tmp/test_asm_export_overlap.rdb";
+    rdb.saveAs(rdbPath);
+
+    AsmExportConfig config;
+    config.romPath = romPath;
+    config.rdbPath = rdbPath;
+    config.outputDir = "/tmp/test_asm_export_overlap";
+    config.origin = 0x0000;
+
+    AsmExporter exporter(config);
+    AsmExportReport report = exporter.run();
+    CHECK(!report.hasErrors(), "overlap export succeeds");
+
+    bool collisionWarned = false;
+    for (const auto &w : report.warnings) {
+        if (w.message.find("var_ptr") != std::string::npos &&
+            w.message.find("overlaps") != std::string::npos) collisionWarned = true;
+    }
+    CHECK(collisionWarned, "overlap surfaced as a warning, not silently");
+
+    std::ifstream lf("/tmp/test_asm_export_overlap/layout.asm");
+    std::string layout((std::istreambuf_iterator<char>(lf)),
+                        std::istreambuf_iterator<char>());
+
+    CHECK(layout.find("block_a:") != std::string::npos,
+          "winner of the collision keeps its label");
+    CHECK(layout.find("var_ptr:") == std::string::npos,
+          "loser is NOT emitted as a label at a shifted address");
+    CHECK(layout.find("var_ptr\tequ\t0007h") != std::string::npos,
+          "loser released as equ at its true address");
+    CHECK(layout.find("lda\tvar_ptr") != std::string::npos,
+          "operand still uses the name");
+
+    cleanupTempFiles();
+TEST_END()
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
 int main()
 {
-    printf("ASM Exporter Tests (Stage 6.17):\n\n");
+    printf("ASM Exporter Tests (Stage 6.17 + 6.23):\n\n");
 
     RUN_TEST(generate_label);
     RUN_TEST(sanitize_label);
@@ -614,6 +908,10 @@ int main()
     RUN_TEST(deterministic_export);
     RUN_TEST(export_without_rdb);
     RUN_TEST(rom_not_found);
+    RUN_TEST(layout_stream_and_coverage);
+    RUN_TEST(clipping_outside_window);
+    RUN_TEST(variable_attribution_and_operand_name);
+    RUN_TEST(overlapping_name_keeps_true_address);
 
     printf("\nResults: %d passed, %d failed\n", testsPassed, testsFailed);
     return testsFailed > 0 ? 1 : 0;
