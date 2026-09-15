@@ -6,7 +6,9 @@
 #include <algorithm> 
 #include <cctype>
 #include <locale>
+#ifdef V06C_DEBUGGER  // debugger: needs uint8_t in prototypes (04e2cdd)
 #include <cstdint>
+#endif
 
 namespace util {
 

@@ -9,7 +9,9 @@
 #include <string>
 #include <vector>
 #include <iostream>
+#ifdef V06C_DEBUGGER  // debugger: needs smart pointers in DiskImage API (04e2cdd)
 #include <memory>
+#endif
 
 #include "options.h"
 #include "util.h"

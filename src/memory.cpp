@@ -60,6 +60,7 @@ uint8_t Memory::read(uint32_t addr, bool stackrq)
     return value;
 }
 
+#ifdef V06C_DEBUGGER  // debugger: callback-free read (6ae835a)
 uint8_t Memory::peek(uint32_t addr, bool stackrq) const
 {
     uint32_t bigaddr = const_cast<Memory*>(this)->bigram_select(addr & 0xffff, stackrq);
@@ -69,6 +70,7 @@ uint8_t Memory::peek(uint32_t addr, bool stackrq) const
     uint32_t phys = const_cast<Memory*>(this)->tobank(bigaddr);
     return this->bytes[phys];
 }
+#endif
 
 void Memory::write(uint32_t addr, uint8_t w8, bool stackrq)
 {

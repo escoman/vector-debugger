@@ -4,6 +4,11 @@ project(vector-debugger)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -g -pthread")
 
+# Debugger-only additions in the shared emulator sources (../src) are wrapped in
+# #ifdef V06C_DEBUGGER. Define it here so the debugger build sees peek(),
+# RawPaletteByte(), etc. The plain v06x emulator build does NOT define it.
+add_definitions(-DV06C_DEBUGGER=1)
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
