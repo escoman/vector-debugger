@@ -162,17 +162,43 @@ void DebugAdapter::init()
         ruslatState_ = rus;
     };
 
-    // Track i8253 timer writes for Sound window visualization.
+    // Track i8253 timer writes and standard-noise (PIA PC0) transitions
+    // for Sound window visualization.
     // The io.onwrite hook fires BEFORE the actual write, giving us raw
-    // port/value pairs.  We interpret the i8253 protocol here.
+    // port/value pairs.  We interpret the i8253/PIA protocol here.
     io.onwrite = [this](uint32_t port, uint8_t value) -> void {
-        // Track AY writes (ports 0x14 = data, 0x15 = latch)
+        // Track AY writes (ports 0x14 = data, 0x15 = latch).
+        // AY activity must never touch the standard noise counter below.
         if (port == 0x14 || port == 0x15) {
             ayDirty_ = true;
             return;
         }
-        if (port == 0x0B) {
-            // Timer control word
+
+        // Standard Vector noise channel: PIA1 Port C bit 0 (tape-out beeper).
+        // Count ONLY actual PC0 state transitions (old != new) — a write of
+        // the same level is not a toggle. BSR writes on port 0x00 are decoded
+        // semantically: bit number (3-1) and set/reset (bit 0).
+        int newPC0 = -1;  // -1 = this write does not affect PC0
+        if (port == 0x01) {
+            newPC0 = value & 1;             // direct write: PC := value
+        } else if (port == 0x00) {
+            if ((value & 0x80) == 0) {
+                int bit = (value >> 1) & 7; // BSR: selected bit number
+                if (bit == 0) newPC0 = value & 1; // SET/RESET PC0
+            } else {
+                // CW write: the core re-issues PC := 0 (vio.h case 0x00)
+                newPC0 = 0;
+            }
+        }
+        if (newPC0 != -1) {
+            if (newPC0 != pc0Mirror_) {
+                pc0TogglesTotal_.fetch_add(1, std::memory_order_relaxed);
+            }
+            pc0Mirror_ = newPC0;
+        }
+
+        if (port == 0x08) {
+            // Timer control word (core: vio.h maps ~port&3==3 → write_cw)
             int ctr = (value >> 6) & 3;
             if (ctr < 3) {
                 int latch = (value >> 4) & 3;
@@ -181,8 +207,9 @@ void DebugAdapter::init()
                 timerModes_[ctr] = mode;
                 timerWriteStates_[ctr] = 0;
             }
-        } else if (port >= 0x08 && port <= 0x0A) {
-            int ctr = port - 0x08;
+        } else if (port >= 0x09 && port <= 0x0B) {
+            // Counter data ports: ~0x0B&3=0, ~0x0A&3=1, ~0x09&3=2
+            int ctr = (~port) & 3;
             int latch = timerLatchModes_[ctr];
             if (latch == 3) {
                 // LSB then MSB
@@ -207,6 +234,10 @@ void DebugAdapter::init()
     };
 
     board.reset(Board::ResetMode::BLKVVOD);
+
+    // Seed the PC0 mirror from the committed reset-time state so the first
+    // observed transition is measured against a real level, not "unknown".
+    pc0Mirror_ = io.TapeOut();
 
     initialized_ = true;
 }
@@ -343,6 +374,8 @@ void DebugAdapter::executeFrame()
 
 void DebugAdapter::reset(bool attachBoot)
 {
+    // NOTE: board.reset() does not touch PIA registers, so the PC0 mirror
+    // stays valid across a reset — no invalidation needed here.
     if (attachBoot) {
         // Reset (полный сброс): attach boot ROM, PC=0, execute bootloader.
         board.reset(Board::ResetMode::BLKVVOD);
@@ -470,6 +503,28 @@ SoundSnapshot DebugAdapter::soundSnapshot() const
         snap.timerChannels[i].dirty     = timerDirty_[i];
         const_cast<DebugAdapter*>(this)->timerDirty_[i] = false;
     }
+
+    // Standard Vector noise (PIA PC0): transitions since the PREVIOUS
+    // snapshot plus the measured rate over the elapsed wall interval.
+    // The atomic counter is written by the emulation thread; the delta and
+    // the interval bookkeeping below are only touched from this (snapshot)
+    // thread, so there is no read/write race.
+    const auto now = std::chrono::steady_clock::now();
+    uint64_t total = pc0TogglesTotal_.load(std::memory_order_relaxed);
+    snap.standardNoise.togglesSinceLast =
+        static_cast<uint32_t>(total - pc0TogglesLastSnapshot_);
+    if (pc0SnapshotPrimed_ && now > pc0SnapshotTime_) {
+        double dt = std::chrono::duration<double>(now - pc0SnapshotTime_).count();
+        if (dt > 0.0) {
+            snap.standardNoise.toggleRateHz =
+                static_cast<double>(snap.standardNoise.togglesSinceLast) / dt;
+        }
+    }
+    snap.standardNoise.dirty = snap.standardNoise.togglesSinceLast > 0;
+    snap.standardNoise.lastLevel = pc0Mirror_;
+    const_cast<DebugAdapter*>(this)->pc0TogglesLastSnapshot_ = total;
+    const_cast<DebugAdapter*>(this)->pc0SnapshotTime_ = now;
+    const_cast<DebugAdapter*>(this)->pc0SnapshotPrimed_ = true;
 
     return snap;
 }

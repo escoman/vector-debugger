@@ -512,6 +512,46 @@ set(BINARY_RESOURCES
 )
 
 # ---------------------------------------------------------------------------
+# Sound Window test executable
+#
+# Part A: pure SoundWindow::analyzeSnapshot / channel-order tests (ImGui
+# sources only needed to link sound_window.cpp). Part B: real DebugAdapter
+# — PC0/i8253/AY port write monitoring through the io.onwrite hook.
+# ---------------------------------------------------------------------------
+
+add_executable(test_sound_window
+    ${DBG_TST_DIR}/test_sound_window.cpp
+    ${DBG_GUI_DIR}/sound_window.cpp
+    ${IMGUI_DIR}/imgui.cpp
+    ${IMGUI_DIR}/imgui_draw.cpp
+    ${IMGUI_DIR}/imgui_tables.cpp
+    ${IMGUI_DIR}/imgui_widgets.cpp
+    ${BINARY_RESOURCES}
+)
+
+target_include_directories(test_sound_window PRIVATE
+    ${IMGUI_DIR}
+    ${IMGUI_DIR}/backends
+    ${DBG_GUI_DIR}
+    ${DBG_SRC_DIR}
+    ${SRC_DIR}
+)
+
+target_link_libraries(test_sound_window
+    debugger_adapter
+    debugger_core
+    ${SDL2_LIBRARY}
+    ${Boost_LIBRARIES}
+    pthread
+)
+
+# Binary resources produce absolute symbols — disable PIE
+set_target_properties(test_sound_window PROPERTIES
+    LINK_FLAGS "-no-pie"
+    POSITION_INDEPENDENT_CODE OFF
+)
+
+# ---------------------------------------------------------------------------
 # AI Agent Module (Stage 5.3) — optional, off by default
 # ---------------------------------------------------------------------------
 

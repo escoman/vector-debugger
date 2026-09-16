@@ -76,7 +76,7 @@ struct PaletteSnapshot
 };
 
 // ---------------------------------------------------------------------------
-// Sound snapshot (AY-3-8912 + i8253 timer state)
+// Sound snapshot (standard Vector noise + AY-3-8912 + i8253 timer state)
 // ---------------------------------------------------------------------------
 
 struct TimerChannelState
@@ -84,6 +84,19 @@ struct TimerChannelState
     uint16_t loadValue = 0;   // last loaded counter value
     int      mode      = 0;   // counter mode (0-5)
     bool     dirty     = false; // true if written since last snapshot
+};
+
+// Standard Vector noise channel — the 1-bit tape-out beeper
+// (PIA1 Port C bit 0, mixed via "beeper" volume in the core).
+// This is NOT the AY noise generator. Measured via the debugger-side
+// io.onwrite hook: we only count actual PC0 state transitions
+// (old != new), which is a diagnostic activity measurement, not volume.
+struct StandardNoiseState
+{
+    uint32_t togglesSinceLast = 0; // PC0 transitions since previous snapshot
+    double   toggleRateHz     = 0; // transitions/sec over the previous interval
+    int      lastLevel        = -1; // last observed PC0 state (-1 = unknown)
+    bool     dirty            = false; // true if togglesSinceLast > 0
 };
 
 struct SoundSnapshot
@@ -104,6 +117,9 @@ struct SoundSnapshot
 
     // i8253 timer channels (3 counters)
     TimerChannelState timerChannels[3] = {};
+
+    // Standard Vector noise channel (PIA1 Port C bit 0 / tape-out)
+    StandardNoiseState standardNoise = {};
 
     bool available = false;
 };

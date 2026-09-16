@@ -14,6 +14,8 @@
 
 #include <string>
 #include <set>
+#include <atomic>
+#include <chrono>
 
 // ---------------------------------------------------------------------------
 // DebugAdapter
@@ -113,8 +115,10 @@ private:
     // РУС/LAT LED state — updated by io.onruslat callback
     bool ruslatState_ = false;
 
-    // Timer write tracking (i8253 ports 0x08-0x0B)
+    // Timer write tracking (i8253 counter ports 0x09-0x0B, control port 0x08)
     // Interprets the i8253 write protocol to extract counter load values.
+    // Core mapping (vio.h): timer.write(~port & 3) — port 0x08 selects the
+    // control register, 0x0B/0x0A/0x09 select counters 0/1/2.
     int  timerLatchModes_[3] = {3, 3, 3};  // latch mode per counter (default: LSB+MSB)
     int  timerWriteStates_[3] = {};  // write state machine per counter
     uint16_t timerLoadValues_[3] = {}; // last load value per counter
@@ -124,6 +128,19 @@ private:
 
     // AY write tracking (ports 0x14/0x15)
     bool ayDirty_ = false;           // true if AY was written since last snapshot
+
+    // Standard Vector noise tracking — PIA1 Port C bit 0 (tape-out beeper).
+    // Counted in the io.onwrite hook (emulation thread) as actual PC0 state
+    // transitions only (old != new), including BSR semantics on port 0x00.
+    // This is a diagnostic activity measurement, not a volume level.
+    std::atomic<uint64_t> pc0TogglesTotal_{0}; // monotonic, emulation thread writes
+    int pc0Mirror_ = -1;                       // last observed PC0 (-1 = unknown)
+
+    // Snapshot interval bookkeeping — accessed from the snapshot (GUI) thread
+    // only, together with the read side of pc0TogglesTotal_.
+    uint64_t pc0TogglesLastSnapshot_ = 0;
+    std::chrono::steady_clock::time_point pc0SnapshotTime_{};
+    bool pc0SnapshotPrimed_ = false;
 
     MemoryReadCallback  memReadCb_;
     MemoryWriteCallback memWriteCb_;
