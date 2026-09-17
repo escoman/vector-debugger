@@ -397,6 +397,21 @@ void DebuggerGui::render(IDebugBackend &backend)
     
     memoryMap_.onGoToDisassembly = [this](uint16_t a) { gotoDisassembly(a); };
     memoryMap_.onGoToMemoryInspector = [this](uint16_t a) { gotoMemory(a); };
+
+    // Stage 6.25: Memory Access window — same navigation callbacks plus a
+    // cross-window query to seed its range from the currently hovered /
+    // selected block in the Memory Map.
+    memoryAccess_.onGoToDisassembly = [this](uint16_t a) { gotoDisassembly(a); };
+    memoryAccess_.onGoToMemoryInspector = [this](uint16_t a) { gotoMemory(a); };
+    memoryAccess_.getSelectedMapBlock = [this](uint16_t &out) -> bool {
+        return memoryMap_.getSelectedBlockAddress(out);
+    };
+
+    // Stage 6.25: Memory Map context menu item "To Memory Access" pushes
+    // the block's range into the Memory Access window and focuses it.
+    memoryMap_.onGoToMemoryAccess = [this](uint16_t a) {
+        memoryAccess_.focusOnBlock(a);
+    };
     
     functionsWindow_.onGoToDisassembly = [this](uint16_t a) { gotoDisassembly(a); };
     functionsWindow_.onGoToMemoryInspector = [this](uint16_t a) { gotoMemory(a); };
@@ -431,6 +446,7 @@ void DebuggerGui::render(IDebugBackend &backend)
     ioInspector_.render(backend);
     vectorScreen_.render(backend);
     memoryMap_.render(backend);
+    memoryAccess_.render(backend);
     functionsWindow_.render(backend);
     romDatabaseWindow_.render(backend);
     xrefsWindow_.render(backend);
@@ -449,6 +465,7 @@ void DebuggerGui::render(IDebugBackend &backend)
             {"Vector Screen", &vectorScreen_.getVisibleRef()},
             {"Memory Inspector", &memoryInspector_.getVisibleRef()},
             {"Memory Map", &memoryMap_.getVisibleRef()},
+            {"Memory Access", &memoryAccess_.getVisibleRef()},
             {"Disassembly", &disassemblyView_.getVisibleRef()},
             {"Stack View", &stackView_.getVisibleRef()},
             {"Breakpoints", &breakpointsWindow_.getVisibleRef()},
@@ -777,6 +794,7 @@ void DebuggerGui::renderToolbar(IDebugBackend &backend)
             ImGui::MenuItem("Vector Screen", nullptr, &vectorScreen_.getVisibleRef());
             ImGui::MenuItem("Memory Inspector", nullptr, &memoryInspector_.getVisibleRef());
             ImGui::MenuItem("Memory Map", nullptr, &memoryMap_.getVisibleRef());
+            ImGui::MenuItem("Memory Access", nullptr, &memoryAccess_.getVisibleRef());
             ImGui::MenuItem("Disassembly", nullptr, &disassemblyView_.getVisibleRef());
             ImGui::MenuItem("Stack", nullptr, &stackView_.getVisibleRef());
             ImGui::MenuItem("Breakpoints", nullptr, &breakpointsWindow_.getVisibleRef());
@@ -958,6 +976,7 @@ void DebuggerGui::layoutCascade()
         {"Vector Screen", &vectorScreen_.getVisibleRef()},
         {"Memory Inspector", &memoryInspector_.getVisibleRef()},
         {"Memory Map", &memoryMap_.getVisibleRef()},
+        {"Memory Access", &memoryAccess_.getVisibleRef()},
         {"Disassembly", &disassemblyView_.getVisibleRef()},
         {"Stack View", &stackView_.getVisibleRef()},
         {"Breakpoints", &breakpointsWindow_.getVisibleRef()},
@@ -996,6 +1015,7 @@ void DebuggerGui::applyCascade()
         {"Vector Screen", &vectorScreen_.getVisibleRef()},
         {"Memory Inspector", &memoryInspector_.getVisibleRef()},
         {"Memory Map", &memoryMap_.getVisibleRef()},
+        {"Memory Access", &memoryAccess_.getVisibleRef()},
         {"Disassembly", &disassemblyView_.getVisibleRef()},
         {"Stack View", &stackView_.getVisibleRef()},
         {"Breakpoints", &breakpointsWindow_.getVisibleRef()},
@@ -1039,6 +1059,7 @@ void DebuggerGui::layoutTile()
         {"Vector Screen", &vectorScreen_.getVisibleRef()},
         {"Memory Inspector", &memoryInspector_.getVisibleRef()},
         {"Memory Map", &memoryMap_.getVisibleRef()},
+        {"Memory Access", &memoryAccess_.getVisibleRef()},
         {"Disassembly", &disassemblyView_.getVisibleRef()},
         {"Stack View", &stackView_.getVisibleRef()},
         {"Breakpoints", &breakpointsWindow_.getVisibleRef()},

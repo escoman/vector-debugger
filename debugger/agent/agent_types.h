@@ -589,10 +589,13 @@ struct RuntimeAccessBlock
 };
 
 // ---------------------------------------------------------------------------
-// Runtime Access Log Entry — Stage 6.20
+// Runtime Access Log Entry — Stage 6.20 (sequence: Stage 6.25)
 //
 // Single entry from the bounded runtime memory access log.
 // Each entry records an individual memory access with PC attribution.
+// `sequence` is a monotonically increasing counter assigned by DebugBackend
+// at push time (Stage 6.25) so that readers can identify entries uniquely
+// across ring-buffer wraps.
 // ---------------------------------------------------------------------------
 
 struct RuntimeAccessLogEntry
@@ -602,6 +605,7 @@ struct RuntimeAccessLogEntry
     Type type = Read;
     uint16_t pc = 0;
     uint8_t value = 0;
+    uint64_t sequence = 0;
 };
 
 // ---------------------------------------------------------------------------

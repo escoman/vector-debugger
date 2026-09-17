@@ -181,6 +181,7 @@ public:
     // -- IDebugBackend: Runtime Memory Access Map (Stage 6.20) ---------------
 
     void clearRuntimeAccessMap() override;
+    void clearMemoryAccessLog() override;   // Stage 6.25
     std::vector<RuntimeAccessBlock> getRuntimeAccessMap() const override;
     std::vector<RuntimeAccessLogEntry> getRuntimeAccessLog(size_t maxEntries) const override;
 
@@ -414,6 +415,12 @@ private:
     RingBuffer<RuntimeAccessLogEntry> *runtimeAccessLog_;
 
     mutable std::mutex runtimeAccessMutex_;
+
+    // Stage 6.25: monotonically increasing sequence number assigned at push
+    // time.  Only ever incremented by the emulation thread (onMemoryRead /
+    // onMemoryWrite); reset by clearRuntimeAccessMap() and by loadRom().
+    // Kept atomic so external readers see a consistent value.
+    std::atomic<uint64_t> accessSequence_{0};
 
     // -- Memory Snapshots (Stage 6.20) ---------------------------------------
 

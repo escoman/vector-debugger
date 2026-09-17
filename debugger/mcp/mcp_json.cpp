@@ -489,10 +489,13 @@ json runtimeAccessLogEntryToJson(const RuntimeAccessLogEntry &entry) {
         case RuntimeAccessLogEntry::Fetch: typeStr = "fetch"; break;
     }
     return {
-        {"address", mcp_json::hex16(entry.address)},
-        {"type",    typeStr},
-        {"pc",      mcp_json::hex16(entry.pc)},
-        {"value",   mcp_json::hex8(entry.value)}
+        {"address",  mcp_json::hex16(entry.address)},
+        {"type",     typeStr},
+        {"pc",       mcp_json::hex16(entry.pc)},
+        {"value",    mcp_json::hex8(entry.value)},
+        // Stage 6.25: monotonic sequence assigned by DebugBackend at push time.
+        // Kept as integer (not hex) so JSON clients can compare ordering.
+        {"sequence", entry.sequence}
     };
 }
 

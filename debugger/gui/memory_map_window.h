@@ -60,6 +60,10 @@ public:
     std::function<void(uint16_t address)> onGoToMemoryInspector;
     std::function<void(uint16_t address)> onGoToDisassembly;
 
+    // Stage 6.25: seed the Memory Access window's range from the clicked
+    // block, refresh and focus it.  Argument = block base address.
+    std::function<void(uint16_t address)> onGoToMemoryAccess;
+
     // -- Test helpers (expose internal state for unit tests) -----------------
 
     bool isLive() const { return live_; }
@@ -90,6 +94,22 @@ public:
     };
 
     const BlockState &blockState(int index) const { return blocks_[index]; }
+
+    // Stage 6.25: expose the currently hovered / context-selected block so
+    // other windows (Memory Access) can seed their range from it.  Returns
+    // true and writes the block's base address when a hover or context
+    // selection is active.
+    bool getSelectedBlockAddress(uint16_t &outAddress) const {
+        if (hoverBlock_ >= 0) {
+            outAddress = blockToAddress(hoverBlock_);
+            return true;
+        }
+        if (contextBlock_ >= 0) {
+            outAddress = blockToAddress(contextBlock_);
+            return true;
+        }
+        return false;
+    }
 
 private:
     bool visible_ = true;

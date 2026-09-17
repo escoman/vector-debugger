@@ -824,6 +824,8 @@ void DebugBackend::onMemoryRead(uint32_t virt, uint32_t phys,
         // different pc and the reader cannot tell fetch from data.
         logEntry.pc = fetchBasePc_;
         logEntry.value = value;
+        // Stage 6.25: monotonic sequence, assigned at push time.
+        logEntry.sequence = accessSequence_.fetch_add(1, std::memory_order_relaxed) + 1;
         runtimeAccessLog_->push(logEntry);
     }
 }
@@ -869,6 +871,8 @@ void DebugBackend::onMemoryWrite(uint32_t virt, uint32_t phys,
         logEntry.type = RuntimeAccessLogEntry::Write;
         logEntry.pc = fetchBasePc_;   // Stage 6.22 §1 — same rule as reads
         logEntry.value = value;
+        // Stage 6.25: monotonic sequence, assigned at push time.
+        logEntry.sequence = accessSequence_.fetch_add(1, std::memory_order_relaxed) + 1;
         runtimeAccessLog_->push(logEntry);
     }
 }
@@ -2078,6 +2082,19 @@ void DebugBackend::clearRuntimeAccessMap()
         runtimeAccessMap_[i].fetch_count = 0;
     }
     runtimeAccessLog_->clear();
+    // Stage 6.25: reset sequence so numbering restarts at 1 for a fresh
+    // debug session (ROM load, explicit clear via MCP).
+    accessSequence_.store(0, std::memory_order_relaxed);
+}
+
+// Stage 6.25: clear ONLY the detailed access log; leave the aggregated
+// runtime map untouched so the Memory Map window keeps its history.
+void DebugBackend::clearMemoryAccessLog()
+{
+    std::lock_guard<std::mutex> lock(runtimeAccessMutex_);
+    runtimeAccessLog_->clear();
+    // accessSequence_ is deliberately NOT reset: entries already rendered in
+    // the Memory Access window keep their numbering until they scroll out.
 }
 
 std::vector<RuntimeAccessBlock> DebugBackend::getRuntimeAccessMap() const

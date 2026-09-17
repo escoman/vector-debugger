@@ -483,6 +483,11 @@ public:
         runtimeLog_.clear();
     }
 
+    // Stage 6.25: clear ONLY the detailed log; aggregated map is preserved.
+    void clearMemoryAccessLog() override {
+        runtimeLog_.clear();
+    }
+
     std::vector<RuntimeAccessBlock> getRuntimeAccessMap() const override {
         return std::vector<RuntimeAccessBlock>(runtimeMap_, runtimeMap_ + 256);
     }

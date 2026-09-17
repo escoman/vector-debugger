@@ -257,6 +257,12 @@ public:
     // Does NOT reset CPU, Board, unload ROM, or modify RDB.
     virtual void clearRuntimeAccessMap() = 0;
 
+    // Stage 6.25: clear ONLY the detailed access log, leaving the aggregated
+    // runtime map (used by Memory Map) untouched.  Used by the Memory Access
+    // window's Clear button so users can restart observation without losing
+    // block-level history.
+    virtual void clearMemoryAccessLog() = 0;
+
     // Get the 256-block runtime memory access map (256 bytes per block).
     virtual std::vector<RuntimeAccessBlock> getRuntimeAccessMap() const = 0;
 

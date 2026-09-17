@@ -481,6 +481,37 @@ target_link_libraries(test_live_map
 )
 
 # ---------------------------------------------------------------------------
+# Memory Access filter test executable (Stage 6.25)
+#
+# Pure-function tests over `applyMemoryAccessFilter()`.  The window .cpp is
+# linked to satisfy the free function's TU; ImGui and disassembler sources
+# are pulled in only for link-time symbol resolution — no test calls into
+# render().
+# ---------------------------------------------------------------------------
+
+add_executable(test_memory_access_filter
+    ${DBG_TST_DIR}/test_memory_access_filter.cpp
+    ${DBG_GUI_DIR}/memory_access_window.cpp
+    ${DBG_SRC_DIR}/disassembler.cpp
+    ${IMGUI_SOURCES}
+)
+
+target_include_directories(test_memory_access_filter PRIVATE
+    ${IMGUI_DIR}
+    ${IMGUI_DIR}/backends
+    ${DBG_GUI_DIR}
+    ${DBG_SRC_DIR}
+    ${SRC_DIR}
+)
+
+target_link_libraries(test_memory_access_filter
+    ${SDL2_LIBRARY}
+    ${OPENGL_LIBRARIES}
+    ${Boost_LIBRARIES}
+    pthread
+)
+
+# ---------------------------------------------------------------------------
 # Binary resources (boot ROM, window icon)
 # ---------------------------------------------------------------------------
 
@@ -942,6 +973,7 @@ set(GUI_SOURCES
     ${DBG_GUI_DIR}/io_inspector_window.cpp
     ${DBG_GUI_DIR}/vector_screen_window.cpp
     ${DBG_GUI_DIR}/memory_map_window.cpp
+    ${DBG_GUI_DIR}/memory_access_window.cpp
     ${DBG_GUI_DIR}/functions_window.cpp
     ${DBG_GUI_DIR}/xrefs_window.cpp
     ${DBG_GUI_DIR}/call_graph_window.cpp

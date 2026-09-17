@@ -386,6 +386,12 @@ void MemoryMapWindow::render(IDebugBackend &backend)
             if (onGoToDisassembly)
                 onGoToDisassembly(contextAddress_);
         }
+        // Stage 6.25: seed the Memory Access window with the block's range
+        // and bring it to front.
+        if (ImGui::MenuItem("To Memory Access")) {
+            if (onGoToMemoryAccess)
+                onGoToMemoryAccess(contextAddress_);
+        }
         ImGui::EndPopup();
     }
 

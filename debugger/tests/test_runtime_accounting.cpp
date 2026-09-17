@@ -637,10 +637,153 @@ static void test_624_multibyte_no_retrigger()
 }
 
 // ---------------------------------------------------------------------------
+// Stage 6.25 — sequence field on RuntimeAccessLogEntry
+// ---------------------------------------------------------------------------
+
+// Test 6.25-A — monotonic sequence across reads and writes.
+//   Reuses the main kProgram fixture (MVI/STA/LDA/JMP loop).  After one
+//   full loop we expect strictly increasing sequence numbers and the
+//   counter shared across Read/Write/Fetch types (i.e. it is a global log
+//   index, not a per-type ordinal).
+static void test_625_sequence_monotonic_across_read_and_write()
+{
+    TEST_BEGIN("6.25: sequence is strictly increasing across read/write/fetch");
+    Fixture f;
+    for (int i = 0; i < 4; ++i) f.target.executeFrame();   // one loop
+
+    auto log = f.backend.getRuntimeAccessLog(1000);
+    CHECK(log.size() >= 4u, "loop produced several access entries");
+
+    bool monotonic = true;
+    bool hasRead = false, hasWrite = false, hasFetch = false;
+    for (size_t i = 1; i < log.size(); ++i) {
+        if (log[i].sequence <= log[i - 1].sequence) { monotonic = false; break; }
+    }
+    for (const auto &e : log) {
+        if (e.type == RuntimeAccessLogEntry::Read)  hasRead  = true;
+        if (e.type == RuntimeAccessLogEntry::Write) hasWrite = true;
+        if (e.type == RuntimeAccessLogEntry::Fetch) hasFetch = true;
+    }
+    CHECK(monotonic, "sequence is strictly increasing across all entries");
+    CHECK(hasFetch,  "loop produced fetch entries");
+    CHECK(hasWrite,  "STA produced write entry");
+    CHECK(hasRead,   "LDA produced read entry");
+    TEST_END();
+}
+
+// Test 6.25-B — clearMemoryAccessLog() clears only the log; the aggregated
+// runtime map survives (§18 исходного ТЗ).
+static void test_625_clear_access_log_preserves_map()
+{
+    TEST_BEGIN("6.25: clearMemoryAccessLog leaves runtime map untouched");
+    Fixture f;
+    for (int i = 0; i < 4; ++i) f.target.executeFrame();
+
+    // Precondition: both log and map have accumulated data.
+    CHECK(!f.backend.getRuntimeAccessLog(10).empty(),
+          "log is not empty before clear");
+    const RuntimeAccessBlock codeBefore = blockOf(f.backend, kOrigin >> 8);
+    CHECK(codeBefore.fetch_count > 0 || codeBefore.read_count > 0 ||
+          codeBefore.write_count > 0,
+          "map has activity before clear");
+
+    f.backend.clearMemoryAccessLog();
+
+    CHECK(f.backend.getRuntimeAccessLog(10).empty(),
+          "log is empty after clearMemoryAccessLog");
+    const RuntimeAccessBlock codeAfter = blockOf(f.backend, kOrigin >> 8);
+    CHECK_EQ((long long)codeBefore.fetch_count, (long long)codeAfter.fetch_count,
+             "fetch_count preserved");
+    CHECK_EQ((long long)codeBefore.read_count,  (long long)codeAfter.read_count,
+             "read_count preserved");
+    CHECK_EQ((long long)codeBefore.write_count, (long long)codeAfter.write_count,
+             "write_count preserved");
+    CHECK(codeAfter.fetch, "aggregated map flags preserved (block still marked fetch)");
+    TEST_END();
+}
+
+// Test 6.25-C — after clearRuntimeAccessMap() the sequence counter restarts
+// so subsequent entries are numbered from 1 (loadRom() takes this path).
+static void test_625_clear_runtime_map_resets_sequence()
+{
+    TEST_BEGIN("6.25: clearRuntimeAccessMap restarts sequence from 1");
+    Fixture f;
+    for (int i = 0; i < 4; ++i) f.target.executeFrame();
+    auto first = f.backend.getRuntimeAccessLog(1);
+    CHECK(!first.empty(), "entries exist before reset");
+
+    f.backend.clearRuntimeAccessMap();
+    for (int i = 0; i < 4; ++i) f.target.executeFrame();
+    auto second = f.backend.getRuntimeAccessLog(1000);
+    CHECK(!second.empty(), "entries exist after reset");
+    if (!second.empty()) {
+        CHECK_EQ(1u, (unsigned long long)second.front().sequence,
+                 "first entry after reset has sequence == 1");
+    }
+    TEST_END();
+}
+
+// Test 6.25-D — PUSH/POP stack writes and reads appear in the log so the
+// GUI can show them (spec §23 “Stack”).
+static void test_625_stack_writes_and_reads_present()
+{
+    TEST_BEGIN("6.25: PUSH/POP produce stack write/read entries");
+    //   0x0100  C5        PUSH B
+    //   0x0101  D1        POP  D
+    //   0x0102  C9        RET            — unreachable but keeps disasm quiet
+    const uint8_t prog[] = {0xC5, 0xD1, 0xC9};
+    Fixture2 f(prog, 0x0100, sizeof(prog));
+
+    for (int i = 0; i < 2; ++i) f.target.executeFrame();
+    auto log = f.backend.getRuntimeAccessLog(100);
+
+    int stackWrites = 0, stackReads = 0;
+    for (const auto &e : log) {
+        // After PUSH B SP starts at 0xC000 and decrements — the writes land
+        // at 0xBFFE/0xBFFF; POP reads back at the same range.
+        if (e.address >= 0xB000 && e.address < 0xC000) {
+            if (e.type == RuntimeAccessLogEntry::Write) ++stackWrites;
+            if (e.type == RuntimeAccessLogEntry::Read)  ++stackReads;
+        }
+    }
+    CHECK_EQ(2, stackWrites, "PUSH B wrote two stack bytes");
+    CHECK_EQ(2, stackReads,  "POP D read  two stack bytes");
+    TEST_END();
+}
+
+// Test 6.25-E — CALL/RET stack accesses appear (spec §23 “Stack”).
+static void test_625_call_ret_stack_writes_and_reads()
+{
+    TEST_BEGIN("6.25: CALL then RET produce one stack write and one read");
+    //   0x0100  CD 06 01   CALL 0106h
+    //   0x0103  C9         RET
+    //   0x0104  00         NOP
+    //   0x0105  00         NOP
+    //   0x0106  C9         RET  (callee returns immediately)
+    const uint8_t prog[] = {0xCD,0x06,0x01, 0xC9, 0x00, 0x00, 0xC9};
+    Fixture2 f(prog, 0x0100, sizeof(prog));
+
+    // CALL, then RET in callee, then RET from main-loop start.  3 instructions.
+    for (int i = 0; i < 3; ++i) f.target.executeFrame();
+    auto log = f.backend.getRuntimeAccessLog(100);
+
+    int stackWrites = 0, stackReads = 0;
+    for (const auto &e : log) {
+        if (e.address >= 0xB000 && e.address < 0xC000) {
+            if (e.type == RuntimeAccessLogEntry::Write) ++stackWrites;
+            if (e.type == RuntimeAccessLogEntry::Read)  ++stackReads;
+        }
+    }
+    CHECK_EQ(2, stackWrites, "CALL wrote 2 bytes of return address to stack");
+    CHECK_EQ(2, stackReads,  "RET read  2 bytes of return address from stack");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 
 int main()
 {
-    std::printf("[runtime_accounting] Stage 6.22 §1–§4 / Stage 6.24\n");
+    std::printf("[runtime_accounting] Stage 6.22 §1–§4 / Stage 6.24 / Stage 6.25\n");
 
     test_free_run_fetch_accounting();
     test_step_and_free_run_agree();
@@ -658,6 +801,13 @@ int main()
     test_624_boundary_ffff();
     test_624_step_mode_no_double_count();
     test_624_multibyte_no_retrigger();
+
+    // Stage 6.25 tests: sequence field and clearMemoryAccessLog()
+    test_625_sequence_monotonic_across_read_and_write();
+    test_625_clear_access_log_preserves_map();
+    test_625_clear_runtime_map_resets_sequence();
+    test_625_stack_writes_and_reads_present();
+    test_625_call_ret_stack_writes_and_reads();
 
     std::printf("\n[runtime_accounting] %d/%d tests passed (%d failed)\n",
                 tests_passed, tests_run, tests_failed);

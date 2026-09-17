@@ -9,6 +9,7 @@
 #include "io_inspector_window.h"
 #include "vector_screen_window.h"
 #include "memory_map_window.h"
+#include "memory_access_window.h"
 #include "functions_window.h"
 #include "xrefs_window.h"
 #include "call_graph_window.h"
@@ -109,6 +110,9 @@ private:
     
     // Memory Map window (Stage 4.4)
     MemoryMapWindow memoryMap_;
+    
+    // Memory Access window (Stage 6.25)
+    MemoryAccessWindow memoryAccess_;
     
     // Functions window (Stage 4.5)
     FunctionsWindow functionsWindow_;
