@@ -119,11 +119,11 @@ static mcp::json parseTextAsJson(const mcp::json &result) {
 // Tool Registration Tests
 // ---------------------------------------------------------------------------
 
-void test_all_65_tools_registered() {
-    TEST_BEGIN("all 65 tools registered");
+void test_all_64_tools_registered() {
+    TEST_BEGIN("all 64 tools registered");
     Fixture f;
     auto names = f.mcp.registeredToolNames();
-    CHECK_EQ(static_cast<int>(names.size()), 65, "should have 65 tools");
+    CHECK_EQ(static_cast<int>(names.size()), 64, "should have 64 tools");
     TEST_END();
 }
 
@@ -181,9 +181,7 @@ void test_expected_tools_exist() {
         // Stage 6.20: Runtime Memory Analysis
         "debug_clear_memory_access_map", "debug_get_memory_access_map",
         "debug_get_memory_access_log", "debug_create_memory_snapshot",
-        "debug_compare_memory_snapshots",
-        // Server management
-        "debug_shutdown"
+        "debug_compare_memory_snapshots"
     };
 
     for (auto &e : expected) {
@@ -1064,7 +1062,7 @@ int main()
     printf("\033[1;33m========================================\033[0m\n\n");
 
     // Registration
-    test_all_65_tools_registered();
+    test_all_64_tools_registered();
     test_tool_names_have_debug_prefix();
     test_expected_tools_exist();
 

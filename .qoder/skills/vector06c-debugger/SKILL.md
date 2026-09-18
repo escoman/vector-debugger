@@ -419,7 +419,7 @@ Hardware status: UNVERIFIED
 
 ## MCP Tools
 
-Сервер `vector-debugger` предоставляет 65 инструмент `debug_*`:
+Сервер `vector-debugger` предоставляет 64 инструмент `debug_*`:
 
 **Execution**: `debug_run`, `debug_pause`, `debug_step`, `debug_reset`, `debug_is_running`
 
@@ -454,8 +454,6 @@ Hardware status: UNVERIFIED
 **RDB Links**: `debug_add_rdb_link`, `debug_remove_rdb_link`, `debug_get_rdb_links`
 
 **Runtime Memory Analysis**: `debug_clear_memory_access_map`, `debug_get_memory_access_map`, `debug_get_memory_access_log`, `debug_create_memory_snapshot`, `debug_compare_memory_snapshots`
-
-**Server**: `debug_shutdown`
 
 ---
 
