@@ -14,6 +14,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <cmath>
+#include <fstream>
+#include <string>
 
 #include "options.h"
 #include "debugger_types.h"
@@ -98,7 +100,7 @@ static void test_channel_order_and_labels()
     CHECK_EQ(8, SW::NUM_CHANNELS, "NUM_CHANNELS == 8");
 
     static const char *expectedNames[8] = {
-        "Standard Noise Channel",
+        "Tape Out (PC0)",
         "i8253 Channel 1",
         "i8253 Channel 2",
         "i8253 Channel 3",
@@ -108,7 +110,7 @@ static void test_channel_order_and_labels()
         "AY Channel C",
     };
     static const char *expectedSections[8] = {
-        "STANDARD VECTOR SOUND",
+        "Tape Out (PC0)",
         "i8253", "i8253", "i8253",
         "AY", "AY", "AY", "AY",
     };
@@ -450,6 +452,65 @@ static void test_adapter_i8253_port_mapping(DebugAdapter &adapter)
 }
 
 // ---------------------------------------------------------------------------
+// Regression: loading a second ROM must silence a note stuck from the first
+// one. The bootloader (boots.bin 0x0000-0x0010) re-initializes PIA/PPI/i8253
+// after a real reset; ROM load skips it, so DebugAdapter::loadRom replays it.
+// ---------------------------------------------------------------------------
+
+static void test_loadrom_silences_stuck_note(DebugAdapter &adapter)
+{
+    TEST_BEGIN("DebugAdapter: loadRom re-inits sound ports (no stuck note)");
+
+    // --- ROM 1 leaves the machine mid-melody: counter 0 free-running in
+    // square-wave mode with a real tone value, tape-out level high.
+    adapter.reset(false);            // BLKSBR: detach boot, PC=0
+    static const uint8_t melody[] = {
+        0x3E, 0x36, 0xD3, 0x08,      // MVI A,36h / OUT 08h → ctr0 mode 3, LSB+MSB
+        0x3E, 0x10, 0xD3, 0x0B,      // MVI A,10h / OUT 0Bh → load lo
+        0x3E, 0x27, 0xD3, 0x0B,      // MVI A,27h / OUT 0Bh → load hi (10000)
+        0x3E, 0x01, 0xD3, 0x01,      // MVI A,01h / OUT 01h → PC0 (tape-out) high
+    };
+    for (size_t i = 0; i < sizeof(melody); ++i) {
+        adapter.writeMemory(static_cast<uint16_t>(i), melody[i]);
+    }
+    takeSnapshot(adapter);           // consume reset-path counts
+    for (int i = 0; i < 10; ++i) {   // 5 MVI + 5 OUT
+        adapter.stepInstruction();
+    }
+
+    SoundSnapshot s = takeSnapshot(adapter);
+    CHECK_EQ(3, s.timerChannels[0].mode, "before reload: ctr0 stuck in mode 3");
+    CHECK_EQ(10000, s.timerChannels[0].loadValue, "before reload: ctr0 tone loaded");
+    CHECK_EQ(1, s.standardNoise.lastLevel, "before reload: tape-out level high");
+
+    // --- Load ROM 2: must replay the boot ROM's port initialization.
+    const std::string rom2 = "/tmp/v06c_test_stuck_note_second.rom";
+    {
+        std::ofstream f(rom2, std::ios::binary);
+        const uint8_t ret = 0xC9;    // harmless RET at 0100
+        f.write(reinterpret_cast<const char*>(&ret), 1);
+    }
+    bool ok = adapter.loadRom(rom2, 0);
+    CHECK(ok, "second ROM loaded");
+
+    s = takeSnapshot(adapter);
+    // boots.bin control words: A8h/68h/28h → 3-bit mode field = 4 for all
+    // three counters — out of square-wave (3) one-shot-rate (2) modes.
+    CHECK_EQ(4, s.timerChannels[0].mode, "after reload: ctr0 out of square mode");
+    CHECK_EQ(4, s.timerChannels[1].mode, "after reload: ctr1 out of square mode");
+    CHECK_EQ(4, s.timerChannels[2].mode, "after reload: ctr2 out of square mode");
+    CHECK_EQ(0, s.standardNoise.lastLevel, "after reload: tape-out silenced");
+
+    // Latched port state readable through the I/O layer:
+    CHECK_EQ(0x9B, adapter.readIoPort(0x04), "PPI2 control word = 9Bh (boot value)");
+    CHECK_EQ(0x00, adapter.readIoPort(0x03), "PIA1 port A cleared by boot CW write");
+    CHECK_EQ(0x00, adapter.readIoPort(0x02), "PIA1 port B (border/mode) cleared");
+
+    std::remove(rom2.c_str());
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -479,6 +540,7 @@ int main()
     test_adapter_bsr_semantics(adapter);
     test_adapter_ay_independent_from_standard_noise(adapter);
     test_adapter_i8253_port_mapping(adapter);
+    test_loadrom_silences_stuck_note(adapter);
 
     adapter.shutdown();
 

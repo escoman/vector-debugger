@@ -579,6 +579,27 @@ bool DebugAdapter::loadRom(const std::string &path, uint32_t org)
     board.reset(Board::ResetMode::LOADROM);
     // LOADROM sets SP=0xc300 and i8080_init() sets PC=0.
 
+    // The bootloader is skipped when a ROM is loaded directly, but on a
+    // real machine it is the one that re-initializes the sound hardware
+    // after БЛК+ВВОД. Without this, state left by the previous ROM — an
+    // i8253 counter still running in square-wave mode or a latched PIA
+    // Port C tape-out level — keeps sounding as a stuck note under the
+    // new ROM (Board::reset only resets the AY chip itself).
+    // Replicate boots.bin hardware init at 0x0000-0x0010:
+    //   OUT 04,9B / OUT 00,88 / OUT 08,A8 / OUT 08,68 / OUT 08,28
+    io.commit();  // apply any OUT the previous ROM latched but never committed
+    static const uint8_t bootInit[][2] = {
+        {0x04, 0x9B},  // PPI2 control word: ports A/B/C → outputs
+        {0x00, 0x88},  // PIA1 control word → PA=PB=PC=0 (tape-out silent)
+        {0x08, 0xA8},  // i8253 ctr2 → out of square-wave mode, out low
+        {0x08, 0x68},  // i8253 ctr1 → same
+        {0x08, 0x28},  // i8253 ctr0 → same
+    };
+    for (auto &w : bootInit) {
+        io.output(w[0], w[1]);  // fires instrumentation hooks (I/O log, sound)
+        io.commit();            // applies immediately — no frames run here
+    }
+
     return true;
 }
 
