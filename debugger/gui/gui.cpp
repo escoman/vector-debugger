@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <chrono>
 #include <thread>
+#include <sys/stat.h>   // mkdir() for the "Install .desktop" action
 
 // ---------------------------------------------------------------------------
 // Lifecycle
@@ -373,6 +374,21 @@ void DebuggerGui::render(IDebugBackend &backend)
         ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", wavErrorBuffer_);
         if (ImGui::Button("OK")) {
             wavErrorBuffer_[0] = '\0';
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    // "Install .desktop" result (success or error), same modal pattern.
+    if (desktopMsgBuffer_[0]) {
+        ImGui::OpenPopup("Install .desktop");
+    }
+    if (ImGui::BeginPopupModal("Install .desktop", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextColored(desktopMsgError_ ? ImVec4(1.0f, 0.3f, 0.3f, 1.0f)
+                                            : ImVec4(0.3f, 1.0f, 0.4f, 1.0f),
+                           "%s", desktopMsgBuffer_);
+        if (ImGui::Button("OK")) {
+            desktopMsgBuffer_[0] = '\0';
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -780,6 +796,9 @@ void DebuggerGui::renderToolbar(IDebugBackend &backend)
                 }
             }
             ImGui::Separator();
+            if (ImGui::MenuItem("Install .desktop")) {
+                installDesktopFile();
+            }
             if (ImGui::MenuItem("Exit")) {
                 quit_ = true;
             }
@@ -1191,6 +1210,84 @@ void DebuggerGui::loadRomFile(const std::string &path, IDebugBackend &backend)
     } else {
         snprintf(romErrorBuffer_, sizeof(romErrorBuffer_),
                  "Failed to load: %s", romPath.c_str());
+    }
+}
+
+void DebuggerGui::adoptCommandLineRom(const std::string &path)
+{
+    // The ROM was already loaded into the backend by main() before the GUI
+    // existed; here we only do the GUI-side bookkeeping so a command-line /
+    // "Open with..." launch looks identical to the "Open ROM..." menu: show
+    // the filename in the toolbar and record it in the Recent ROMs list.
+    size_t lastSlash = path.rfind('/');
+    currentRomName_ = (lastSlash != std::string::npos)
+        ? path.substr(lastSlash + 1) : path;
+    configManager_.addRecentRom(path);
+}
+
+void DebuggerGui::installDesktopFile()
+{
+    desktopMsgBuffer_[0] = '\0';
+    desktopMsgError_ = false;
+
+    // Destination: ~/.local/share/applications/v06c-debugger.desktop
+    const char *home = getenv("HOME");
+    if (!home || !*home) {
+        snprintf(desktopMsgBuffer_, sizeof(desktopMsgBuffer_),
+                 "Cannot resolve $HOME - the .desktop was not installed.");
+        desktopMsgError_ = true;
+        return;
+    }
+    std::string dir  = std::string(home) + "/.local/share/applications";
+    std::string dest = dir + "/v06c-debugger.desktop";
+
+    // Source: the file CMake generates next to the executable (SDL_GetBasePath
+    // returns the exe directory with a trailing slash). It already carries the
+    // correct absolute Exec/Icon paths for this build, so we copy it verbatim
+    // and keep a single source of truth (res/v06c-debugger.desktop.in).
+    std::string src;
+    if (char *base = SDL_GetBasePath()) {
+        src = std::string(base) + "v06c-debugger.desktop";
+        SDL_free(base);
+    }
+
+    std::string content;
+    bool readOk = false;
+    if (!src.empty()) {
+        if (FILE *f = fopen(src.c_str(), "rb")) {
+            char buf[4096];
+            size_t n;
+            content.clear();
+            while ((n = fread(buf, 1, sizeof(buf), f)) > 0)
+                content.append(buf, n);
+            fclose(f);
+            readOk = true;
+        }
+    }
+    if (!readOk) {
+        snprintf(desktopMsgBuffer_, sizeof(desktopMsgBuffer_),
+                 "Source not found next to the executable:\n%s", src.c_str());
+        desktopMsgError_ = true;
+        return;
+    }
+
+    // Create ~/.local/share/applications (mkdir -p semantics; EEXIST ignored).
+    for (size_t i = 1; i < dir.size(); ++i) {
+        if (dir[i] == '/')
+            mkdir(dir.substr(0, i).c_str(), 0755);
+    }
+    mkdir(dir.c_str(), 0755);
+
+    // Write (create or replace) the destination file.
+    if (FILE *g = fopen(dest.c_str(), "wb")) {
+        fwrite(content.data(), 1, content.size(), g);
+        fclose(g);
+        snprintf(desktopMsgBuffer_, sizeof(desktopMsgBuffer_),
+                 "Installed desktop entry:\n%s", dest.c_str());
+    } else {
+        snprintf(desktopMsgBuffer_, sizeof(desktopMsgBuffer_),
+                 "Failed to write:\n%s", dest.c_str());
+        desktopMsgError_ = true;
     }
 }
 

@@ -65,6 +65,11 @@ public:
 
     // Apply pending workspace initialization (call between frames).
     void applyPendingWorkspace();
+
+    // Adopt a ROM that was loaded before the GUI existed (command line or
+    // "Open with..." launch): show its filename in the toolbar and add it to
+    // Recent ROMs, matching what the "Open ROM..." menu item does.
+    void adoptCommandLineRom(const std::string &path);
     
     // Central Navigation API (Stage 3.9)
     void gotoMemory(uint16_t address);
@@ -155,6 +160,15 @@ private:
     // Open WAV dialog state
     bool showOpenWavDialog_ = false;
     char wavErrorBuffer_[256] = "";
+
+    // "Install .desktop" menu action: result message + destination writer.
+    // Copies the CMake-generated v06c-debugger.desktop (which sits next to
+    // the executable) into ~/.local/share/applications/ so a file manager's
+    // "Open with..." can hand ROM files to the debugger. The message is
+    // surfaced through the same modal pattern as the ROM/WAV error buffers.
+    char desktopMsgBuffer_[512] = "";
+    bool desktopMsgError_ = false;
+    void installDesktopFile();
 
     // Recent ROMs — managed by ConfigManager
     void loadRomFile(const std::string &path, IDebugBackend &backend);

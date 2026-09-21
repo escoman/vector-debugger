@@ -29,6 +29,36 @@ static void emulationThreadFunc(DebugBackend &backend)
     backend.runUntilPause();
 }
 
+// Resolve a launch argument into a plain local filesystem path. A desktop
+// "Open with..." hand-off passes either a raw path ("%f") or a "file://" URI
+// ("%u"/"%U"), the latter percent-encoded (spaces etc.). Normalize both.
+static std::string resolveLaunchPath(std::string p)
+{
+    const std::string scheme = "file://";
+    if (p.rfind(scheme, 0) == 0)          // starts with "file://"
+        p = p.substr(scheme.size());
+    std::string out;
+    out.reserve(p.size());
+    for (size_t i = 0; i < p.size(); ++i) {
+        auto hex = [](char c) -> int {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+            return -1;
+        };
+        if (p[i] == '%' && i + 2 < p.size()) {
+            int hi = hex(p[i + 1]), lo = hex(p[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                out.push_back(static_cast<char>(hi * 16 + lo));
+                i += 2;
+                continue;
+            }
+        }
+        out.push_back(p[i]);
+    }
+    return out;
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
@@ -50,9 +80,10 @@ int main(int argc, char *argv[])
     DebugBackend backend(adapter);
     g_adapter_backend = &backend;
 
-    // --- Load ROM from command line if provided ---
+    // --- Load ROM from command line / "Open with..." hand-off if provided ---
+    std::string cliRomPath;   // non-empty only after a successful load
     if (argc > 1) {
-        std::string rom_path = argv[1];
+        std::string rom_path = resolveLaunchPath(argv[1]);
         uint32_t org = 0;
 
         // If user explicitly provides an origin address, use it.
@@ -63,6 +94,8 @@ int main(int argc, char *argv[])
 
         if (!backend.loadRom(rom_path, org)) {
             std::fprintf(stderr, "Failed to load ROM: %s\n", rom_path.c_str());
+        } else {
+            cliRomPath = std::move(rom_path);
         }
     }
 
@@ -76,6 +109,13 @@ int main(int argc, char *argv[])
         backend.requestQuit();
         emuThread.join();
         return 1;
+    }
+
+    // A ROM loaded before the GUI existed (command line / "Open with...")
+    // must still show its filename in the toolbar and be added to Recent
+    // ROMs, exactly like the "Open ROM..." menu item does.
+    if (!cliRomPath.empty()) {
+        gui.adoptCommandLineRom(cliRomPath);
     }
 
     // --- Main loop ---
