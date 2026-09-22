@@ -419,7 +419,7 @@ Hardware status: UNVERIFIED
 
 ## MCP Tools
 
-Сервер `vector-debugger` предоставляет 64 инструмент `debug_*`:
+Сервер `vector-debugger` предоставляет 70 инструментов `debug_*` (актуальный список — всегда через `tools/list`):
 
 **Execution**: `debug_run`, `debug_pause`, `debug_step`, `debug_reset`, `debug_is_running`
 
@@ -454,6 +454,8 @@ Hardware status: UNVERIFIED
 **RDB Links**: `debug_add_rdb_link`, `debug_remove_rdb_link`, `debug_get_rdb_links`
 
 **Runtime Memory Analysis**: `debug_clear_memory_access_map`, `debug_get_memory_access_map`, `debug_get_memory_access_log`, `debug_create_memory_snapshot`, `debug_compare_memory_snapshots`
+
+**Batch Analysis (Stage 6.26)**: `debug_disassemble_image` (пакетная линейная дизассемблировка крупного диапазона), `debug_coverage_report` (code/uncovered ranges + branch targets без покрытия), `debug_diff_memory` (полный diff снапшотов со старыми/новыми байтами), `debug_find_bytecode_sequence` (поиск байтового шаблона с маской), `debug_find_immediate_in_range` (поиск операнда-константы через дизассемблер), `debug_get_vram_bytes` (сырые байты VRAM 0x8000–0xFFFF). Семантику (code/data, имена) определяет клиент — MCP только отдаёт данные.
 
 ---
 

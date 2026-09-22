@@ -97,6 +97,50 @@ public:
     AgentApiResult<DisassembleRangeResult>
     disassembleRange(uint16_t address, uint16_t size);
 
+    // -- Batch analysis (Stage 6.26) ------------------------------------------
+    // Deterministic aggregation of existing operations for ROM analysis.
+    // No code/data classification, no RDB modification, no state changes.
+
+    // Whole-image linear sweep. Equivalent to disassembleRange() over the same
+    // range (identical sweep algorithm), but accepts length up to 64K and
+    // fails with LimitExceeded instead of silently truncating the result.
+    AgentApiResult<DisassembleRangeResult>
+    disassembleImage(uint16_t address, uint32_t length);
+
+    // Coverage report: analyze code from entry points, then aggregate
+    // code ranges / uncovered gaps / branch targets without analyzed code.
+    // entryPoints is the single internal form (single start_address = size-1
+    // vector) — callers must not care about analyzeCode()'s param exclusivity.
+    AgentApiResult<CoverageReportResult>
+    coverageReport(const std::vector<uint16_t> &entryPoints,
+                   uint16_t imageStart, uint32_t imageLength,
+                   size_t maxInstructions);
+
+    // Complete byte-for-byte memory diff of two snapshots over a range.
+    // Unlike compareMemorySnapshots(), reports old/new values and fails
+    // with LimitExceeded rather than under-reporting dense diffs.
+    AgentApiResult<MemoryDiffResult>
+    diffMemorySnapshots(uint32_t idA, uint32_t idB,
+                        uint16_t start, uint32_t length);
+
+    // Byte-pattern search with optional per-byte mask (0 = wildcard).
+    // mask empty ⇒ exact match. Addresses ascending, overlapping matches kept.
+    AgentApiResult<ByteSequenceSearchResult>
+    findBytecodeSequence(uint16_t rangeStart, uint16_t rangeEnd,
+                         const std::vector<uint8_t> &pattern,
+                         const std::vector<uint8_t> &mask,
+                         size_t maxMatches);
+
+    // Numeric operand (immediate/address) search using the debugger's own
+    // disassembler for instruction interpretation — no second opcode decoder.
+    AgentApiResult<ImmediateSearchResult>
+    findImmediateInRange(uint16_t rangeStart, uint16_t rangeEnd,
+                         uint16_t value, size_t maxMatches);
+
+    // Raw VRAM bytes (memory-mapped plane region 0x8000..0xFFFF).
+    AgentApiResult<std::vector<uint8_t>>
+    getVramBytes(uint16_t address, uint32_t length);
+
     // -- Instruction History -------------------------------------------------
 
     AgentApiResult<std::vector<InstructionHistoryEntry>>
@@ -236,6 +280,11 @@ private:
     AgentLog       log_;
 
     // -- Internal helpers ---------------------------------------------------
+
+    // Shared linear sweep used by disassembleRange() and disassembleImage().
+    // No validation — caller guarantees size fits the address space.
+    DisassembleRangeResult
+    linearDisassemble(uint16_t address, uint32_t size);
 
     // Disassemble a function starting at 'address' until RET/HLT/unconditional
     // JMP or the next known symbol.  Returns the instruction list.

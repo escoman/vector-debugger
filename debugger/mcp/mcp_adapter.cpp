@@ -27,7 +27,15 @@ McpServer::McpServer(AgentApi &api)
     conf.version = "0.6.4";
     server_ = std::make_unique<mcp::server>(conf);
     server_->set_server_info("v06c-mcp", "0.6.4");
-    server_->set_capabilities({{"tools", {{"listChanged", false}}}});
+    // Stage 6.26 §4: capability discovery.  tools/list always reflects the
+    // actually registered tools (server_->get_tools()); the machine-readable
+    // v06c.api_version lets clients detect batch-analysis capability without
+    // guessing from the binary version.  Bump api_version when new tools or
+    // result fields are added: 2 = Stage 6.26 batch analysis tools.
+    server_->set_capabilities({
+        {"tools", {{"listChanged", false}}},
+        {"v06c",  {{"api_version", 2}}}
+    });
 }
 
 McpServer::~McpServer() = default;
@@ -86,6 +94,7 @@ void McpServer::registerAllTools() {
     registerAnnotationTools();
     registerRdbTools();
     registerRuntimeAnalysisTools();  // Stage 6.20
+    registerBatchAnalysisTools();    // Stage 6.26
 }
 
 void McpServer::runStdio() {
@@ -1598,6 +1607,414 @@ void McpServer::registerRuntimeAnalysisTools() {
             diffJson["snapshot_a"] = static_cast<int>(idA);
             diffJson["snapshot_b"] = static_cast<int>(idB);
             return textContent(diffJson);
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Batch analysis tools (Stage 6.26) — 6 tools
+//
+// MCP-сервер только предоставляет данные и агрегирует существующие операции.
+// Классификация code/data/tables/strings, именование и семантика остаются за
+// клиентом (Python-анализатор / AI-агент).
+// ---------------------------------------------------------------------------
+
+// Structured ErrorCode from the shared Agent API model (§19).
+static const char *agentErrorCodeName(ErrorCode code) {
+    switch (code) {
+    case ErrorCode::None:            return "none";
+    case ErrorCode::InvalidArgument: return "invalid_argument";
+    case ErrorCode::InvalidAddress:  return "invalid_address";
+    case ErrorCode::InvalidRange:    return "invalid_range";
+    case ErrorCode::NoRomLoaded:     return "no_rom_loaded";
+    case ErrorCode::NotPaused:       return "not_paused";
+    case ErrorCode::NotRunning:      return "not_running";
+    case ErrorCode::OperationFailed: return "operation_failed";
+    case ErrorCode::Timeout:         return "timeout";
+    case ErrorCode::Unsupported:     return "unsupported";
+    case ErrorCode::NotFound:        return "not_found";
+    case ErrorCode::LimitExceeded:   return "limit_exceeded";
+    }
+    return "operation_failed";
+}
+
+// Instruction JSON identical in shape to debug_disassemble_range (§5.2).
+static mcp::json rangeInstructionJson(const DisassembledRangeInstruction &inst) {
+    mcp::json instrJson;
+    instrJson["address"]  = mcp_json::hex16(inst.address);
+    instrJson["mnemonic"] = inst.mnemonic;
+    instrJson["operands"] = inst.operands;
+    instrJson["size"]     = inst.size;
+
+    mcp::json bytesArr = mcp::json::array();
+    for (auto b : inst.bytes) bytesArr.push_back(b);
+    instrJson["bytes"] = bytesArr;
+
+    if (inst.branch_target.has_value()) {
+        instrJson["branch_target"] = inst.branch_target.value();
+    } else {
+        instrJson["branch_target"] = nullptr;
+    }
+
+    if (inst.branch_type.empty()) {
+        instrJson["branch_type"] = nullptr;
+    } else {
+        instrJson["branch_type"] = inst.branch_type;
+    }
+    return instrJson;
+}
+
+// Parse a JSON array of byte-sized ints into a byte vector.
+static std::vector<uint8_t> getByteArray(const mcp::json &params, const char *name,
+                                          bool required, size_t maxLen) {
+    if (!params.contains(name)) {
+        if (required) {
+            throw mcp::mcp_exception(mcp::error_code::invalid_params,
+                std::string("missing required parameter: ") + name);
+        }
+        return {};
+    }
+    if (!params[name].is_array()) {
+        throw mcp::mcp_exception(mcp::error_code::invalid_params,
+            std::string(name) + " must be an array");
+    }
+    const auto &arr = params[name];
+    if (arr.size() > maxLen) {
+        throw mcp::mcp_exception(mcp::error_code::invalid_params,
+            std::string(name) + " exceeds maximum length (" +
+            std::to_string(maxLen) + ")");
+    }
+    std::vector<uint8_t> out;
+    out.reserve(arr.size());
+    for (const auto &v : arr) {
+        int b = v.get<int>();
+        if (b < 0 || b > 0xFF) {
+            throw mcp::mcp_exception(mcp::error_code::invalid_params,
+                std::string(name) + " values must be 0..255");
+        }
+        out.push_back(static_cast<uint8_t>(b));
+    }
+    return out;
+}
+
+// Inclusive 16-bit range pair [range_start, range_end].
+static void getRangeEndpoints(const mcp::json &params, uint16_t &start, uint16_t &end) {
+    start = getAddress(params, "range_start");
+    end   = getAddress(params, "range_end");
+    if (end < start) {
+        throw mcp::mcp_exception(mcp::error_code::invalid_params,
+            "range_end must be >= range_start");
+    }
+}
+
+void McpServer::registerBatchAnalysisTools() {
+    // debug_disassemble_image (Stage 6.26 §5)
+    {
+        auto tool = mcp::tool_builder("debug_disassemble_image")
+            .with_description("Batch linear disassembly of a large ROM-image range in one call. "
+                              "Result equals debug_disassemble_range over the same range. "
+                              "Does NOT classify code/data and does NOT modify RDB.")
+            .with_number_param("address", "Start address (0..65535)")
+            .with_number_param("length", "Number of bytes (1..65536)")
+            .build();
+        addNumericConstraint(tool, "address", 0, 65535);
+        addNumericConstraint(tool, "length", 1, static_cast<int>(AgentLimits::MAX_DISASSEMBLE_IMAGE_LENGTH));
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            uint16_t addr = getAddress(params);
+            uint32_t length = static_cast<uint32_t>(getCount(params, "length", 0));
+            if (length == 0) {
+                throw mcp::mcp_exception(mcp::error_code::invalid_params, "length must be >= 1");
+            }
+
+            auto r = api_.disassembleImage(addr, length);
+            if (!r.success) return errorContent(agentErrorCodeName(r.error_code), r.error_message);
+
+            const auto &result = r.value;
+            mcp::json instrs = mcp::json::array();
+            for (const auto &inst : result.instructions) {
+                instrs.push_back(rangeInstructionJson(inst));
+            }
+            return textContent({
+                {"address",                mcp_json::hex16(addr)},
+                {"length",                 static_cast<int>(length)},
+                {"instruction_count",      static_cast<int>(result.instructions.size())},
+                {"incomplete_instruction", result.incomplete_instruction},
+                {"max_instructions_limit", static_cast<int>(AgentLimits::MAX_DISASSEMBLE_IMAGE_INSTRUCTIONS)},
+                {"instructions",           instrs}
+            });
+        });
+    }
+
+    // debug_coverage_report (Stage 6.26 §6)
+    {
+        auto tool = mcp::tool_builder("debug_coverage_report")
+            .with_description("Aggregate code-coverage report: analyzed code ranges, uncovered gaps, "
+                              "branch targets, and branch targets WITHOUT analyzed code (JCC blind spots). "
+                              "Runs control-flow analysis from entry points; does NOT modify RDB. "
+                              "'start_address' and 'addresses' may be combined.")
+            .with_number_param("start_address", "Single entry point (optional)", false)
+            .with_array_param("addresses", "Extra entry points (optional)", "integer", false)
+            .with_number_param("range_start", "Image range start (default 0)", false)
+            .with_number_param("range_length", "Image range length (default 65536)", false)
+            .with_number_param("max_instructions", "Analysis budget (default 10000)", false)
+            .build();
+        addNumericConstraint(tool, "start_address", 0, 65535);
+        addNumericConstraint(tool, "range_start", 0, 65535);
+        addNumericConstraint(tool, "range_length", 1, 65536);
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            // §15: the batch API hides analyzeCode's param exclusivity —
+            // start_address and addresses are simply merged into one vector.
+            std::vector<uint16_t> entryPoints;
+            if (params.contains("start_address")) {
+                entryPoints.push_back(getAddress(params, "start_address"));
+            }
+            if (params.contains("addresses")) {
+                if (!params["addresses"].is_array()) {
+                    throw mcp::mcp_exception(mcp::error_code::invalid_params,
+                        "'addresses' must be an array");
+                }
+                for (const auto &v : params["addresses"]) {
+                    int addr = v.get<int>();
+                    if (addr < 0 || addr > 65535) {
+                        throw mcp::mcp_exception(mcp::error_code::invalid_params,
+                            "each address must be 0..65535");
+                    }
+                    entryPoints.push_back(static_cast<uint16_t>(addr));
+                }
+            }
+            if (entryPoints.empty()) {
+                throw mcp::mcp_exception(mcp::error_code::invalid_params,
+                    "at least one of 'start_address' / 'addresses' is required");
+            }
+
+            uint16_t rangeStart = params.contains("range_start")
+                ? getAddress(params, "range_start") : 0;
+            uint32_t rangeLength = static_cast<uint32_t>(
+                getCount(params, "range_length", 65536));
+            size_t maxInstr = getCount(params, "max_instructions",
+                                        AgentLimits::MAX_CODE_ANALYSIS_INSTRUCTIONS);
+
+            auto r = api_.coverageReport(entryPoints, rangeStart, rangeLength, maxInstr);
+            if (!r.success) return errorContent(agentErrorCodeName(r.error_code), r.error_message);
+
+            const auto &rep = r.value;
+            auto rangesJson = [](const std::vector<CoverageRange> &ranges) {
+                mcp::json out = mcp::json::array();
+                for (const auto &rg : ranges) {
+                    out.push_back({{"start", mcp_json::hex16(rg.start)},
+                                   {"end",   mcp_json::hex16(rg.end)},
+                                   {"size",  static_cast<int>(rg.end) - rg.start + 1}});
+                }
+                return out;
+            };
+
+            mcp::json targets = mcp::json::array();
+            for (const auto &bt : rep.branchTargets) {
+                targets.push_back({{"from", mcp_json::hex16(bt.from)},
+                                   {"to",   mcp_json::hex16(bt.to)},
+                                   {"type", bt.type}});
+            }
+            mcp::json uncoveredTargets = mcp::json::array();
+            for (auto a : rep.uncoveredBranchTargets) {
+                uncoveredTargets.push_back(mcp_json::hex16(a));
+            }
+
+            double percent = rep.imageBytes > 0
+                ? (100.0 * static_cast<double>(rep.codeBytes) /
+                   static_cast<double>(rep.imageBytes))
+                : 0.0;
+
+            mcp::json imageObj = {{"start", mcp_json::hex16(rep.imageStart)},
+                                  {"end",   mcp_json::hex16(rep.imageEnd)}};
+            mcp::json statsObj = {
+                {"instruction_count", static_cast<int>(rep.instructionCount)},
+                {"code_bytes",        static_cast<int>(rep.codeBytes)},
+                {"image_bytes",       static_cast<int>(rep.imageBytes)},
+                {"coverage_percent",  static_cast<int>(percent * 100 + 0.5) / 100.0},
+                {"truncated",         rep.truncated}
+            };
+
+            return textContent({
+                {"image",                     imageObj},
+                {"code_ranges",               rangesJson(rep.codeRanges)},
+                {"uncovered_ranges",          rangesJson(rep.uncoveredRanges)},
+                {"branch_targets",            targets},
+                {"uncovered_branch_targets",  uncoveredTargets},
+                {"stats",                     statsObj}
+            });
+        });
+    }
+
+    // debug_diff_memory (Stage 6.26 §7)
+    {
+        auto tool = mcp::tool_builder("debug_diff_memory")
+            .with_description("Complete byte-for-byte diff of two memory snapshots over a range, "
+                              "with old/new values per contiguous range. Unlike "
+                              "debug_compare_memory_snapshots, a dense diff that exceeds the "
+                              "limits is a limit_exceeded error — never a silent under-report.")
+            .with_number_param("snapshot_a", "First snapshot ID")
+            .with_number_param("snapshot_b", "Second snapshot ID")
+            .with_number_param("address", "Range start (default: covered by both snapshots)", false)
+            .with_number_param("length", "Range length (default: common covered range)", false)
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            if (!params.contains("snapshot_a") || !params.contains("snapshot_b")) {
+                throw mcp::mcp_exception(mcp::error_code::invalid_params,
+                    "missing required parameters: snapshot_a, snapshot_b");
+            }
+            uint32_t idA = static_cast<uint32_t>(params["snapshot_a"].get<int>());
+            uint32_t idB = static_cast<uint32_t>(params["snapshot_b"].get<int>());
+
+            uint16_t start = params.contains("address")
+                ? getAddress(params, "address") : 0;
+            uint32_t length = params.contains("length")
+                ? static_cast<uint32_t>(params["length"].get<int>()) : 0;
+            if (length == 0) {
+                // Default: full range of snapshot A clipped to snapshot B.
+                auto snapA = api_.getMemorySnapshot(idA);
+                if (!snapA.success) {
+                    return errorContent(agentErrorCodeName(snapA.error_code), snapA.error_message);
+                }
+                start = snapA.value.start_address;
+                length = static_cast<uint32_t>(snapA.value.data.size());
+            }
+
+            auto r = api_.diffMemorySnapshots(idA, idB, start, length);
+            if (!r.success) return errorContent(agentErrorCodeName(r.error_code), r.error_message);
+
+            const auto &diff = r.value;
+            mcp::json ranges = mcp::json::array();
+            for (const auto &rg : diff.ranges) {
+                mcp::json oldArr = mcp::json::array(), newArr = mcp::json::array();
+                for (auto b : rg.oldBytes) oldArr.push_back(b);
+                for (auto b : rg.newBytes) newArr.push_back(b);
+                ranges.push_back({
+                    {"address", mcp_json::hex16(rg.address)},
+                    {"size",    static_cast<int>(rg.oldBytes.size())},
+                    {"old",     oldArr},
+                    {"new",     newArr}
+                });
+            }
+            return textContent({
+                {"start",           mcp_json::hex16(diff.start)},
+                {"length",          static_cast<int>(diff.length)},
+                {"changed_bytes",   static_cast<int>(diff.changedBytes)},
+                {"range_count",     static_cast<int>(diff.ranges.size())},
+                {"snapshot_a",      static_cast<int>(idA)},
+                {"snapshot_b",      static_cast<int>(idB)},
+                {"ranges",          ranges}
+            });
+        });
+    }
+
+    // debug_find_bytecode_sequence (Stage 6.26 §8)
+    {
+        auto tool = mcp::tool_builder("debug_find_bytecode_sequence")
+            .with_description("Find a byte pattern (optionally masked) in a memory range. "
+                              "Returns matching addresses only — no interpretation of what the "
+                              "bytes mean. Overlapping matches are reported. Range is inclusive.")
+            .with_number_param("range_start", "First address to scan (0..65535)")
+            .with_number_param("range_end", "Last address to scan, inclusive (0..65535)")
+            .with_array_param("pattern", "Byte values to find (0..255 each, max 32)", "integer", true)
+            .with_array_param("mask", "Optional per-byte mask: 0 = wildcard, else must match", "integer", false)
+            .with_number_param("max_matches", "Maximum matches (default 1000, hard cap 10000)", false)
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            uint16_t start, end;
+            getRangeEndpoints(params, start, end);
+            auto pattern = getByteArray(params, "pattern", true,
+                                        AgentLimits::MAX_BYTECODE_PATTERN_LENGTH);
+            auto mask    = getByteArray(params, "mask", false,
+                                        AgentLimits::MAX_BYTECODE_PATTERN_LENGTH);
+            size_t maxMatches = getCount(params, "max_matches", AgentLimits::MAX_SEARCH_MATCHES);
+
+            auto r = api_.findBytecodeSequence(start, end, pattern, mask, maxMatches);
+            if (!r.success) return errorContent(agentErrorCodeName(r.error_code), r.error_message);
+
+            mcp::json addresses = mcp::json::array();
+            for (auto a : r.value.addresses) addresses.push_back(mcp_json::hex16(a));
+            return textContent({
+                {"range_start",   mcp_json::hex16(r.value.rangeStart)},
+                {"range_end",     mcp_json::hex16(r.value.rangeEnd)},
+                {"scanned_bytes", static_cast<int>(r.value.scannedBytes)},
+                {"match_count",   static_cast<int>(r.value.addresses.size())},
+                {"addresses",     addresses}
+            });
+        });
+    }
+
+    // debug_find_immediate_in_range (Stage 6.26 §9)
+    {
+        auto tool = mcp::tool_builder("debug_find_immediate_in_range")
+            .with_description("Find instructions whose numeric operand (immediate or address) "
+                              "equals the given value. Instruction interpretation is done by the "
+                              "Debugger disassembler (linear sweep). Range is inclusive.")
+            .with_number_param("range_start", "First address to scan (0..65535)")
+            .with_number_param("range_end", "Last address to scan, inclusive (0..65535)")
+            .with_number_param("value", "Operand value to match (0..65535)")
+            .with_number_param("max_matches", "Maximum matches (default 1000, hard cap 10000)", false)
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            uint16_t start, end;
+            getRangeEndpoints(params, start, end);
+            uint16_t value = getAddress(params, "value");
+            size_t maxMatches = getCount(params, "max_matches", AgentLimits::MAX_SEARCH_MATCHES);
+
+            auto r = api_.findImmediateInRange(start, end, value, maxMatches);
+            if (!r.success) return errorContent(agentErrorCodeName(r.error_code), r.error_message);
+
+            mcp::json matches = mcp::json::array();
+            for (const auto &m : r.value.matches) {
+                mcp::json bytesArr = mcp::json::array();
+                for (auto b : m.bytes) bytesArr.push_back(b);
+                std::string text = m.operands.empty() ? m.mnemonic
+                                                      : m.mnemonic + " " + m.operands;
+                matches.push_back({
+                    {"address",  mcp_json::hex16(m.address)},
+                    {"mnemonic", m.mnemonic},
+                    {"operands", m.operands},
+                    {"text",     text},
+                    {"bytes",    bytesArr}
+                });
+            }
+            return textContent({
+                {"range_start", mcp_json::hex16(r.value.rangeStart)},
+                {"range_end",   mcp_json::hex16(r.value.rangeEnd)},
+                {"value",       mcp_json::hex16(r.value.value)},
+                {"match_count", static_cast<int>(r.value.matches.size())},
+                {"matches",     matches}
+            });
+        });
+    }
+
+    // debug_get_vram_bytes (Stage 6.26 §10)
+    {
+        auto tool = mcp::tool_builder("debug_get_vram_bytes")
+            .with_description("Read raw VRAM bytes from the memory-mapped VRAM region "
+                              "(0x8000..0xFFFF, four 8K bit-planes). Contents only — no "
+                              "decoding of pixel semantics.")
+            .with_number_param("address", "VRAM address (0x8000..0xFFFF)")
+            .with_number_param("length", "Number of bytes (1..32768)")
+            .build();
+        addNumericConstraint(tool, "address", 0x8000, 0xFFFF);
+        addNumericConstraint(tool, "length", 1, static_cast<int>(AgentLimits::MAX_VRAM_READ_RANGE));
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            uint16_t addr = getAddress(params);
+            uint32_t length = static_cast<uint32_t>(getCount(params, "length", 0));
+            if (length == 0) {
+                throw mcp::mcp_exception(mcp::error_code::invalid_params, "length must be >= 1");
+            }
+
+            auto r = api_.getVramBytes(addr, length);
+            if (!r.success) return errorContent(agentErrorCodeName(r.error_code), r.error_message);
+
+            mcp::json bytesArr = mcp::json::array();
+            for (auto b : r.value) bytesArr.push_back(b);
+            return textContent({
+                {"address", mcp_json::hex16(addr)},
+                {"length",  static_cast<int>(r.value.size())},
+                {"bytes",   bytesArr}
+            });
         });
     }
 }

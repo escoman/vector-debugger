@@ -40,7 +40,8 @@ enum class ErrorCode
     OperationFailed,
     Timeout,
     Unsupported,
-    NotFound            // Stage 6.3: object not found by valid key (symbol, breakpoint)
+    NotFound,           // Stage 6.3: object not found by valid key (symbol, breakpoint)
+    LimitExceeded       // Stage 6.26: batch tool output exceeds a formalized limit
 };
 
 // ---------------------------------------------------------------------------
@@ -145,6 +146,15 @@ namespace AgentLimits {
     static const size_t MAX_ANALYSIS_ENTRY_POINTS = 256;
     static const size_t MAX_MEMORY_ACCESS_LOG  = 50000;  // Stage 6.20: bounded access log
     static const size_t MAX_MEMORY_SNAPSHOTS   = 16;     // Stage 6.20: max concurrent snapshots
+    // -- Stage 6.26: batch analysis tool limits ------------------------------
+    static const size_t MAX_DISASSEMBLE_IMAGE_LENGTH    = 65536;   // full 64K address space
+    static const size_t MAX_DISASSEMBLE_IMAGE_INSTRUCTIONS = 40000;
+    static const size_t MAX_BYTECODE_PATTERN_LENGTH     = 32;      // pattern/mask length
+    static const size_t MAX_SEARCH_MATCHES              = 1000;    // default search cap
+    static const size_t MAX_SEARCH_MATCHES_HARD         = 10000;   // requested cap ceiling
+    static const size_t MAX_DIFF_CHANGED_RANGES         = 4096;    // aggregated diff ranges
+    static const size_t MAX_DIFF_CHANGED_BYTES          = 32768;   // reported diff bytes
+    static const size_t MAX_VRAM_READ_RANGE             = 32768;   // VRAM is 32K (4 planes)
 }
 
 // ---------------------------------------------------------------------------
@@ -663,4 +673,78 @@ struct DisassembleRangeResult
     uint16_t size = 0;
     std::vector<DisassembledRangeInstruction> instructions;
     bool incomplete_instruction = false;  // true if last instruction extends beyond range
+};
+
+// ---------------------------------------------------------------------------
+// Batch analysis types — Stage 6.26 (MCP batch analysis tools)
+//
+// Pure data aggregation: these structures carry deterministic facts derived
+// from existing analysis (analyzeCodeMulti / disassembleRange / snapshots).
+// No code/data classification, no semantics — that stays with the client.
+// ---------------------------------------------------------------------------
+
+struct CoverageRange
+{
+    uint16_t start = 0;
+    uint16_t end   = 0;   // inclusive
+};
+
+struct CoverageBranchTarget
+{
+    uint16_t    from = 0;
+    uint16_t    to   = 0;
+    std::string type;     // "JMP", "JCC", "CALL", "CALLCC", "RST"
+};
+
+struct CoverageReportResult
+{
+    uint16_t imageStart = 0;
+    uint16_t imageEnd   = 0;                    // inclusive
+    std::vector<CoverageRange> codeRanges;      // analyzed code, clipped to image range
+    std::vector<CoverageRange> uncoveredRanges; // image bytes not covered by code
+    std::vector<CoverageBranchTarget> branchTargets;             // sorted by (from, to)
+    std::vector<uint16_t> uncoveredBranchTargets;                // sorted ascending, unique
+    size_t imageBytes       = 0;
+    size_t codeBytes        = 0;
+    size_t instructionCount = 0;
+    bool   truncated        = false;            // analysis hit maxInstructions
+};
+
+struct MemoryDiffRange
+{
+    uint16_t address = 0;
+    std::vector<uint8_t> oldBytes;
+    std::vector<uint8_t> newBytes;
+};
+
+struct MemoryDiffResult
+{
+    uint16_t start = 0;
+    size_t   length = 0;
+    size_t   changedBytes = 0;
+    std::vector<MemoryDiffRange> ranges;        // contiguous, ascending, complete
+};
+
+struct ByteSequenceSearchResult
+{
+    uint16_t rangeStart = 0;
+    uint16_t rangeEnd   = 0;   // inclusive
+    size_t   scannedBytes = 0;
+    std::vector<uint16_t> addresses;            // ascending, overlapping matches included
+};
+
+struct ImmediateMatch
+{
+    uint16_t    address = 0;
+    std::string mnemonic;
+    std::string operands;
+    std::vector<uint8_t> bytes;
+};
+
+struct ImmediateSearchResult
+{
+    uint16_t rangeStart = 0;
+    uint16_t rangeEnd   = 0;   // inclusive
+    uint16_t value      = 0;
+    std::vector<ImmediateMatch> matches;        // ascending by address
 };

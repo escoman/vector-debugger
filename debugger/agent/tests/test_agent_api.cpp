@@ -1217,26 +1217,28 @@ static void test_get_screen_info()
 
 static void test_get_vram_info()
 {
-    TEST_BEGIN("getVramInfo returns 1 plane in 256-mode");
+    TEST_BEGIN("getVramInfo returns 4 fixed bit-planes in 256-mode");
     MockAgentBackend mock;
     AgentApi api(mock);
 
     auto r = api.getVramInfo();
     CHECK(r.success, "succeeds");
-    CHECK_EQ(1u, (unsigned)r.value.planes.size(), "1 plane in 256-mode");
+    // Stage 6.20: VRAM is exposed as the 4 real bit-planes regardless of mode
+    CHECK_EQ(4u, (unsigned)r.value.planes.size(), "4 planes");
     CHECK(!r.value.mode512, "256-mode");
     CHECK_EQ(0xC000u, (unsigned)r.value.vram_base, "vram_base = 0xC000");
 
-    // Single screen plane at vramBase, size = 32 * 256 = 8192
+    // Fixed plane addresses, 8 KB each
     CHECK_EQ(0u, (unsigned)r.value.planes[0].plane, "plane 0 index");
-    CHECK_EQ(0xC000u, (unsigned)r.value.planes[0].address, "plane 0 addr = vramBase");
+    CHECK_EQ(0xE000u, (unsigned)r.value.planes[0].address, "plane 0 addr = 0xE000");
     CHECK_EQ(8192u, (unsigned)r.value.planes[0].size, "plane 0 size = 8192");
+    CHECK_EQ(0x8000u, (unsigned)r.value.planes[3].address, "plane 3 addr = 0x8000");
     TEST_END();
 }
 
 static void test_get_vram_info_512()
 {
-    TEST_BEGIN("getVramInfo returns 2 planes in 512-mode");
+    TEST_BEGIN("getVramInfo returns 4 fixed bit-planes in 512-mode");
     MockAgentBackend mock;
     mock.setVideoMode(true);  // 512-mode
     AgentApi api(mock);
@@ -1244,17 +1246,14 @@ static void test_get_vram_info_512()
     auto r = api.getVramInfo();
     CHECK(r.success, "succeeds");
     CHECK(r.value.mode512, "512-mode");
-    CHECK_EQ(2u, (unsigned)r.value.planes.size(), "2 planes in 512-mode");
+    CHECK_EQ(4u, (unsigned)r.value.planes.size(), "4 planes in 512-mode");
 
-    // Plane 0: 0xC000, 16 KB
+    // Same fixed plane layout in both modes
     CHECK_EQ(0u, (unsigned)r.value.planes[0].plane, "plane 0 index");
-    CHECK_EQ(0xC000u, (unsigned)r.value.planes[0].address, "plane 0 addr = C000");
-    CHECK_EQ(16384u, (unsigned)r.value.planes[0].size, "plane 0 size = 16384");
-
-    // Plane 1: 0xE000, 16 KB
+    CHECK_EQ(0xE000u, (unsigned)r.value.planes[0].address, "plane 0 addr = E000");
+    CHECK_EQ(8192u, (unsigned)r.value.planes[0].size, "plane 0 size = 8192");
     CHECK_EQ(1u, (unsigned)r.value.planes[1].plane, "plane 1 index");
-    CHECK_EQ(0xE000u, (unsigned)r.value.planes[1].address, "plane 1 addr = E000");
-    CHECK_EQ(16384u, (unsigned)r.value.planes[1].size, "plane 1 size = 16384");
+    CHECK_EQ(0xC000u, (unsigned)r.value.planes[1].address, "plane 1 addr = C000");
     TEST_END();
 }
 
@@ -2104,10 +2103,13 @@ static void test_disassemble_range_invalid()
     CHECK(!r1.success, "size=0 fails");
     CHECK_EQ(static_cast<int>(ErrorCode::InvalidArgument), static_cast<int>(r1.error_code), "InvalidArgument");
 
-    // size > 16384
+    // Stage 6.20: cap raised to the full 64K space — MAX_MEMORY_READ_RANGE=65536
+    // is unreachable for uint16_t size, so a large in-range sweep must succeed
     auto r2 = api.disassembleRange(0x0000, 20000);
-    CHECK(!r2.success, "size>16384 fails");
-    CHECK_EQ(static_cast<int>(ErrorCode::InvalidRange), static_cast<int>(r2.error_code), "InvalidRange");
+    CHECK(r2.success, "size=20000 within 64K succeeds");
+    // Mostly 1-byte NOPs minus a few multi-byte program instructions
+    CHECK(r2.value.instructions.size() >= 19900 &&
+          r2.value.instructions.size() <= 20000, "full linear sweep");
 
     // address + size > 64K
     auto r3 = api.disassembleRange(0xFF00, 0x0200);

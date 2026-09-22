@@ -40,9 +40,15 @@ Example Claude Desktop configuration (`claude_desktop_config.json`):
 }
 ```
 
-## MCP Tools (38 tools)
+## MCP Tools (70 tools)
 
 All tools have the `debug_` prefix. Each is a thin wrapper over an AgentApi method.
+
+> The authoritative tool list is what the server returns from `tools/list` — clients must
+> not hardcode the count. Machine-readable capability marker: `v06c.api_version` in the
+> `initialize` result (2 = Stage 6.26 batch analysis tools). The grouped tables below were
+> written for Stage 6.4 and do not list every tool added in Stages 6.11–6.25; the
+> Stage 6.26 batch tools are documented at the end of this section.
 
 ### Execution (5)
 | Tool | Description |
@@ -134,6 +140,20 @@ All tools have the `debug_` prefix. Each is a thin wrapper over an AgentApi meth
 | `debug_delete_function` | Delete a function |
 | `debug_add_label` | Add a label at address |
 
+### Batch Analysis — Stage 6.26 (6)
+| Tool | Description |
+|---|---|
+| `debug_disassemble_image` | Batch linear disassembly of a large ROM-image range (start + length ≤ 64K); result equals N × `debug_disassemble_range`; no code/data classification |
+| `debug_coverage_report` | Aggregated coverage: code ranges, uncovered ranges, branch targets, branch targets without analyzed code; does NOT modify RDB |
+| `debug_diff_memory` | Complete byte-for-byte snapshot diff with old/new values per contiguous range; limit overflow is a `limit_exceeded` error, never a silent cut |
+| `debug_find_bytecode_sequence` | Byte pattern search (optional per-byte mask) in a range; returns addresses only, no interpretation |
+| `debug_find_immediate_in_range` | Find instructions whose numeric operand equals a value (interpretation by the Debugger disassembler) |
+| `debug_get_vram_bytes` | Raw VRAM bytes from the memory-mapped region 0x8000–0xFFFF via the existing target API |
+
+Limits (§16): `MAX_DISASSEMBLE_IMAGE_INSTRUCTIONS=40000`, `MAX_SEARCH_MATCHES=1000`
+(hard cap 10000), `MAX_BYTECODE_PATTERN_LENGTH=32`, `MAX_DIFF_CHANGED_RANGES=4096`,
+`MAX_DIFF_CHANGED_BYTES=32768`, `MAX_VRAM_READ_RANGE=32768` — see `AgentLimits`.
+
 ## Architecture
 
 ```
@@ -142,7 +162,7 @@ debugger/mcp/
     mcp_json.h/cpp       — JSON serialization for Agent API types
     mcp_main.cpp         — v06c-mcp entry point (headless with real Board)
     tests/
-        test_mcp_protocol.cpp — 39 tests (Stage 6.4.1)
+        test_mcp_protocol.cpp — 60 tests (Stage 6.4.1 … 6.26)
     README.md
 
 debugger/thirdparty/cpp-mcp/ — cpp-mcp library (MIT, hkr04/cpp-mcp)
@@ -203,8 +223,8 @@ make test_mcp_protocol
 ./test_mcp_protocol
 ```
 
-39 tests covering (Stage 6.4.1):
-- Tool registration (all 38 tools)
+60 tests covering (Stage 6.4.1 … 6.26):
+- Tool registration (all 70 tools, unique names — tools/list reflects reality)
 - Schema validation (types, required params, numeric constraints)
 - Tool execution (via MockAgentBackend)
 - Error propagation (AgentApiResult → MCP error)
@@ -212,6 +232,18 @@ make test_mcp_protocol
 - End-to-end (MCP → AgentApi → Mock → JSON)
 - JSON serialization format
 - I/O port boundaries
+
+### Integration (real ROMs, real server)
+
+```bash
+python3 debugger/tests/integration/test_stage626_integration.py   # path to v06c-mcp auto-detected in build/
+```
+
+Spawns `v06c-mcp` over stdio in a temporary work dir and checks the Stage 6.26 batch
+tools against real ROM images (`putup.rom`, `TESTAY.ROM`; override paths via
+`V06C_PUTUP_ROM` / `V06C_TESTAY_ROM`). Missing ROMs or server binary → `SKIP`, exit 0.
+Includes the §20 equivalence check `debug_disassemble_image == N × debug_disassemble_range`
+and the §16 `limit_exceeded` no-silent-cut check.
 
 ## Regression
 
@@ -222,7 +254,7 @@ All existing tests must pass:
 ./test_agent_commands     # 15 tests
 ./test_agent_contract     # 49 tests
 ./test_agent_integration  # 46 tests
-./test_mcp_protocol       # 39 tests (Stage 6.4.1)
+./test_mcp_protocol       # 60 tests (Stage 6.4.1 … 6.26)
 ```
 
-Total: **226 tests** passing.
+All `test_*` binaries in the build directory must pass.

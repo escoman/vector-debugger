@@ -119,11 +119,16 @@ static mcp::json parseTextAsJson(const mcp::json &result) {
 // Tool Registration Tests
 // ---------------------------------------------------------------------------
 
-void test_all_64_tools_registered() {
-    TEST_BEGIN("all 64 tools registered");
+void test_all_tools_registered() {
+    TEST_BEGIN("all 70 tools registered");
     Fixture f;
     auto names = f.mcp.registeredToolNames();
-    CHECK_EQ(static_cast<int>(names.size()), 64, "should have 64 tools");
+    // Stage 6.26: 64 (through Stage 6.25) + 6 batch analysis tools = 70
+    CHECK_EQ(static_cast<int>(names.size()), 70, "should have 70 tools");
+    // tools/list must reflect reality: no duplicates in registration
+    std::set<std::string> unique(names.begin(), names.end());
+    CHECK_EQ(static_cast<int>(unique.size()), static_cast<int>(names.size()),
+             "tool names must be unique");
     TEST_END();
 }
 
@@ -181,7 +186,11 @@ void test_expected_tools_exist() {
         // Stage 6.20: Runtime Memory Analysis
         "debug_clear_memory_access_map", "debug_get_memory_access_map",
         "debug_get_memory_access_log", "debug_create_memory_snapshot",
-        "debug_compare_memory_snapshots"
+        "debug_compare_memory_snapshots",
+        // Stage 6.26: Batch Analysis Tools
+        "debug_disassemble_image", "debug_coverage_report", "debug_diff_memory",
+        "debug_find_bytecode_sequence", "debug_find_immediate_in_range",
+        "debug_get_vram_bytes"
     };
 
     for (auto &e : expected) {
@@ -1050,6 +1059,304 @@ void test_mcp_analyze_code_neither_param() {
 }
 
 // ---------------------------------------------------------------------------
+// Stage 6.26: Batch analysis tools
+// ---------------------------------------------------------------------------
+
+void test_mcp_disassemble_image_basic() {
+    TEST_BEGIN("MCP: debug_disassemble_image basic sweep");
+    Fixture f;
+    // Mock program: LXI SP,F800 / MVI A,55 / CALL 0200 / HLT = 9 bytes, 4 instrs
+    auto r = f.mcp.callTool("debug_disassemble_image",
+        {{"address", 0x0100}, {"length", 9}});
+    CHECK(!isErrorContent(r), "image disassembly should succeed");
+    auto data = parseTextAsJson(r);
+    CHECK_EQ(data["instruction_count"].get<int>(), 4, "4 instructions");
+    CHECK_EQ(data["length"].get<int>(), 9, "length echoed");
+    CHECK_EQ(data["address"].get<std::string>(), "0x0100", "address echoed");
+
+    const auto &inst = data["instructions"];
+    CHECK_EQ(inst[0]["address"].get<std::string>(), "0x0100", "first addr");
+    CHECK_EQ(inst[0]["mnemonic"].get<std::string>(), "LXI", "first mnemonic");
+    CHECK_EQ(inst[0]["size"].get<int>(), 3, "LXI size 3");
+    CHECK_EQ(inst[0]["bytes"].size(), 3u, "LXI 3 bytes");
+    // §5.2: every instruction keeps the debug_disassemble_range field shape
+    for (const auto &i : inst) {
+        CHECK(i.contains("address") && i.contains("mnemonic") &&
+              i.contains("operands") && i.contains("size") &&
+              i.contains("bytes") && i.contains("branch_target") &&
+              i.contains("branch_type"), "instruction field shape");
+    }
+    // CALL at 0x0105: branch_target 0x0200, non-null branch_type
+    CHECK_EQ(inst[2]["mnemonic"].get<std::string>(), "CALL", "CALL mnemonic");
+    CHECK(inst[2]["branch_target"] != nullptr, "CALL has branch_target");
+    CHECK_EQ(inst[2]["branch_target"].get<int>(), 0x0200, "target 0x0200");
+    CHECK(inst[2]["branch_type"] != nullptr, "CALL has branch_type");
+    CHECK(inst[3]["branch_target"].is_null(), "HLT has no branch_target");
+    TEST_END();
+}
+
+void test_mcp_disassemble_image_equivalence() {
+    TEST_BEGIN("MCP: debug_disassemble_image == N x debug_disassemble_range");
+    Fixture f;
+    // §5.2 / §20: batch result must equal the existing single-range result
+    auto rImg = f.mcp.callTool("debug_disassemble_image",
+        {{"address", 0x0100}, {"length", 8}});
+    auto rRng = f.mcp.callTool("debug_disassemble_range",
+        {{"address", 0x0100}, {"size", 8}});
+    CHECK(!isErrorContent(rImg) && !isErrorContent(rRng), "both succeed");
+    auto dImg = parseTextAsJson(rImg);
+    auto dRng = parseTextAsJson(rRng);
+    CHECK(dImg["instructions"] == dRng["instructions"],
+          "instruction arrays must be identical");
+    // Second window (subroutine area) must match too
+    auto rImg2 = f.mcp.callTool("debug_disassemble_image",
+        {{"address", 0x0200}, {"length", 10}});
+    auto rRng2 = f.mcp.callTool("debug_disassemble_range",
+        {{"address", 0x0200}, {"size", 10}});
+    auto dImg2 = parseTextAsJson(rImg2);
+    auto dRng2 = parseTextAsJson(rRng2);
+    CHECK(dImg2["instructions"] == dRng2["instructions"],
+          "second window identical");
+    TEST_END();
+}
+
+void test_mcp_disassemble_image_limit() {
+    TEST_BEGIN("MCP: debug_disassemble_image limit_exceeded (no silent cut)");
+    Fixture f;
+    // Zeroed memory outside the program area sweeps as 1-byte NOPs:
+    // full 64K image > MAX_DISASSEMBLE_IMAGE_INSTRUCTIONS (40000)
+    auto r = f.mcp.callTool("debug_disassemble_image",
+        {{"address", 0x0000}, {"length", 65536}});
+    CHECK(isErrorContent(r), "dense NOP sweep must error, not truncate");
+    auto data = parseTextAsJson(r);
+    CHECK_EQ(data["error_code"].get<std::string>(), "limit_exceeded",
+             "structured limit_exceeded error");
+    // Wrap-around past 64K is an invalid_range error
+    auto r2 = f.mcp.callTool("debug_disassemble_image",
+        {{"address", 0xFFF8}, {"length", 16}});
+    CHECK(isErrorContent(r2), "64K wrap must error");
+    CHECK_EQ(parseTextAsJson(r2)["error_code"].get<std::string>(),
+             "invalid_range", "wrap is invalid_range");
+    TEST_END();
+}
+
+void test_mcp_coverage_report() {
+    TEST_BEGIN("MCP: debug_coverage_report structure + JCC blind spots");
+    Fixture f;
+    // Add an isolated RET so a second entry point produces a separate range
+    f.mock.setMemory(0x0300, {0xC9});
+
+    auto r = f.mcp.callTool("debug_coverage_report",
+        {{"start_address", 0x0100},
+         {"addresses", {0x0300}},
+         {"range_start", 0}, {"range_length", 0x1000}});
+    CHECK(!isErrorContent(r), "coverage report should succeed");
+    auto data = parseTextAsJson(r);
+
+    CHECK(data.contains("code_ranges"), "has code_ranges");
+    CHECK(data.contains("uncovered_ranges"), "has uncovered_ranges");
+    CHECK(data.contains("branch_targets"), "has branch_targets");
+    CHECK(data.contains("uncovered_branch_targets"), "has uncovered_branch_targets");
+    CHECK(data["code_ranges"].size() >= 3,
+          "three code areas: main, subroutine, isolated RET");
+    CHECK_EQ(data["code_ranges"][0]["start"].get<std::string>(), "0x0100",
+             "first code range at program start");
+    bool foundSubroutine = false, foundIsolated = false;
+    for (const auto &rg : data["code_ranges"]) {
+        if (rg["start"].get<std::string>() == "0x0200") foundSubroutine = true;
+        if (rg["start"].get<std::string>() == "0x0300") foundIsolated = true;
+    }
+    CHECK(foundSubroutine, "CALL target covered");
+    CHECK(foundIsolated, "explicit entry point covered");
+
+    // CALL 0x0200 must show up as a branch target that IS covered
+    CHECK(data["branch_targets"].size() >= 1, "branch targets listed");
+    for (const auto &bt : data["branch_targets"]) {
+        CHECK(bt.contains("from") && bt.contains("to") && bt.contains("type"),
+              "branch target shape");
+    }
+    CHECK_EQ(data["uncovered_branch_targets"].size(), 0u,
+             "0x0200 reachable => no uncovered targets here");
+
+    CHECK(data.contains("stats"), "has stats");
+    const auto &st = data["stats"];
+    CHECK(st["code_bytes"].get<int>() > 0, "code_bytes > 0");
+    CHECK_EQ(st["image_bytes"].get<int>(), 0x1000, "image_bytes = range_length");
+    CHECK(st.contains("coverage_percent"), "coverage_percent present");
+    CHECK(st["truncated"] == false, "not truncated for tiny program");
+    TEST_END();
+}
+
+void test_mcp_coverage_report_requires_entry() {
+    TEST_BEGIN("MCP: debug_coverage_report requires entry point");
+    Fixture f;
+    bool threw = false;
+    try {
+        f.mcp.callTool("debug_coverage_report", {{"range_length", 0x100}});
+    } catch (const mcp::mcp_exception &) {
+        threw = true;
+    }
+    CHECK(threw, "missing entry points throws");
+    TEST_END();
+}
+
+void test_mcp_diff_memory() {
+    TEST_BEGIN("MCP: debug_diff_memory complete diff with old/new");
+    Fixture f;
+
+    auto snapA = parseTextAsJson(f.mcp.callTool("debug_create_memory_snapshot", {}));
+    uint32_t idA = static_cast<uint32_t>(snapA["snapshot_id"].get<int>());
+
+    // One scattered byte + a dense 32-byte block: old tool under-reports,
+    // debug_diff_memory must report everything (§7.2)
+    f.mock.setMemory(0x0104, {0xAA});                       // 1 byte
+    std::vector<uint8_t> block(32, 0x5A);
+    f.mock.setMemory(0x6000, block);                        // dense 32 bytes
+
+    auto snapB = parseTextAsJson(f.mcp.callTool("debug_create_memory_snapshot", {}));
+    uint32_t idB = static_cast<uint32_t>(snapB["snapshot_id"].get<int>());
+
+    auto r = f.mcp.callTool("debug_diff_memory",
+        {{"snapshot_a", idA}, {"snapshot_b", idB}});
+    CHECK(!isErrorContent(r), "diff should succeed");
+    auto data = parseTextAsJson(r);
+    CHECK_EQ(data["changed_bytes"].get<int>(), 33, "33 changed bytes total");
+    CHECK_EQ(data["range_count"].get<int>(), 2, "two contiguous ranges");
+
+    bool foundByte = false, foundBlock = false;
+    for (const auto &rg : data["ranges"]) {
+        if (rg["address"].get<std::string>() == "0x0104") {
+            foundByte = true;
+            CHECK_EQ(rg["size"].get<int>(), 1, "single-byte range");
+            CHECK_EQ(rg["old"][0].get<int>(), 0x55, "old value");
+            CHECK_EQ(rg["new"][0].get<int>(), 0xAA, "new value");
+        }
+        if (rg["address"].get<std::string>() == "0x6000") {
+            foundBlock = true;
+            CHECK_EQ(rg["size"].get<int>(), 32, "dense range keeps all 32 bytes");
+            CHECK_EQ(rg["old"].size(), 32u, "old[] full width");
+            CHECK_EQ(rg["new"].size(), 32u, "new[] full width");
+            CHECK_EQ(rg["new"][31].get<int>(), 0x5A, "last byte reported");
+        }
+    }
+    CHECK(foundByte, "scattered byte diff present");
+    CHECK(foundBlock, "dense block diff present");
+    TEST_END();
+}
+
+void test_mcp_diff_memory_missing_snapshot() {
+    TEST_BEGIN("MCP: debug_diff_memory unknown snapshot id");
+    Fixture f;
+    auto snap = parseTextAsJson(f.mcp.callTool("debug_create_memory_snapshot", {}));
+    uint32_t idA = static_cast<uint32_t>(snap["snapshot_id"].get<int>());
+    auto r = f.mcp.callTool("debug_diff_memory",
+        {{"snapshot_a", idA}, {"snapshot_b", 9999}});
+    CHECK(isErrorContent(r), "missing snapshot must error");
+    CHECK_EQ(parseTextAsJson(r)["error_code"].get<std::string>(),
+             "not_found", "structured not_found");
+    TEST_END();
+}
+
+void test_mcp_find_bytecode_sequence() {
+    TEST_BEGIN("MCP: debug_find_bytecode_sequence + mask + determinism");
+    Fixture f;
+    // CD 00 occurs at 0x0105 (CALL 0x0200)
+    auto r = f.mcp.callTool("debug_find_bytecode_sequence",
+        {{"range_start", 0x0100}, {"range_end", 0x01FF},
+         {"pattern", {0xCD, 0x00}}});
+    CHECK(!isErrorContent(r), "search should succeed");
+    auto data = parseTextAsJson(r);
+    CHECK_EQ(data["match_count"].get<int>(), 1, "one match");
+    CHECK_EQ(data["addresses"][0].get<std::string>(), "0x0105", "match address");
+    CHECK_EQ(data["scanned_bytes"].get<int>(), 0x100, "scanned range");
+
+    // Masked pattern: 3E ?? matches MVI A,55 at 0x0103
+    auto rm = f.mcp.callTool("debug_find_bytecode_sequence",
+        {{"range_start", 0x0100}, {"range_end", 0x01FF},
+         {"pattern", {0x3E, 0x99}}, {"mask", {0xFF, 0x00}}});
+    auto dm = parseTextAsJson(rm);
+    CHECK_EQ(dm["match_count"].get<int>(), 1, "masked match found");
+    CHECK_EQ(dm["addresses"][0].get<std::string>(), "0x0103", "masked address");
+
+    // No match: empty result, still success
+    auto r0 = f.mcp.callTool("debug_find_bytecode_sequence",
+        {{"range_start", 0x0100}, {"range_end", 0x01FF},
+         {"pattern", {0xFF, 0xFF, 0xFF}}});
+    CHECK(!isErrorContent(r0), "no-match is not an error");
+    CHECK_EQ(parseTextAsJson(r0)["match_count"].get<int>(), 0, "zero matches");
+
+    // §17 determinism: identical state → identical result
+    auto rAgain = f.mcp.callTool("debug_find_bytecode_sequence",
+        {{"range_start", 0x0100}, {"range_end", 0x01FF},
+         {"pattern", {0xCD, 0x00}}});
+    CHECK(parseTextAsJson(rAgain).dump() == data.dump(), "deterministic repeat");
+
+    // Invalid range end < start throws
+    bool threw = false;
+    try {
+        f.mcp.callTool("debug_find_bytecode_sequence",
+            {{"range_start", 0x0100}, {"range_end", 0x00FF},
+             {"pattern", {0xCD}}});
+    } catch (const mcp::mcp_exception &) { threw = true; }
+    CHECK(threw, "inverted range throws");
+    TEST_END();
+}
+
+void test_mcp_find_immediate_in_range() {
+    TEST_BEGIN("MCP: debug_find_immediate_in_range via disassembler");
+    Fixture f;
+    // Operand 0x0200 → CALL at 0x0105 (interpretation by Debugger disassembler)
+    auto r = f.mcp.callTool("debug_find_immediate_in_range",
+        {{"range_start", 0x0100}, {"range_end", 0x010F}, {"value", 0x0200}});
+    CHECK(!isErrorContent(r), "immediate search should succeed");
+    auto data = parseTextAsJson(r);
+    CHECK_EQ(data["match_count"].get<int>(), 1, "one CALL 0x0200 match");
+    CHECK_EQ(data["matches"][0]["address"].get<std::string>(), "0x0105", "match addr");
+    CHECK_EQ(data["matches"][0]["mnemonic"].get<std::string>(), "CALL", "CALL found");
+
+    // 16-bit immediate F800 of LXI SP,F800
+    auto r2 = f.mcp.callTool("debug_find_immediate_in_range",
+        {{"range_start", 0x0100}, {"range_end", 0x010F}, {"value", 0xF800}});
+    auto d2 = parseTextAsJson(r2);
+    CHECK_EQ(d2["match_count"].get<int>(), 1, "LXI immediate found");
+    CHECK_EQ(d2["matches"][0]["address"].get<std::string>(), "0x0100", "LXI addr");
+
+    // No false positives from register names ("A" must not parse as 0x0A)
+    auto r3 = f.mcp.callTool("debug_find_immediate_in_range",
+        {{"range_start", 0x0100}, {"range_end", 0x010F}, {"value", 0x000A}});
+    CHECK_EQ(parseTextAsJson(r3)["match_count"].get<int>(), 0,
+             "register 'A' is not an immediate");
+    TEST_END();
+}
+
+void test_mcp_get_vram_bytes() {
+    TEST_BEGIN("MCP: debug_get_vram_bytes read + validation");
+    Fixture f;
+    f.mock.setMemory(0x8000, {0xDE, 0xAD, 0xBE, 0xEF});
+    auto r = f.mcp.callTool("debug_get_vram_bytes",
+        {{"address", 0x8000}, {"length", 4}});
+    CHECK(!isErrorContent(r), "vram read should succeed");
+    auto data = parseTextAsJson(r);
+    CHECK_EQ(data["address"].get<std::string>(), "0x8000", "address echoed");
+    CHECK_EQ(data["length"].get<int>(), 4, "length echoed");
+    CHECK_EQ(data["bytes"][0].get<int>(), 0xDE, "byte 0");
+    CHECK_EQ(data["bytes"][3].get<int>(), 0xEF, "byte 3");
+
+    // Below VRAM region
+    auto rBad = f.mcp.callTool("debug_get_vram_bytes",
+        {{"address", 0x1000}, {"length", 4}});
+    CHECK(isErrorContent(rBad), "non-VRAM address must error");
+    CHECK_EQ(parseTextAsJson(rBad)["error_code"].get<std::string>(),
+             "invalid_address", "structured invalid_address");
+
+    // Past 0xFFFF
+    auto rEnd = f.mcp.callTool("debug_get_vram_bytes",
+        {{"address", 0xFFFC}, {"length", 8}});
+    CHECK(isErrorContent(rEnd), "overflow must error");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -1062,7 +1369,7 @@ int main()
     printf("\033[1;33m========================================\033[0m\n\n");
 
     // Registration
-    test_all_64_tools_registered();
+    test_all_tools_registered();
     test_tool_names_have_debug_prefix();
     test_expected_tools_exist();
 
@@ -1143,6 +1450,18 @@ int main()
     test_mcp_analyze_code_empty_addresses();
     test_mcp_analyze_code_mutual_exclusion();
     test_mcp_analyze_code_neither_param();
+
+    // Stage 6.26: Batch analysis tools
+    test_mcp_disassemble_image_basic();
+    test_mcp_disassemble_image_equivalence();
+    test_mcp_disassemble_image_limit();
+    test_mcp_coverage_report();
+    test_mcp_coverage_report_requires_entry();
+    test_mcp_diff_memory();
+    test_mcp_diff_memory_missing_snapshot();
+    test_mcp_find_bytecode_sequence();
+    test_mcp_find_immediate_in_range();
+    test_mcp_get_vram_bytes();
 
     // JSON serialization
     test_json_cpu_state_format();

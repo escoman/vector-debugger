@@ -757,23 +757,50 @@ AgentApi::disassembleRange(uint16_t address, uint16_t size)
             "address + size exceeds 64K address space");
     }
 
+    DisassembleRangeResult result = linearDisassemble(address, size);
+    result.startAddress = address;
+    result.size = static_cast<uint16_t>(size);
+
+    std::ostringstream oss;
+    oss << "address=" << std::hex << address
+        << " size=" << std::hex << size
+        << " instructions=" << std::dec << result.instructions.size();
+    if (result.incomplete_instruction) oss << " INCOMPLETE";
+    log_.record("disassembleRange", oss.str(),
+                std::to_string(result.instructions.size()) + " instructions",
+                elapsedMs(t0));
+
+    return AgentApiResult<DisassembleRangeResult>::ok(std::move(result));
+}
+
+// ---------------------------------------------------------------------------
+// Shared linear sweep (Stage 6.18 / Stage 6.26)
+//
+// Used verbatim by disassembleRange() and disassembleImage() so that the
+// batch result is bit-identical to the single-range result over the same
+// range.  No validation here — callers guarantee size fits the space.
+// ---------------------------------------------------------------------------
+
+DisassembleRangeResult
+AgentApi::linearDisassemble(uint16_t address, uint32_t size)
+{
     DisassembleRangeResult result;
     result.startAddress = address;
-    result.size = size;
+    result.size = static_cast<uint16_t>(size <= 0xFFFF ? size : 0xFFFF);
 
     auto readByte = [this](uint16_t addr) -> uint8_t {
         return backend_.readMemory(addr);
     };
 
-    uint16_t currentAddr = address;
-    uint16_t rangeEnd = address + size;
+    uint32_t currentAddr = address;
+    uint32_t rangeEnd = static_cast<uint32_t>(address) + size;
 
     // Sequential disassembly through the range
     while (currentAddr < rangeEnd) {
-        DisassembledInstruction di = ::disassemble(currentAddr, readByte);
+        DisassembledInstruction di = ::disassemble(static_cast<uint16_t>(currentAddr), readByte);
 
         // Check if instruction fits completely in range
-        uint16_t instrEnd = currentAddr + di.length;
+        uint32_t instrEnd = currentAddr + di.length;
         if (instrEnd > rangeEnd) {
             // Instruction extends beyond range
             result.incomplete_instruction = true;
@@ -787,7 +814,6 @@ AgentApi::disassembleRange(uint16_t address, uint16_t size)
         ri.mnemonic = di.mnemonic;
         ri.operands = di.operands;
         ri.size = di.length;
-
         // Determine branch type and target
         ControlFlowType cft = classifyControlFlow(di.opcode);
         switch (cft) {
@@ -829,16 +855,549 @@ AgentApi::disassembleRange(uint16_t address, uint16_t size)
         currentAddr = instrEnd;
     }
 
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// Batch analysis (Stage 6.26)
+// ---------------------------------------------------------------------------
+
+AgentApiResult<DisassembleRangeResult>
+AgentApi::disassembleImage(uint16_t address, uint32_t length)
+{
+    auto t0 = std::chrono::steady_clock::now();
+
+    if (length == 0) {
+        log_.record("disassembleImage", "length=0", "invalid",
+                    elapsedMs(t0), false, "length must be > 0");
+        return AgentApiResult<DisassembleRangeResult>::fail(
+            ErrorCode::InvalidArgument, "length must be > 0");
+    }
+
+    if (length > AgentLimits::MAX_DISASSEMBLE_IMAGE_LENGTH) {
+        log_.record("disassembleImage", "length=" + std::to_string(length), "invalid",
+                    elapsedMs(t0), false, "length exceeds maximum");
+        return AgentApiResult<DisassembleRangeResult>::fail(
+            ErrorCode::InvalidRange,
+            "length exceeds maximum (" +
+            std::to_string(AgentLimits::MAX_DISASSEMBLE_IMAGE_LENGTH) + ")");
+    }
+
+    uint32_t endAddr = static_cast<uint32_t>(address) + length;
+    if (endAddr > 0x10000) {
+        log_.record("disassembleImage", "address+length > 64K", "invalid",
+                    elapsedMs(t0), false, "address wrap-around");
+        return AgentApiResult<DisassembleRangeResult>::fail(
+            ErrorCode::InvalidRange,
+            "address + length exceeds 64K address space");
+    }
+
+    DisassembleRangeResult result = linearDisassemble(address, length);
+
+    // §16: never silently truncate — a limit overflow is a hard error.
+    if (result.instructions.size() > AgentLimits::MAX_DISASSEMBLE_IMAGE_INSTRUCTIONS) {
+        log_.record("disassembleImage",
+                    "address=" + std::to_string(address) + " length=" + std::to_string(length),
+                    "limit", elapsedMs(t0), false, "instruction count exceeds limit");
+        return AgentApiResult<DisassembleRangeResult>::fail(
+            ErrorCode::LimitExceeded,
+            "instruction count " + std::to_string(result.instructions.size()) +
+            " exceeds limit (" +
+            std::to_string(AgentLimits::MAX_DISASSEMBLE_IMAGE_INSTRUCTIONS) +
+            "); use a smaller range");
+    }
+
     std::ostringstream oss;
     oss << "address=" << std::hex << address
-        << " size=" << std::hex << size
+        << " length=" << std::hex << length
         << " instructions=" << std::dec << result.instructions.size();
     if (result.incomplete_instruction) oss << " INCOMPLETE";
-    log_.record("disassembleRange", oss.str(),
+    log_.record("disassembleImage", oss.str(),
                 std::to_string(result.instructions.size()) + " instructions",
                 elapsedMs(t0));
 
     return AgentApiResult<DisassembleRangeResult>::ok(std::move(result));
+}
+
+AgentApiResult<CoverageReportResult>
+AgentApi::coverageReport(const std::vector<uint16_t> &entryPoints,
+                         uint16_t imageStart, uint32_t imageLength,
+                         size_t maxInstructions)
+{
+    auto t0 = std::chrono::steady_clock::now();
+
+    if (entryPoints.empty()) {
+        log_.record("coverageReport", "no entries", "invalid",
+                    elapsedMs(t0), false, "at least one entry point required");
+        return AgentApiResult<CoverageReportResult>::fail(
+            ErrorCode::InvalidArgument, "at least one entry point is required");
+    }
+
+    if (imageLength == 0 ||
+        static_cast<uint32_t>(imageStart) + imageLength > 0x10000) {
+        log_.record("coverageReport", "bad image range", "invalid",
+                    elapsedMs(t0), false, "invalid image range");
+        return AgentApiResult<CoverageReportResult>::fail(
+            ErrorCode::InvalidRange, "invalid image range");
+    }
+
+    if (maxInstructions == 0 ||
+        maxInstructions > AgentLimits::MAX_CODE_ANALYSIS_INSTRUCTIONS) {
+        log_.record("coverageReport", "max=" + std::to_string(maxInstructions), "invalid",
+                    elapsedMs(t0), false, "maxInstructions out of range");
+        return AgentApiResult<CoverageReportResult>::fail(
+            ErrorCode::InvalidArgument,
+            "maxInstructions must be 1.." +
+            std::to_string(AgentLimits::MAX_CODE_ANALYSIS_INSTRUCTIONS));
+    }
+
+    // §15: single internal entry-point form — reuse the existing analyzer.
+    auto analysis = analyzeCode(entryPoints, maxInstructions);
+    if (!analysis.success) {
+        return AgentApiResult<CoverageReportResult>::fail(
+            analysis.error_code, analysis.error_message);
+    }
+
+    const uint32_t imgEnd = static_cast<uint32_t>(imageStart) + imageLength; // exclusive
+
+    CoverageReportResult result;
+    result.imageStart = imageStart;
+    result.imageEnd   = static_cast<uint16_t>(imgEnd - 1);                  // inclusive
+    result.imageBytes = imageLength;
+    result.truncated  = analysis.value.truncated;
+    result.instructionCount = analysis.value.instructionCount;
+
+    // Byte-level coverage bitmap over the image range (deterministic).
+    std::vector<bool> covered(imageLength, false);
+    for (const auto &inst : analysis.value.instructions) {
+        uint32_t s = inst.address;
+        uint32_t e = s + inst.size;                     // exclusive
+        if (e > 0x10000) continue;                      // wrapped — ignore
+        for (uint32_t a = s; a < e; ++a) {
+            if (a >= imageStart && a < imgEnd) {
+                if (!covered[a - imageStart]) {
+                    covered[a - imageStart] = true;
+                    ++result.codeBytes;
+                }
+            }
+        }
+    }
+
+    // Merged code ranges (ascending, inclusive end) from the bitmap.
+    {
+        size_t i = 0;
+        while (i < imageLength) {
+            if (!covered[i]) { ++i; continue; }
+            CoverageRange rng;
+            rng.start = static_cast<uint16_t>(imageStart + i);
+            while (i < imageLength && covered[i]) ++i;
+            rng.end = static_cast<uint16_t>(imageStart + i - 1);
+            result.codeRanges.push_back(rng);
+        }
+    }
+
+    // Uncovered gaps (ascending, inclusive end).
+    {
+        size_t i = 0;
+        while (i < imageLength) {
+            if (covered[i]) { ++i; continue; }
+            CoverageRange rng;
+            rng.start = static_cast<uint16_t>(imageStart + i);
+            while (i < imageLength && !covered[i]) ++i;
+            rng.end = static_cast<uint16_t>(imageStart + i - 1);
+            result.uncoveredRanges.push_back(rng);
+        }
+    }
+
+    // Branch targets — deterministic order (from, then to).
+    result.branchTargets.reserve(analysis.value.references.size());
+    for (const auto &ref : analysis.value.references) {
+        result.branchTargets.push_back({ref.from, ref.to, ref.type});
+    }
+    std::sort(result.branchTargets.begin(), result.branchTargets.end(),
+              [](const CoverageBranchTarget &a, const CoverageBranchTarget &b) {
+                  return (a.from != b.from) ? (a.from < b.from) : (a.to < b.to);
+              });
+
+    // §6.2: JCC blind spots — targets that exist but have no analyzed code.
+    {
+        std::set<uint16_t> uncovered;
+        for (const auto &bt : result.branchTargets) {
+            bool isCovered = (bt.to >= imageStart &&
+                              static_cast<uint32_t>(bt.to) < imgEnd &&
+                              covered[bt.to - imageStart]);
+            if (!isCovered) uncovered.insert(bt.to);
+        }
+        result.uncoveredBranchTargets.assign(uncovered.begin(), uncovered.end());
+    }
+
+    std::ostringstream oss;
+    oss << "entries=" << std::dec << analysis.value.entryPoints.size()
+        << " image=" << std::hex << imageStart << ".." << (imgEnd - 1)
+        << " codeBytes=" << std::dec << result.codeBytes
+        << "/" << result.imageBytes
+        << " gaps=" << result.uncoveredRanges.size()
+        << " uncoveredTargets=" << result.uncoveredBranchTargets.size();
+    if (result.truncated) oss << " TRUNCATED";
+    log_.record("coverageReport", oss.str(),
+                std::to_string(result.codeBytes) + " covered bytes", elapsedMs(t0));
+
+    return AgentApiResult<CoverageReportResult>::ok(std::move(result));
+}
+
+// ---------------------------------------------------------------------------
+// Complete memory diff (Stage 6.26)
+//
+// Guarantees a full byte-for-byte diff over the requested range with old/new
+// values — unlike compareMemorySnapshots(), which only reports merged range
+// boundaries.  A dense diff that cannot fit the limits is a hard error
+// (LimitExceeded), never a silent under-report.
+// ---------------------------------------------------------------------------
+
+AgentApiResult<MemoryDiffResult>
+AgentApi::diffMemorySnapshots(uint32_t idA, uint32_t idB,
+                              uint16_t start, uint32_t length)
+{
+    auto t0 = std::chrono::steady_clock::now();
+
+    if (length == 0 || static_cast<uint32_t>(start) + length > 0x10000) {
+        log_.record("diffMemorySnapshots", "bad range", "invalid",
+                    elapsedMs(t0), false, "invalid diff range");
+        return AgentApiResult<MemoryDiffResult>::fail(
+            ErrorCode::InvalidRange, "invalid diff range");
+    }
+
+    auto snapA = backend_.getMemorySnapshot(idA);
+    auto snapB = backend_.getMemorySnapshot(idB);
+    if (snapA.data.empty() || snapB.data.empty()) {
+        log_.record("diffMemorySnapshots",
+                    "a=" + std::to_string(idA) + " b=" + std::to_string(idB),
+                    "not found", elapsedMs(t0), false, "snapshot not found");
+        return AgentApiResult<MemoryDiffResult>::fail(
+            ErrorCode::NotFound, "One or both snapshots not found or invalidated");
+    }
+
+    auto covers = [&](const MemorySnapshotData &s) {
+        uint32_t sStart = s.start_address;
+        uint32_t sEnd = sStart + static_cast<uint32_t>(s.data.size());
+        return static_cast<uint32_t>(start) >= sStart &&
+               static_cast<uint32_t>(start) + length <= sEnd;
+    };
+    if (!covers(snapA) || !covers(snapB)) {
+        log_.record("diffMemorySnapshots", "range outside snapshots", "invalid",
+                    elapsedMs(t0), false, "range not covered by both snapshots");
+        return AgentApiResult<MemoryDiffResult>::fail(
+            ErrorCode::InvalidRange,
+            "requested range is not covered by both snapshots");
+    }
+
+    const uint32_t offA = static_cast<uint32_t>(start) - snapA.start_address;
+    const uint32_t offB = static_cast<uint32_t>(start) - snapB.start_address;
+
+    MemoryDiffResult result;
+    result.start = start;
+    result.length = length;
+
+    size_t i = 0;
+    while (i < length) {
+        uint8_t a = snapA.data[offA + i];
+        uint8_t b = snapB.data[offB + i];
+        if (a == b) { ++i; continue; }
+
+        MemoryDiffRange rng;
+        rng.address = static_cast<uint16_t>(start + i);
+        size_t j = i;
+        while (j < length &&
+               snapA.data[offA + j] != snapB.data[offB + j]) {
+            rng.oldBytes.push_back(snapA.data[offA + j]);
+            rng.newBytes.push_back(snapB.data[offB + j]);
+            ++j;
+        }
+        result.changedBytes += rng.oldBytes.size();
+        result.ranges.push_back(std::move(rng));
+        i = j;
+
+        // §16: limits are hard errors, never silent cuts.
+        if (result.ranges.size() > AgentLimits::MAX_DIFF_CHANGED_RANGES ||
+            result.changedBytes > AgentLimits::MAX_DIFF_CHANGED_BYTES) {
+            log_.record("diffMemorySnapshots",
+                        "a=" + std::to_string(idA) + " b=" + std::to_string(idB),
+                        "limit", elapsedMs(t0), false, "diff exceeds limits");
+            return AgentApiResult<MemoryDiffResult>::fail(
+                ErrorCode::LimitExceeded,
+                "diff exceeds limits (ranges " +
+                std::to_string(AgentLimits::MAX_DIFF_CHANGED_RANGES) + ", bytes " +
+                std::to_string(AgentLimits::MAX_DIFF_CHANGED_BYTES) +
+                "); narrow the range or delete/replace byte values");
+        }
+    }
+
+    std::ostringstream oss;
+    oss << "a=" << idA << " b=" << idB
+        << " start=" << std::hex << start << std::dec
+        << " length=" << length
+        << " ranges=" << result.ranges.size()
+        << " changedBytes=" << result.changedBytes;
+    log_.record("diffMemorySnapshots", oss.str(),
+                std::to_string(result.changedBytes) + " changed bytes", elapsedMs(t0));
+
+    return AgentApiResult<MemoryDiffResult>::ok(std::move(result));
+}
+
+// ---------------------------------------------------------------------------
+// Byte-pattern search (Stage 6.26)
+// ---------------------------------------------------------------------------
+
+AgentApiResult<ByteSequenceSearchResult>
+AgentApi::findBytecodeSequence(uint16_t rangeStart, uint16_t rangeEnd,
+                               const std::vector<uint8_t> &pattern,
+                               const std::vector<uint8_t> &mask,
+                               size_t maxMatches)
+{
+    auto t0 = std::chrono::steady_clock::now();
+
+    if (pattern.empty()) {
+        log_.record("findBytecodeSequence", "empty pattern", "invalid",
+                    elapsedMs(t0), false, "pattern must not be empty");
+        return AgentApiResult<ByteSequenceSearchResult>::fail(
+            ErrorCode::InvalidArgument, "pattern must not be empty");
+    }
+    if (pattern.size() > AgentLimits::MAX_BYTECODE_PATTERN_LENGTH) {
+        log_.record("findBytecodeSequence", "pattern too long", "invalid",
+                    elapsedMs(t0), false, "pattern exceeds maximum");
+        return AgentApiResult<ByteSequenceSearchResult>::fail(
+            ErrorCode::InvalidArgument,
+            "pattern length exceeds maximum (" +
+            std::to_string(AgentLimits::MAX_BYTECODE_PATTERN_LENGTH) + ")");
+    }
+    if (!mask.empty() && mask.size() != pattern.size()) {
+        log_.record("findBytecodeSequence", "mask size mismatch", "invalid",
+                    elapsedMs(t0), false, "mask must be empty or same length as pattern");
+        return AgentApiResult<ByteSequenceSearchResult>::fail(
+            ErrorCode::InvalidArgument,
+            "mask must be empty or have the same length as pattern");
+    }
+    if (rangeEnd < rangeStart) {
+        log_.record("findBytecodeSequence", "rangeEnd < rangeStart", "invalid",
+                    elapsedMs(t0), false, "invalid range");
+        return AgentApiResult<ByteSequenceSearchResult>::fail(
+            ErrorCode::InvalidRange, "range_end must be >= range_start");
+    }
+    if (maxMatches == 0 || maxMatches > AgentLimits::MAX_SEARCH_MATCHES_HARD) {
+        log_.record("findBytecodeSequence", "max=" + std::to_string(maxMatches), "invalid",
+                    elapsedMs(t0), false, "maxMatches out of range");
+        return AgentApiResult<ByteSequenceSearchResult>::fail(
+            ErrorCode::InvalidArgument,
+            "maxMatches must be 1.." +
+            std::to_string(AgentLimits::MAX_SEARCH_MATCHES_HARD));
+    }
+
+    const size_t scanLen = static_cast<size_t>(rangeEnd) - rangeStart + 1;
+    auto bytes = readMemory(rangeStart, scanLen);
+    if (!bytes.success) {
+        return AgentApiResult<ByteSequenceSearchResult>::fail(
+            bytes.error_code, bytes.error_message);
+    }
+
+    ByteSequenceSearchResult result;
+    result.rangeStart = rangeStart;
+    result.rangeEnd   = rangeEnd;
+    result.scannedBytes = scanLen;
+
+    // Naive O(n·m) scan — ascending addresses, overlapping matches kept.
+    const auto &buf = bytes.value;
+    if (scanLen >= pattern.size()) {
+        for (size_t i = 0; i + pattern.size() <= scanLen; ++i) {
+            bool match = true;
+            for (size_t k = 0; k < pattern.size(); ++k) {
+                if (!mask.empty() && mask[k] == 0) continue;   // wildcard byte
+                if (buf[i + k] != pattern[k]) { match = false; break; }
+            }
+            if (match) {
+                result.addresses.push_back(
+                    static_cast<uint16_t>(rangeStart + i));
+                if (result.addresses.size() > maxMatches) {
+                    log_.record("findBytecodeSequence",
+                                "range=" + std::to_string(rangeStart) + ".." +
+                                std::to_string(rangeEnd),
+                                "limit", elapsedMs(t0), false, "too many matches");
+                    return AgentApiResult<ByteSequenceSearchResult>::fail(
+                        ErrorCode::LimitExceeded,
+                        "more than " + std::to_string(maxMatches) +
+                        " matches; narrow the range or lower expectations");
+                }
+            }
+        }
+    }
+
+    std::ostringstream oss;
+    oss << "range=" << std::hex << rangeStart << ".." << rangeEnd
+        << std::dec << " matches=" << result.addresses.size();
+    log_.record("findBytecodeSequence", oss.str(),
+                std::to_string(result.addresses.size()) + " matches", elapsedMs(t0));
+
+    return AgentApiResult<ByteSequenceSearchResult>::ok(std::move(result));
+}
+
+// ---------------------------------------------------------------------------
+// Immediate operand search (Stage 6.26)
+//
+// Instruction interpretation is delegated to the debugger disassembler
+// (linearDisassemble) — this only inspects the decoded operand text, so no
+// second opcode decoder exists in the Python layer.
+// ---------------------------------------------------------------------------
+
+static bool parseHexToken(const std::string &tok, uint16_t &out)
+{
+    // The disassembler formats numeric operands as %02X / %04X only —
+    // require exactly 2 or 4 hex digits so register names (A..F) never match.
+    if (tok.size() != 2 && tok.size() != 4) return false;
+    unsigned v = 0;
+    for (char c : tok) {
+        unsigned d;
+        if (c >= '0' && c <= '9')      d = c - '0';
+        else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+        else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+        else return false;
+        v = (v << 4) | d;
+    }
+    out = static_cast<uint16_t>(v);
+    return true;
+}
+
+AgentApiResult<ImmediateSearchResult>
+AgentApi::findImmediateInRange(uint16_t rangeStart, uint16_t rangeEnd,
+                               uint16_t value, size_t maxMatches)
+{
+    auto t0 = std::chrono::steady_clock::now();
+
+    if (rangeEnd < rangeStart) {
+        log_.record("findImmediateInRange", "rangeEnd < rangeStart", "invalid",
+                    elapsedMs(t0), false, "invalid range");
+        return AgentApiResult<ImmediateSearchResult>::fail(
+            ErrorCode::InvalidRange, "range_end must be >= range_start");
+    }
+    if (maxMatches == 0 || maxMatches > AgentLimits::MAX_SEARCH_MATCHES_HARD) {
+        log_.record("findImmediateInRange", "max=" + std::to_string(maxMatches), "invalid",
+                    elapsedMs(t0), false, "maxMatches out of range");
+        return AgentApiResult<ImmediateSearchResult>::fail(
+            ErrorCode::InvalidArgument,
+            "maxMatches must be 1.." +
+            std::to_string(AgentLimits::MAX_SEARCH_MATCHES_HARD));
+    }
+
+    const uint32_t length = static_cast<uint32_t>(rangeEnd) - rangeStart + 1;
+    DisassembleRangeResult sweep = linearDisassemble(rangeStart, length);
+
+    ImmediateSearchResult result;
+    result.rangeStart = rangeStart;
+    result.rangeEnd   = rangeEnd;
+    result.value      = value;
+
+    for (const auto &inst : sweep.instructions) {
+        // Operands are "REG, XX" / "XXXX" — the disassembler already split
+        // semantics; here we only take numeric hex tokens and compare values.
+        bool hit = false;
+        size_t pos = 0;
+        while (pos <= inst.operands.size()) {
+            size_t comma = inst.operands.find(',', pos);
+            if (comma == std::string::npos) comma = inst.operands.size();
+            size_t b = pos, e = comma;
+            while (b < e && inst.operands[b] == ' ') ++b;
+            while (e > b && inst.operands[e - 1] == ' ') --e;
+            uint16_t tokVal = 0;
+            if (e > b && parseHexToken(inst.operands.substr(b, e - b), tokVal) &&
+                tokVal == value) {
+                hit = true;
+                break;
+            }
+            pos = comma + 1;
+            if (comma == inst.operands.size()) break;
+        }
+        if (!hit) continue;
+
+        ImmediateMatch m;
+        m.address  = inst.address;
+        m.mnemonic = inst.mnemonic;
+        m.operands = inst.operands;
+        m.bytes    = inst.bytes;
+        result.matches.push_back(std::move(m));
+
+        if (result.matches.size() > maxMatches) {
+            log_.record("findImmediateInRange",
+                        "value=" + std::to_string(value),
+                        "limit", elapsedMs(t0), false, "too many matches");
+            return AgentApiResult<ImmediateSearchResult>::fail(
+                ErrorCode::LimitExceeded,
+                "more than " + std::to_string(maxMatches) +
+                " matches; narrow the range");
+        }
+    }
+
+    std::ostringstream oss;
+    oss << "range=" << std::hex << rangeStart << ".." << rangeEnd
+        << " value=" << value << std::dec
+        << " matches=" << result.matches.size();
+    log_.record("findImmediateInRange", oss.str(),
+                std::to_string(result.matches.size()) + " matches", elapsedMs(t0));
+
+    return AgentApiResult<ImmediateSearchResult>::ok(std::move(result));
+}
+
+// ---------------------------------------------------------------------------
+// VRAM raw bytes (Stage 6.26)
+//
+// VRAM is memory-mapped: 4 bit-planes of 8K at 0x8000..0xFFFF (see
+// getVramInfo).  Reads go through the existing debug target API only.
+// ---------------------------------------------------------------------------
+
+AgentApiResult<std::vector<uint8_t>>
+AgentApi::getVramBytes(uint16_t address, uint32_t length)
+{
+    auto t0 = std::chrono::steady_clock::now();
+
+    static const uint16_t VRAM_REGION_START = 0x8000;
+
+    if (length == 0) {
+        log_.record("getVramBytes", "length=0", "invalid",
+                    elapsedMs(t0), false, "length must be > 0");
+        return AgentApiResult<std::vector<uint8_t>>::fail(
+            ErrorCode::InvalidArgument, "length must be > 0");
+    }
+    if (address < VRAM_REGION_START) {
+        log_.record("getVramBytes", "address below VRAM", "invalid",
+                    elapsedMs(t0), false, "address outside VRAM region");
+        return AgentApiResult<std::vector<uint8_t>>::fail(
+            ErrorCode::InvalidAddress,
+            "VRAM addresses start at 0x8000");
+    }
+    if (static_cast<uint32_t>(address) + length > 0x10000) {
+        log_.record("getVramBytes", "range past 0xFFFF", "invalid",
+                    elapsedMs(t0), false, "address + length exceeds VRAM region");
+        return AgentApiResult<std::vector<uint8_t>>::fail(
+            ErrorCode::InvalidRange, "address + length exceeds VRAM region (0x8000..0xFFFF)");
+    }
+    if (length > AgentLimits::MAX_VRAM_READ_RANGE) {
+        log_.record("getVramBytes", "length too big", "invalid",
+                    elapsedMs(t0), false, "length exceeds maximum");
+        return AgentApiResult<std::vector<uint8_t>>::fail(
+            ErrorCode::InvalidRange,
+            "length exceeds maximum (" +
+            std::to_string(AgentLimits::MAX_VRAM_READ_RANGE) + ")");
+    }
+
+    auto r = readMemory(address, length);
+    if (!r.success) {
+        return AgentApiResult<std::vector<uint8_t>>::fail(
+            r.error_code, r.error_message);
+    }
+
+    std::ostringstream oss;
+    oss << "address=" << std::hex << address << " length=" << std::dec << length;
+    log_.record("getVramBytes", oss.str(),
+                std::to_string(r.value.size()) + " bytes", elapsedMs(t0));
+
+    return r;
 }
 
 // ---------------------------------------------------------------------------
