@@ -89,7 +89,13 @@ public:
             this->noiv = this->noir & 1;
             this->noir = (this->noir ^ (this->noiv * 0x24000)) >> 1;
         }
+#ifdef V06C_DEBUGGER
+        // Debugger build: leave the three channels unscaled so noise analysis sees
+        // the raw per-channel sum.
+        return (this->cstep(0) + this->cstep(1) + this->cstep(2));
+#else
         return 0.3333f * (this->cstep(0) + this->cstep(1) + this->cstep(2));
+#endif
     }
 
     void aymute()
