@@ -389,6 +389,10 @@ Hardware status: UNVERIFIED
 
 Палитра и border анализируются отдельно.
 
+**Растровые эффекты (racing-the-beam):** один только VRAM недостаточен. Если ROM пишет
+палитру (`OUT 0x0C–0x0F`) посреди кадра, статический дамп VRAM этого не отразит — используй
+`debug_get_beam_state` → `debug_get_raster_events` → `debug_get_screen_snapshot` (Stage 6.27).
+
 ---
 
 ## Уровень уверенности
@@ -419,7 +423,7 @@ Hardware status: UNVERIFIED
 
 ## MCP Tools
 
-Сервер `vector-debugger` предоставляет 70 инструментов `debug_*` (актуальный список — всегда через `tools/list`):
+Сервер `vector-debugger` предоставляет 73 инструмента `debug_*` (актуальный список — всегда через `tools/list`):
 
 **Execution**: `debug_run`, `debug_pause`, `debug_step`, `debug_reset`, `debug_is_running`
 
@@ -456,6 +460,8 @@ Hardware status: UNVERIFIED
 **Runtime Memory Analysis**: `debug_clear_memory_access_map`, `debug_get_memory_access_map`, `debug_get_memory_access_log`, `debug_create_memory_snapshot`, `debug_compare_memory_snapshots`
 
 **Batch Analysis (Stage 6.26)**: `debug_disassemble_image` (пакетная линейная дизассемблировка крупного диапазона), `debug_coverage_report` (code/uncovered ranges + branch targets без покрытия), `debug_diff_memory` (полный diff снапшотов со старыми/новыми байтами), `debug_find_bytecode_sequence` (поиск байтового шаблона с маской), `debug_find_immediate_in_range` (поиск операнда-константы через дизассемблер), `debug_get_vram_bytes` (сырые байты VRAM 0x8000–0xFFFF). Семантику (code/data, имена) определяет клиент — MCP только отдаёт данные.
+
+**Raster / Beam (Stage 6.27)**: `debug_get_beam_state`, `debug_get_raster_events`, `debug_get_screen_snapshot` — чтение живого видеолуча (racing-the-beam). **Один только VRAM недостаточен для растровых эффектов**: ROM меняет палитру (`OUT 0x0C–0x0F`) посреди кадра, статический дамп VRAM этого не покажет. Цепочка: `debug_get_beam_state` (где луч + палитра под ним) → `debug_get_raster_events` (OUT-события с привязкой к `frame/v_cycle/raster_line/pc`) → `debug_get_screen_snapshot` (реальный собранный кадр TV как PNG). Все три — read-only: не останавливают, не шагают и не перерисовывают эмуляцию. Тайминг-константы (768 v_cycle/строка, 312 строк, 239616 v_cycle/кадр) отдаёт эмулятор, MCP их не вычисляет.
 
 ---
 

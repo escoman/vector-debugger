@@ -459,6 +459,30 @@ a new ROM.
 
 ---
 
+## Raster / Racing-the-Beam Debugging (Stage 6.27)
+
+**Inspection of VRAM alone is insufficient for raster effects.** Racing-the-beam
+ROMs change the palette (`OUT 0x0C–0x0F`) mid-frame, so a static VRAM read cannot
+reveal what actually appears on screen. To analyse such effects, query the live
+video beam state through the Agent (all three tools are read-only — they never
+pause, step, reset or re-render the emulation):
+
+```
+1. debug_get_beam_state      — where the beam is right now + palette under it
+2. debug_get_raster_events   — recent OUT events correlated to beam position/pc
+3. debug_get_screen_snapshot — the composed TV framebuffer as PNG
+```
+
+### Available Raster / Beam MCP Tools
+
+| Tool | Purpose |
+|------|---------|
+| `debug_get_beam_state` | Beam position (`frame`, `raster_line`, `v_cycle_in_frame`/`_in_line`, `rpixel`), visible-area coords, CPU `pc`/`opcode` beside the beam, palette entry being shifted out (`palette_index`/`palette_value`) and hardware `border_index`. Timing constants (`line_v_cycles=768`, `frame_lines=312`, `frame_v_cycles=239616`) come from the emulator video model, never from MCP. |
+| `debug_get_raster_events` | Ring of `OUT` instructions, each tagged with exact beam position (`frame`, `v_cycle`, `raster_line`, `v_cycle_in_line`) and `pc`/`port`/`value`, recorded on the emulation thread. Filters: `frame`, `v_cycle_start`/`v_cycle_end`, `port`, `pc`, `max_results` (default 1000, cap 50000). |
+| `debug_get_screen_snapshot` | The real composed TV framebuffer returned as MCP **image content** (PNG) plus JSON metadata (`width`, `height`, `frame`, `source:"tv"`, `format:"RGB"`, `complete_frame`). Reveals mid-frame raster/palette effects that a VRAM reconstruction cannot. |
+
+---
+
 ## Knowledge Base Usage
 
 Knowledge Base is a technical reference, not an algorithm.

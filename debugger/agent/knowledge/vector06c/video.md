@@ -225,6 +225,20 @@ TIMSoft describes up to 256 border colors using this technique.
 
 Status: VERIFIED_BY_PRIMARY_SOURCE (TIMSoft, "Секреты Вектора"); confirmed by `clrs.asm`
 
+> **Inspection of VRAM alone is insufficient for raster effects.** A static VRAM read
+> cannot reveal mid-frame `OUT 0x0C–0x0F` palette writes. To analyse racing-the-beam
+> code, use the runtime beam tools (Stage 6.27):
+> `debug_get_beam_state` → `debug_get_raster_events` → `debug_get_screen_snapshot`.
+> - `debug_get_beam_state` — beam position (`frame`, `raster_line`, `v_cycle_in_frame`/
+>   `_in_line`, `rpixel`), the CPU `pc` beside the beam, and the palette entry being
+>   shifted out (`palette_index`/`palette_value`) plus the hardware `border_index`.
+> - `debug_get_raster_events` — ring of `OUT` events, each correlated to the exact beam
+>   position and `pc`/`port`/`value` at execution time (recorded on the emulation thread).
+> - `debug_get_screen_snapshot` — the composed TV framebuffer as PNG, revealing the
+>   actual on-screen result rather than a VRAM reconstruction.
+> Timing constants (`line_v_cycles=768`, `frame_lines=312`, `frame_v_cycles=239616`) come
+> from the emulator's video model; MCP never computes them.
+
 ## Hardware vs Emulator Behavior
 
 - **Deferred port commits (VSDL)**: Port writes are not applied instantly but deferred

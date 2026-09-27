@@ -59,4 +59,43 @@ public:
     int fill3(int clocks);
     int fill4(int clocks);
     void advanceLine(bool updateScreen);
+
+#ifdef V06C_DEBUGGER
+    // Debugger-only READ-ONLY accessors (Stage 6.27: raster/beam debugging).
+    // These expose state that PixelFiller has ALREADY computed during the normal
+    // rasterization loop. They never mutate anything and do not touch the fill
+    // path, so the vanilla emulator (macro undefined) is completely unaffected.
+    int  rasterLine() const        { return this->raster_line; }
+    int  rasterPixel() const       { return this->raster_pixel; }
+    int  fbRow() const             { return this->fb_row; }
+    int  fbColumn() const          { return this->fb_column; }
+    bool vBorder() const           { return this->vborder; }
+    bool isVisible() const         { return this->visible; }
+    int  borderIndex() const       { return this->border_index; }
+    bool isMode512() const         { return this->mode512; }
+    int  firstVisibleLine() const  { return this->first_visible_line; }
+    int  centerOffset() const      { return this->center_offset; }
+    int  scrWidth() const          { return this->screen_width; }
+
+    // The 4-bit color/palette index the video path uses at the CURRENT beam
+    // position -- i.e. the entry that an OUT 0Ch committing right now would
+    // write (vio.h::commit_palette(index)). For border/blanking it is the
+    // border index; inside the picture it is the pixel group that the next
+    // shiftOutPixels() would emit, read WITHOUT shifting. Purely const.
+    int currentColorIndex() const {
+        const int rpixel = this->raster_pixel - 24;
+        const bool hb = this->vborder ||
+            (rpixel < (768 - 512) / 2) || (rpixel >= (768 - (768 - 512) / 2));
+        if (hb) {
+            return this->border_index;
+        }
+#if USE_BIT_PERMUTE
+        return static_cast<int>(this->pixel32_grouped >> 28);
+#else
+        const uint32_t p = this->pixel32;
+        return static_cast<int>((p >> 4 & 8) | (p >> 13 & 4) |
+                                (p >> 22 & 2) | (p >> 31 & 1));
+#endif
+    }
+#endif
 };

@@ -40,15 +40,17 @@ Example Claude Desktop configuration (`claude_desktop_config.json`):
 }
 ```
 
-## MCP Tools (70 tools)
+## MCP Tools (73 tools)
 
 All tools have the `debug_` prefix. Each is a thin wrapper over an AgentApi method.
 
 > The authoritative tool list is what the server returns from `tools/list` — clients must
 > not hardcode the count. Machine-readable capability marker: `v06c.api_version` in the
-> `initialize` result (2 = Stage 6.26 batch analysis tools). The grouped tables below were
+> `initialize` result (2 = Stage 6.26 batch analysis tools, 3 = Stage 6.27 raster/beam
+> debugging tools). The grouped tables below were
 > written for Stage 6.4 and do not list every tool added in Stages 6.11–6.25; the
-> Stage 6.26 batch tools are documented at the end of this section.
+> Stage 6.26 batch tools and Stage 6.27 raster/beam tools are documented at the end of
+> this section.
 
 ### Execution (5)
 | Tool | Description |
@@ -154,6 +156,42 @@ Limits (§16): `MAX_DISASSEMBLE_IMAGE_INSTRUCTIONS=40000`, `MAX_SEARCH_MATCHES=1
 (hard cap 10000), `MAX_BYTECODE_PATTERN_LENGTH=32`, `MAX_DIFF_CHANGED_RANGES=4096`,
 `MAX_DIFF_CHANGED_BYTES=32768`, `MAX_VRAM_READ_RANGE=32768` — see `AgentLimits`.
 
+### Raster / Beam — Stage 6.27 (3)
+| Tool | Description |
+|---|---|
+| `debug_get_beam_state` | Read-only snapshot of the video beam/raster position (`frame`, `raster_line`, `v_cycle_in_frame`/`_in_line`, `rpixel`), the visible-area coords, the CPU `pc`/`opcode` beside the beam, and the palette entry the video path is currently shifting out (`palette_index`/`palette_value`) plus the separate hardware `border_index`. Timing constants (`line_v_cycles=768`, `frame_lines=312`, `frame_v_cycles=239616`) come from the emulator's video model, never computed by MCP. |
+| `debug_get_screen_snapshot` | The real TV framebuffer, encoded as a PNG returned as MCP **image content** plus a JSON metadata text item (`width`, `height`, `frame`, `source:"tv"`, `format:"RGB"`, `complete_frame`). This is the composed output — NOT a reconstruction from VRAM — so it reveals mid-frame raster/palette effects. |
+| `debug_get_raster_events` | Ring of `OUT` instructions, each correlated with the exact beam position (`frame`, `v_cycle`, `raster_line`, `v_cycle_in_line`) and `pc`/`port`/`value` at the moment it executed (recorded on the emulation thread). Optional filters: `frame`, `v_cycle_start`/`v_cycle_end`, `port`, `pc`, `max_results` (default 1000, cap 50000). |
+
+All three are read-only: they never pause, step, reset or re-render the
+emulation. Every value originates in `DebugAdapter` (the only Vector-aware
+layer); the Agent API and MCP add no video timing of their own.
+
+## Raster / Racing-the-Beam Debugging
+
+> **Inspection of VRAM alone is insufficient for raster effects.** A ROM that
+> races the beam rewrites the palette (ports `0x0C`–`0x0F`) or VRAM *while a
+> frame is being drawn*; the value a given pixel ultimately shows depends on
+> WHEN, relative to the beam, those writes happen. A static VRAM read can look
+> unchanged while the screen visibly animates.
+
+Use this chain instead:
+
+```
+debug_get_beam_state  →  where is the beam right now? what palette is it shifting out?
+debug_get_raster_events →  which OUT landed on which raster_line / v_cycle?
+debug_get_screen_snapshot →  what did the composed frame actually look like?
+```
+
+Typical investigation:
+1. `debug_run`, then `debug_get_raster_events` filtered on `port: 0x0C` to find
+   the palette writes and their `v_cycle`/`raster_line` — this tells you the
+   scanline each colour change lands on.
+2. `debug_get_screen_snapshot` to capture the actual pixels (decode the PNG) and
+   compare against `debug_get_vram_bytes` — a divergence is the signature of a
+   racing-the-beam effect.
+3. `debug_get_beam_state` to anchor a breakpoint/step to a beam position.
+
 ## Architecture
 
 ```
@@ -162,7 +200,7 @@ debugger/mcp/
     mcp_json.h/cpp       — JSON serialization for Agent API types
     mcp_main.cpp         — v06c-mcp entry point (headless with real Board)
     tests/
-        test_mcp_protocol.cpp — 60 tests (Stage 6.4.1 … 6.26)
+        test_mcp_protocol.cpp — 60 tests (Stage 6.4.1 … 6.27)
     README.md
 
 debugger/thirdparty/cpp-mcp/ — cpp-mcp library (MIT, hkr04/cpp-mcp)
@@ -223,8 +261,8 @@ make test_mcp_protocol
 ./test_mcp_protocol
 ```
 
-60 tests covering (Stage 6.4.1 … 6.26):
-- Tool registration (all 70 tools, unique names — tools/list reflects reality)
+60 tests covering (Stage 6.4.1 … 6.27):
+- Tool registration (all 73 tools, unique names — tools/list reflects reality)
 - Schema validation (types, required params, numeric constraints)
 - Tool execution (via MockAgentBackend)
 - Error propagation (AgentApiResult → MCP error)
@@ -245,16 +283,26 @@ tools against real ROM images (`putup.rom`, `TESTAY.ROM`; override paths via
 Includes the §20 equivalence check `debug_disassemble_image == N × debug_disassemble_range`
 and the §16 `limit_exceeded` no-silent-cut check.
 
+```bash
+python3 debugger/tests/integration/test_raster_debugging.py   # path to v06c-mcp auto-detected in build/
+```
+
+Stage 6.27 raster/beam integration: boots the default ROM, then exercises
+`debug_get_beam_state` (frame/raster/v_cycle invariants), `debug_get_screen_snapshot`
+(decodes the returned PNG and validates IHDR dimensions + zlib IDAT) and
+`debug_get_raster_events` (monotonic `v_cycle`, port filter). The racing-the-beam
+scenario is gated on `V06C_FIRE3_ROM`. Missing ROMs or server binary → `SKIP`, exit 0.
+
 ## Regression
 
 All existing tests must pass:
 
 ```bash
-./test_agent_api          # 77 tests
+./test_agent_api          # 115 tests (incl. Stage 6.27 beam/screen/raster)
 ./test_agent_commands     # 15 tests
 ./test_agent_contract     # 49 tests
-./test_agent_integration  # 46 tests
-./test_mcp_protocol       # 60 tests (Stage 6.4.1 … 6.26)
+./test_agent_integration  # 51 tests
+./test_mcp_protocol       # 60 tests (Stage 6.4.1 … 6.27)
 ```
 
 All `test_*` binaries in the build directory must pass.

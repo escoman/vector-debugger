@@ -145,6 +145,16 @@ public:
     virtual VideoModeSnapshot  videoModeSnapshot() const = 0;
     virtual VramWriteSnapshot  vramWriteSnapshot() const = 0;
 
+    // -- Beam / raster (Stage 6.27) -----------------------------------------
+    // Read-only snapshot; must NOT pause/step/reset the emulation.
+    virtual BeamState beamState() const = 0;
+
+    // Raster events: OUT-with-beam-position ring (filters applied downstream).
+    virtual std::vector<RasterEvent> rasterEvents(
+        uint64_t frame, uint32_t vCycleStart, uint32_t vCycleEnd,
+        int port, uint16_t pc, size_t maxResults) const = 0;
+    virtual void clearRasterEvents() = 0;
+
     // -- Palette ------------------------------------------------------------
 
     virtual PaletteSnapshot paletteSnapshot() const = 0;

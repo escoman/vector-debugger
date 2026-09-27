@@ -125,6 +125,62 @@ struct SoundSnapshot
 };
 
 // ---------------------------------------------------------------------------
+// Beam / raster state (Stage 6.27: racing-the-beam debugging)
+//
+// Produced exclusively by DebugAdapter (the only Vector-specific access point)
+// from the emulator's own PixelFiller/Board/IO state. MCP/Agent API never
+// compute timing themselves.
+// ---------------------------------------------------------------------------
+
+struct BeamState
+{
+    uint64_t frame = 0;            // current frame number (Board::get_frame_no)
+    uint32_t vCycleInFrame = 0;    // 0 .. frameVCycles-1
+    uint32_t rasterLine = 0;       // 0 .. frameLines-1
+    uint32_t vCycleInLine = 0;     // 0 .. lineVCycles-1
+    uint32_t rpixel = 0;           // internal video-path horizontal coordinate
+
+    bool visible = false;          // beam inside the visible (non-border) area
+    int  visibleX = -1;            // -1 when not visible
+    int  visibleY = -1;
+
+    uint32_t frameVCycles = 0;     // timing params read from the video model
+    uint32_t lineVCycles  = 0;
+    uint32_t frameLines   = 0;
+
+    uint16_t cpuPc = 0;            // instruction currently executing near the beam
+    uint8_t  cpuOpcode = 0;
+
+    bool     hasPaletteIndex = false; // false -> paletteIndex under beam unknown
+    int      paletteIndex = -1;       // entry OUT 0Ch would write at this beam pos
+    uint8_t  paletteValue = 0;        // raw palette byte of that entry
+    int      borderIndex = -1;        // separate hardware border index (PB & 0x0f)
+
+    bool running = false;          // emulator was running at snapshot time
+    bool available = false;        // target exposes beam state at all
+};
+
+// ---------------------------------------------------------------------------
+// Raster event (Stage 6.27 P2): an OUT instruction correlated with the exact
+// beam position at the moment it executed.
+//
+// Recorded on the emulation thread inside the io.onwrite hook, where the
+// PixelFiller raster position and CPU PC are both live. This is the accurate
+// mid-frame path (a plain beam snapshot taken while running can lag).
+// ---------------------------------------------------------------------------
+
+struct RasterEvent
+{
+    uint64_t frame = 0;
+    uint32_t vCycle       = 0;   // v_cycle within the frame
+    uint32_t rasterLine   = 0;
+    uint32_t vCycleInLine = 0;
+    uint16_t pc   = 0;           // address of the OUT instruction
+    uint8_t  port = 0;
+    uint8_t  value = 0;
+};
+
+// ---------------------------------------------------------------------------
 // Debugger state machine
 // ---------------------------------------------------------------------------
 

@@ -122,9 +122,70 @@ struct AgentApiResult<void>
 
 struct AgentScreenSnapshot
 {
-    std::vector<uint32_t> pixels;  // ARGB8888
+    std::vector<uint32_t> pixels;  // ARGB8888 (raw TV framebuffer, not reconstructed)
     int width  = 0;
     int height = 0;
+
+    // -- Stage 6.27: raster/beam PNG snapshot metadata ----------------------
+    uint64_t    frame         = 0;      // frame number the image was captured on
+    bool        completeFrame = false;  // image is a whole completed frame
+    std::string format        = "RGB";  // pixel format of the encoded image
+    std::string source        = "tv";   // real TV buffer ("tv"), never "vram"
+    std::string paletteMode   = "raster";
+    std::string pngBase64;              // PNG bytes, base64 (empty when no image)
+};
+
+// ---------------------------------------------------------------------------
+// AgentBeamState — Stage 6.27
+//
+// Plain, JSON-compatible mirror of debugger BeamState. No IDebugBackend
+// types. All timing/position values are produced by DebugAdapter; the Agent
+// API and MCP never compute them.
+// ---------------------------------------------------------------------------
+
+struct AgentBeamState
+{
+    bool     available = false;
+    bool     running   = false;
+
+    uint64_t frame = 0;
+    uint32_t vCycleInFrame = 0;
+    uint32_t rasterLine = 0;
+    uint32_t vCycleInLine = 0;
+    uint32_t rpixel = 0;
+
+    bool     visible = false;
+    int      visibleX = -1;
+    int      visibleY = -1;
+
+    uint32_t frameVCycles = 0;
+    uint32_t lineVCycles  = 0;
+    uint32_t frameLines   = 0;
+
+    uint16_t cpuPc = 0;
+    uint8_t  cpuOpcode = 0;
+
+    bool     hasPaletteIndex = false;
+    int      paletteIndex = -1;
+    uint8_t  paletteValue = 0;
+    int      borderIndex = -1;
+};
+
+// ---------------------------------------------------------------------------
+// AgentRasterEvent — Stage 6.27 P2
+//
+// OUT instruction correlated with the beam position when it executed.
+// ---------------------------------------------------------------------------
+
+struct AgentRasterEvent
+{
+    uint64_t frame = 0;
+    uint32_t vCycle = 0;
+    uint32_t rasterLine = 0;
+    uint32_t vCycleInLine = 0;
+    uint16_t pc = 0;
+    uint8_t  port = 0;
+    uint8_t  value = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -155,6 +216,9 @@ namespace AgentLimits {
     static const size_t MAX_DIFF_CHANGED_RANGES         = 4096;    // aggregated diff ranges
     static const size_t MAX_DIFF_CHANGED_BYTES          = 32768;   // reported diff bytes
     static const size_t MAX_VRAM_READ_RANGE             = 32768;   // VRAM is 32K (4 planes)
+    // -- Stage 6.27: raster / beam event limits ------------------------------
+    static const size_t MAX_RASTER_EVENTS               = 50000;   // ring capacity
+    static const size_t RASTER_EVENTS_DEFAULT_LIMIT     = 1000;    // default per-query cap
 }
 
 // ---------------------------------------------------------------------------

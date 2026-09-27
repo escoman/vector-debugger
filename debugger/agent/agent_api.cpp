@@ -3,6 +3,7 @@
 #include "opcode_info.h"
 #include "rom_load_address.h"
 #include "rdb_controller.h"
+#include "png_encoder.h"
 
 #include <algorithm>
 #include <cctype>
@@ -1545,6 +1546,152 @@ AgentApiResult<AgentScreenSnapshot> AgentApi::getScreen()
     oss << result.width << "x" << result.height;
     log_.record("getScreen", "", oss.str(), elapsedMs(t0));
     return AgentApiResult<AgentScreenSnapshot>::ok(std::move(result));
+}
+
+// ---------------------------------------------------------------------------
+// Beam / raster state (Stage 6.27: racing-the-beam debugging)
+//
+// Read-only. Every value originates in DebugAdapter (the only Vector-aware
+// layer) and is surfaced through the backend facade; the Agent API performs
+// no timing computation of its own.
+// ---------------------------------------------------------------------------
+
+AgentApiResult<AgentBeamState> AgentApi::getBeamState()
+{
+    auto t0 = std::chrono::steady_clock::now();
+    BeamState bs = backend_.beamState();
+
+    if (!bs.available) {
+        log_.record("getBeamState", "", "unavailable", elapsedMs(t0));
+        return AgentApiResult<AgentBeamState>::fail(
+            ErrorCode::Unsupported, "target does not expose beam/raster state");
+    }
+
+    AgentBeamState r;
+    r.available      = bs.available;
+    r.running        = bs.running;
+    r.frame          = bs.frame;
+    r.vCycleInFrame  = bs.vCycleInFrame;
+    r.rasterLine     = bs.rasterLine;
+    r.vCycleInLine   = bs.vCycleInLine;
+    r.rpixel         = bs.rpixel;
+    r.visible        = bs.visible;
+    r.visibleX       = bs.visibleX;
+    r.visibleY       = bs.visibleY;
+    r.frameVCycles   = bs.frameVCycles;
+    r.lineVCycles    = bs.lineVCycles;
+    r.frameLines     = bs.frameLines;
+    r.cpuPc          = bs.cpuPc;
+    r.cpuOpcode      = bs.cpuOpcode;
+    r.hasPaletteIndex = bs.hasPaletteIndex;
+    r.paletteIndex   = bs.paletteIndex;
+    r.paletteValue   = bs.paletteValue;
+    r.borderIndex    = bs.borderIndex;
+
+    std::ostringstream oss;
+    oss << "frame=" << r.frame << " line=" << r.rasterLine
+        << " vcycle=" << r.vCycleInFrame;
+    log_.record("getBeamState", "", oss.str(), elapsedMs(t0));
+    return AgentApiResult<AgentBeamState>::ok(std::move(r));
+}
+
+// ---------------------------------------------------------------------------
+// Screen snapshot as PNG (Stage 6.27)
+//
+// The image is the REAL TV framebuffer (backend screenSnapshot), never a
+// reconstruction from VRAM. Converted ARGB8888 -> RGBA, encoded to an
+// in-memory PNG, base64 for JSON transport. No scaling, no geometry change.
+// ---------------------------------------------------------------------------
+
+AgentApiResult<AgentScreenSnapshot> AgentApi::getScreenSnapshot()
+{
+    auto t0 = std::chrono::steady_clock::now();
+
+    BeamState bs = backend_.beamState();
+    auto snap = backend_.screenSnapshot();
+
+    if (snap.width <= 0 || snap.height <= 0 || snap.pixels.empty()) {
+        log_.record("getScreenSnapshot", "", "no image", elapsedMs(t0));
+        return AgentApiResult<AgentScreenSnapshot>::fail(
+            ErrorCode::OperationFailed, "screen buffer is empty");
+    }
+
+    AgentScreenSnapshot result;
+    result.width  = snap.width;
+    result.height = snap.height;
+    result.frame  = bs.frame;
+    result.source = "tv";
+    result.format = "RGB";
+    result.paletteMode = "raster";
+    // A guaranteed-complete frame only when the emulator is paused; while
+    // running the buffer is still a committed frame but may lag the beam.
+    result.completeFrame = !bs.running;
+
+    // ARGB8888 -> RGBA8888 (byte order for the PNG encoder).
+    const size_t n = static_cast<size_t>(snap.width) * static_cast<size_t>(snap.height);
+    std::vector<uint8_t> rgba(n * 4);
+    for (size_t i = 0; i < n; ++i) {
+        const uint32_t p = snap.pixels[i];
+        rgba[i * 4 + 0] = static_cast<uint8_t>((p >> 16) & 0xFF); // R
+        rgba[i * 4 + 1] = static_cast<uint8_t>((p >> 8)  & 0xFF); // G
+        rgba[i * 4 + 2] = static_cast<uint8_t>( p        & 0xFF); // B
+        rgba[i * 4 + 3] = 0xFF;                                    // A opaque
+    }
+
+    std::vector<uint8_t> png = png::encodeRGBA(rgba.data(), snap.width, snap.height);
+    result.pngBase64 = png::base64Encode(png);
+
+    std::ostringstream oss;
+    oss << result.width << "x" << result.height << " png=" << png.size() << "B";
+    log_.record("getScreenSnapshot", "", oss.str(), elapsedMs(t0));
+    return AgentApiResult<AgentScreenSnapshot>::ok(std::move(result));
+}
+
+// ---------------------------------------------------------------------------
+// Raster events (Stage 6.27 P2)
+//
+// Delegates filtering to the backend ring; converts to plain AgentRasterEvent
+// (no debugger types cross the Agent boundary).
+// ---------------------------------------------------------------------------
+
+AgentApiResult<std::vector<AgentRasterEvent>> AgentApi::getRasterEvents(
+    uint64_t frame, uint32_t vCycleStart, uint32_t vCycleEnd,
+    int port, uint16_t pc, size_t maxResults)
+{
+    auto t0 = std::chrono::steady_clock::now();
+
+    // Formalized cap so a query can never return an unbounded vector.
+    if (maxResults > AgentLimits::MAX_RASTER_EVENTS)
+        maxResults = AgentLimits::MAX_RASTER_EVENTS;
+
+    auto evs = backend_.rasterEvents(frame, vCycleStart, vCycleEnd, port, pc, maxResults);
+
+    std::vector<AgentRasterEvent> out;
+    out.reserve(evs.size());
+    for (const auto &e : evs) {
+        AgentRasterEvent a;
+        a.frame         = e.frame;
+        a.vCycle        = e.vCycle;
+        a.rasterLine    = e.rasterLine;
+        a.vCycleInLine  = e.vCycleInLine;
+        a.pc            = e.pc;
+        a.port          = e.port;
+        a.value         = e.value;
+        out.push_back(a);
+    }
+
+    std::ostringstream oss;
+    oss << out.size() << " events";
+    log_.record("getRasterEvents", "", oss.str(), elapsedMs(t0));
+    return AgentApiResult<std::vector<AgentRasterEvent>>::ok(std::move(out));
+}
+
+AgentApiResult<void> AgentApi::clearRasterEvents()
+{
+    auto t0 = std::chrono::steady_clock::now();
+    backend_.clearRasterEvents();
+    log_.record("clearRasterEvents", "", "cleared", elapsedMs(t0));
+    return AgentApiResult<void>::ok();
 }
 
 // ---------------------------------------------------------------------------

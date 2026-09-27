@@ -155,6 +155,22 @@ public:
 
     AgentApiResult<AgentScreenSnapshot> getScreen();
 
+    // -- Beam / raster (Stage 6.27: racing-the-beam debugging) ---------------
+    // Read-only; never pauses/steps/re-renders. All values come from
+    // DebugAdapter via the backend facade.
+
+    AgentApiResult<AgentBeamState> getBeamState();
+    // Real TV-frame buffer encoded to PNG (base64) + frame metadata.
+    AgentApiResult<AgentScreenSnapshot> getScreenSnapshot();
+    // OUT-with-beam-position events. Filters: frame (0=any), v_cycle range,
+    // port (-1=any), pc (0xFFFF=any), maxResults.
+    AgentApiResult<std::vector<AgentRasterEvent>> getRasterEvents(
+        uint64_t frame = 0, uint32_t vCycleStart = 0,
+        uint32_t vCycleEnd = 0xFFFFFFFFu, int port = -1,
+        uint16_t pc = 0xFFFF,
+        size_t maxResults = AgentLimits::RASTER_EVENTS_DEFAULT_LIMIT);
+    AgentApiResult<void> clearRasterEvents();
+
     // -- Annotations (Stage 6.3: AgentApiResult<void>) -----------------------
 
     AgentApiResult<void> createFunction(uint16_t address, uint16_t size = 0);

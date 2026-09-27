@@ -278,11 +278,45 @@ json debugStateToJson(const DebugStateResult &state) {
 // -- AgentScreenSnapshot -----------------------------------------------------
 
 json screenSnapshotToJson(const AgentScreenSnapshot &snap) {
+    // Metadata only. The PNG bytes are returned as MCP image content by the
+    // tool handler (base64 -> "type":"image"), never inlined into this JSON.
     return {
-        {"width",  snap.width},
-        {"height", snap.height},
-        {"pixel_count", static_cast<int>(snap.pixels.size())}
+        {"width",          snap.width},
+        {"height",         snap.height},
+        {"pixel_count",    static_cast<int>(snap.pixels.size())},
+        {"frame",          snap.frame},
+        {"complete_frame", snap.completeFrame},
+        {"format",         snap.format},
+        {"source",         snap.source},
+        {"palette_mode",   snap.paletteMode},
+        {"has_image",      !snap.pngBase64.empty()}
     };
+}
+
+// -- Beam / raster state (Stage 6.27) ----------------------------------------
+
+json beamStateToJson(const AgentBeamState &beam) {
+    json j;
+    j["available"]        = beam.available;
+    j["running"]          = beam.running;
+    j["frame"]            = beam.frame;
+    j["v_cycle_in_frame"] = beam.vCycleInFrame;
+    j["raster_line"]      = beam.rasterLine;
+    j["v_cycle_in_line"]  = beam.vCycleInLine;
+    j["rpixel"]           = beam.rpixel;
+    j["visible"]          = beam.visible;
+    j["visible_x"]        = beam.visibleX;
+    j["visible_y"]        = beam.visibleY;
+    j["frame_v_cycles"]   = beam.frameVCycles;
+    j["line_v_cycles"]    = beam.lineVCycles;
+    j["frame_lines"]      = beam.frameLines;
+    j["cpu_pc"]           = hex16(beam.cpuPc);
+    j["cpu_opcode"]       = beam.cpuOpcode;
+    j["has_palette_index"] = beam.hasPaletteIndex;
+    j["palette_index"]    = beam.paletteIndex;   // -1 when not applicable
+    j["palette_value"]    = beam.paletteValue;
+    j["border_index"]     = beam.borderIndex;    // separate HW border index
+    return j;
 }
 
 // -- FunctionContext ---------------------------------------------------------

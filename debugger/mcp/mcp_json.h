@@ -114,6 +114,10 @@ json debugStateToJson(const DebugStateResult &state);
 
 json screenSnapshotToJson(const AgentScreenSnapshot &snap);
 
+// -- Beam / raster state (Stage 6.27) ----------------------------------------
+
+json beamStateToJson(const AgentBeamState &beam);
+
 // -- FunctionContext ---------------------------------------------------------
 
 json functionContextToJson(const FunctionContext &ctx);

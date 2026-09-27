@@ -31,10 +31,11 @@ McpServer::McpServer(AgentApi &api)
     // actually registered tools (server_->get_tools()); the machine-readable
     // v06c.api_version lets clients detect batch-analysis capability without
     // guessing from the binary version.  Bump api_version when new tools or
-    // result fields are added: 2 = Stage 6.26 batch analysis tools.
+    // result fields are added: 2 = Stage 6.26 batch analysis tools,
+    // 3 = Stage 6.27 raster/beam debugging tools.
     server_->set_capabilities({
         {"tools", {{"listChanged", false}}},
-        {"v06c",  {{"api_version", 2}}}
+        {"v06c",  {{"api_version", 3}}}
     });
 }
 
@@ -95,6 +96,7 @@ void McpServer::registerAllTools() {
     registerRdbTools();
     registerRuntimeAnalysisTools();  // Stage 6.20
     registerBatchAnalysisTools();    // Stage 6.26
+    registerRasterTools();           // Stage 6.27: beam / raster
 }
 
 void McpServer::runStdio() {
@@ -2014,6 +2016,119 @@ void McpServer::registerBatchAnalysisTools() {
                 {"address", mcp_json::hex16(addr)},
                 {"length",  static_cast<int>(r.value.size())},
                 {"bytes",   bytesArr}
+            });
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Raster / beam debugging tools (Stage 6.27)
+//
+// Thin adapters: every value is produced by DebugAdapter and returned via the
+// Agent API. MCP performs no video-timing or rendering computation itself.
+// Read-only: calling these never pauses, steps, resets or re-renders.
+// ---------------------------------------------------------------------------
+
+void McpServer::registerRasterTools() {
+    // debug_get_beam_state — current beam/raster position + video timing +
+    // palette under the beam.
+    {
+        auto tool = mcp::tool_builder("debug_get_beam_state")
+            .with_description(
+                "Read-only snapshot of the video beam/raster position (frame, "
+                "raster_line, v_cycle), the CPU instruction executing beside the "
+                "beam, and the palette entry the video path is currently shifting "
+                "out. Essential for debugging racing-the-beam / raster effects. "
+                "Does NOT pause or re-render the emulation.")
+            .build();
+        registerTool(tool, [this](const mcp::json &, const std::string &) -> mcp::json {
+            auto r = api_.getBeamState();
+            if (!r.success) return errorContent(agentErrorCodeName(r.error_code), r.error_message);
+            return textContent(mcp_json::beamStateToJson(r.value));
+        });
+    }
+
+    // debug_get_screen_snapshot — the real TV framebuffer as a PNG image.
+    {
+        auto tool = mcp::tool_builder("debug_get_screen_snapshot")
+            .with_description(
+                "Capture the currently-displayed frame from the emulator's real "
+                "TV framebuffer and return it as a PNG image plus JSON metadata "
+                "(frame id, dimensions, source). This is the composed output — "
+                "NOT a reconstruction from VRAM — so it reveals mid-frame "
+                "raster/palette effects that a VRAM read alone cannot. Does NOT "
+                "pause or re-render the emulation.")
+            .build();
+        registerTool(tool, [this](const mcp::json &, const std::string &) -> mcp::json {
+            auto r = api_.getScreenSnapshot();
+            if (!r.success) return errorContent(agentErrorCodeName(r.error_code), r.error_message);
+
+            // Build a CallToolResult content array by hand:
+            //   [ image/png (base64, best-effort), text metadata ]
+            mcp::json meta = mcp_json::screenSnapshotToJson(r.value);
+            mcp::json content = mcp::json::array();
+            if (!r.value.pngBase64.empty()) {
+                content.push_back({
+                    {"type", "image"},
+                    {"data", r.value.pngBase64},
+                    {"mimeType", "image/png"}
+                });
+            }
+            content.push_back({{"type", "text"}, {"text", meta.dump(2)}});
+            return content;
+        });
+    }
+
+    // debug_get_raster_events — OUT instructions correlated with beam position.
+    {
+        auto tool = mcp::tool_builder("debug_get_raster_events")
+            .with_description(
+                "Return recorded OUT instructions with the exact beam position "
+                "(frame, raster_line, v_cycle) and PC at the moment each executed. "
+                "This is the accurate mid-frame path for racing-the-beam analysis: "
+                "match a palette write (port 0x0C-0x0F) to the line/pixel it lands "
+                "on. Filters are optional: frame, v_cycle range, port, pc, "
+                "max_results. Read-only.")
+            .with_number_param("frame", "Filter by frame number (0 = any)", false)
+            .with_number_param("v_cycle_start", "Filter v_cycle >= this (default 0)", false)
+            .with_number_param("v_cycle_end", "Filter v_cycle <= this (default 4294967295)", false)
+            .with_number_param("port", "Filter by I/O port (-1/absent = any)", false)
+            .with_number_param("pc", "Filter by PC (absent = any)", false)
+            .with_number_param("max_results", "Max events (default 1000, cap 50000)", false)
+            .build();
+        registerTool(tool, [this](const mcp::json &params, const std::string &) -> mcp::json {
+            auto optInt = [&params](const char *name, int def) -> int {
+                if (!params.contains(name) || params[name].is_null()) return def;
+                return params[name].get<int>();
+            };
+            uint64_t frame      = static_cast<uint64_t>(optInt("frame", 0));
+            uint32_t vStart     = static_cast<uint32_t>(optInt("v_cycle_start", 0));
+            uint32_t vEnd       = static_cast<uint32_t>(
+                                      optInt("v_cycle_end", -1)); // -1 -> 0xFFFFFFFF
+            int      port       = optInt("port", -1);
+            uint16_t pc         = static_cast<uint16_t>(optInt("pc", 0xFFFF));
+            size_t   maxResults = static_cast<size_t>(
+                                      optInt("max_results",
+                                             static_cast<int>(AgentLimits::RASTER_EVENTS_DEFAULT_LIMIT)));
+
+            auto r = api_.getRasterEvents(frame, vStart, vEnd, port, pc, maxResults);
+            if (!r.success) return errorContent(agentErrorCodeName(r.error_code), r.error_message);
+
+            mcp::json events = mcp::json::array();
+            for (const auto &e : r.value) {
+                events.push_back({
+                    {"frame",           e.frame},
+                    {"v_cycle",         e.vCycle},
+                    {"raster_line",     e.rasterLine},
+                    {"v_cycle_in_line", e.vCycleInLine},
+                    {"pc",              mcp_json::hex16(e.pc)},
+                    {"port",            e.port},
+                    {"value",           e.value}
+                });
+            }
+            return textContent({
+                {"count",  static_cast<int>(events.size())},
+                {"events", events}
             });
         });
     }

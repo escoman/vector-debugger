@@ -2160,6 +2160,127 @@ static void test_disassemble_range_readonly()
 }
 
 // ---------------------------------------------------------------------------
+// Stage 6.27 — Beam / raster / screen-snapshot Agent API
+// ---------------------------------------------------------------------------
+
+static void test_get_beam_state()
+{
+    TEST_BEGIN("getBeamState — maps adapter fields, fails when unavailable");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    // Default: unavailable -> Unsupported failure (target has no video path).
+    auto rNo = api.getBeamState();
+    CHECK(!rNo.success, "fails when beam state unavailable");
+
+    BeamState s;
+    s.available = true;
+    s.running = false;
+    s.frame = 42;
+    s.rasterLine = 100;
+    s.vCycleInLine = 300;
+    s.vCycleInFrame = 100 * 768 + 300;
+    s.frameVCycles = 239616; s.lineVCycles = 768; s.frameLines = 312;
+    s.visible = true; s.visibleX = 12; s.visibleY = 60;
+    s.cpuPc = 0x1234; s.cpuOpcode = 0xCD;
+    s.hasPaletteIndex = true; s.paletteIndex = 5; s.paletteValue = 0xA3;
+    s.borderIndex = 1;
+    mock.setBeamState(s);
+
+    auto r = api.getBeamState();
+    CHECK(r.success, "succeeds when available");
+    CHECK_EQ(42u, (unsigned)r.value.frame, "frame");
+    CHECK_EQ(100u, r.value.rasterLine, "raster_line");
+    CHECK_EQ(300u, r.value.vCycleInLine, "v_cycle_in_line");
+    CHECK_EQ(768u, r.value.lineVCycles, "line_v_cycles");
+    CHECK(r.value.visible, "visible");
+    CHECK_EQ(0x1234u, r.value.cpuPc, "cpu_pc");
+    CHECK(r.value.hasPaletteIndex, "has_palette_index");
+    CHECK_EQ(5u, (unsigned)r.value.paletteIndex, "palette_index");
+    CHECK_EQ(0xA3u, r.value.paletteValue, "palette_value");
+    CHECK_EQ(1u, (unsigned)r.value.borderIndex, "border_index");
+    TEST_END();
+}
+
+static void test_get_screen_snapshot_png()
+{
+    TEST_BEGIN("getScreenSnapshot — encodes real TV buffer to PNG (base64)");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    BeamState bs; bs.available = true; bs.frame = 7; bs.running = false;
+    mock.setBeamState(bs);
+
+    // Tiny 2x1 ARGB8888 buffer: red, green.
+    std::vector<uint32_t> px = { 0xFFFF0000u, 0xFF00FF00u };
+    mock.setScreenSnapshot(2, 1, px);
+
+    auto r = api.getScreenSnapshot();
+    CHECK(r.success, "snapshot succeeds");
+    CHECK_EQ(2, r.value.width, "width preserved");
+    CHECK_EQ(1, r.value.height, "height preserved");
+    CHECK_EQ(7u, (unsigned)r.value.frame, "frame from beam state");
+    CHECK_STR("tv", r.value.source, "source is real TV buffer");
+    CHECK_STR("RGB", r.value.format, "format");
+    CHECK(r.value.completeFrame, "complete frame when paused");
+    // PNG base64 must start with the signature bytes 89 50 4E 47 0D 0A 1A 0A.
+    CHECK(r.value.pngBase64.size() > 8, "png base64 non-empty");
+    CHECK(r.value.pngBase64.compare(0, 8, "iVBORw0K") == 0,
+          "png base64 has PNG signature prefix");
+    TEST_END();
+}
+
+static void test_screen_snapshot_empty_fails()
+{
+    TEST_BEGIN("getScreenSnapshot — fails on empty buffer");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+    BeamState bs; bs.available = true; mock.setBeamState(bs);
+    // screenSnap_ defaults to width/height 0 -> empty.
+    auto r = api.getScreenSnapshot();
+    CHECK(!r.success, "fails when screen buffer empty");
+    TEST_END();
+}
+
+static void test_get_raster_events()
+{
+    TEST_BEGIN("getRasterEvents — filters by frame/port and caps results");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    std::vector<RasterEvent> evs;
+    for (int i = 0; i < 5; ++i) {
+        RasterEvent e;
+        e.frame = (i < 3) ? 1 : 2;
+        e.rasterLine = 10 + i;
+        e.vCycleInLine = 200 + i;
+        e.vCycle = e.rasterLine * 768 + e.vCycleInLine;
+        e.pc = 0x2000;
+        e.port = (i % 2 == 0) ? 0x0C : 0x0D;
+        e.value = static_cast<uint8_t>(0x10 + i);
+        evs.push_back(e);
+    }
+    mock.setRasterEvents(evs);
+
+    auto all = api.getRasterEvents();
+    CHECK(all.success, "query succeeds");
+    CHECK_EQ(5u, (unsigned)all.value.size(), "all events");
+
+    auto frame2 = api.getRasterEvents(/*frame*/2);
+    CHECK_EQ(2u, (unsigned)frame2.value.size(), "frame filter");
+
+    auto portC = api.getRasterEvents(0, 0, 0xFFFFFFFFu, /*port*/0x0C);
+    CHECK_EQ(3u, (unsigned)portC.value.size(), "port filter (0x0C)");
+
+    auto capped = api.getRasterEvents(0, 0, 0xFFFFFFFFu, -1, 0xFFFF, /*max*/2);
+    CHECK(capped.success, "cap query ok");
+    CHECK_EQ(2u, (unsigned)capped.value.size(), "max_results caps to tail");
+    // tail = last two events (frame 2), values 0x13,0x14
+    CHECK_EQ(0x14u, capped.value.back().value, "tail is most recent");
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -2335,6 +2456,12 @@ int main()
     test_disassemble_range_invalid();
     test_disassemble_range_incomplete();
     test_disassemble_range_readonly();
+
+    // Stage 6.27 — Beam / raster / screen-snapshot
+    test_get_beam_state();
+    test_get_screen_snapshot_png();
+    test_screen_snapshot_empty_fails();
+    test_get_raster_events();
 
     printf("\n\033[1;33m========================================\033[0m\n");
     printf("  Results: %d/%d passed", tests_passed, tests_run);

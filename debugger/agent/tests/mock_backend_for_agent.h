@@ -314,6 +314,27 @@ public:
     VideoModeSnapshot videoModeSnapshot() const override { return videoSnap_; }
     VramWriteSnapshot vramWriteSnapshot() const override { return {}; }
 
+    // -- Beam / raster (Stage 6.27) -----------------------------------------
+    BeamState beamState() const override { return beamState_; }
+
+    std::vector<RasterEvent> rasterEvents(
+        uint64_t frame, uint32_t vCycleStart, uint32_t vCycleEnd,
+        int port, uint16_t pc, size_t maxResults) const override {
+        std::vector<RasterEvent> out;
+        for (const auto &ev : rasterEvents_) {
+            if (frame != 0 && ev.frame != frame) continue;
+            if (ev.vCycle < vCycleStart || ev.vCycle > vCycleEnd) continue;
+            if (port >= 0 && ev.port != static_cast<uint8_t>(port)) continue;
+            if (pc != 0xFFFF && ev.pc != pc) continue;
+            out.push_back(ev);
+        }
+        if (maxResults != static_cast<size_t>(-1) && out.size() > maxResults)
+            out.erase(out.begin(), out.begin() + (out.size() - maxResults));
+        return out;
+    }
+    void clearRasterEvents() override { rasterEvents_.clear(); }
+    void setRasterEvents(const std::vector<RasterEvent> &evs) { rasterEvents_ = evs; }
+
     // -- Palette ------------------------------------------------------------
 
     PaletteSnapshot paletteSnapshot() const override { return {}; }
@@ -594,6 +615,15 @@ public:
         videoSnap_.borderTop = (videoSnap_.screenHeight - videoSnap_.visibleHeight) / 2;
     }
 
+    // Stage 6.27: inject a deterministic beam state for agent/API tests.
+    void setBeamState(const BeamState &s) { beamState_ = s; }
+
+    // Stage 6.27: inject a synthetic TV framebuffer for screen-snapshot tests.
+    void setScreenSnapshot(int w, int h, std::vector<uint32_t> px) {
+        screenSnap_.width = w; screenSnap_.height = h;
+        screenSnap_.pixels = std::move(px);
+    }
+
     void setMemory(uint16_t addr, const std::vector<uint8_t> &data) {
         for (size_t i = 0; i < data.size(); ++i) {
             memory_[static_cast<uint16_t>(addr + i)] = data[i];
@@ -639,6 +669,8 @@ private:
 
     ScreenSnapshot screenSnap_;
     VideoModeSnapshot videoSnap_;
+    BeamState beamState_;
+    std::vector<RasterEvent> rasterEvents_;
 
     std::vector<uint64_t> executeCount_;
     std::vector<uint64_t> readCount_;

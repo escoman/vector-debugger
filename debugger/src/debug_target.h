@@ -70,6 +70,26 @@ public:
 
     virtual ScreenData screenSnapshot() = 0;
 
+    // -- Beam / raster state (Stage 6.27) ----------------------------------
+    // Read-only snapshot of the current beam/raster position and the video
+    // state associated with it. Must NOT pause/step/reset the emulation.
+    // Default: unavailable (test targets without a real video path).
+
+    virtual BeamState getBeamState() { BeamState s; return s; }
+
+    // Ring of OUT-with-beam-position events recorded on the emulation thread.
+    // Filters: frame (0 = any), v_cycle range [start,end] (end UINT32_MAX = any),
+    // port (-1 = any), pc (UINT16_MAX = any). maxResults caps the tail.
+    virtual std::vector<RasterEvent> getRasterEvents(
+        uint64_t frame, uint32_t vCycleStart, uint32_t vCycleEnd,
+        int port, uint16_t pc, size_t maxResults)
+    {
+        (void)frame; (void)vCycleStart; (void)vCycleEnd;
+        (void)port; (void)pc; (void)maxResults;
+        return {};
+    }
+    virtual void clearRasterEvents() {}
+
     // -- Palette ------------------------------------------------------------
 
     virtual PaletteSnapshot paletteSnapshot() const { return {}; }

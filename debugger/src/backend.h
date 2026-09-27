@@ -150,6 +150,13 @@ public:
     VideoModeSnapshot  videoModeSnapshot() const override;
     VramWriteSnapshot  vramWriteSnapshot() const override;
 
+    BeamState beamState() const override;
+
+    std::vector<RasterEvent> rasterEvents(
+        uint64_t frame, uint32_t vCycleStart, uint32_t vCycleEnd,
+        int port, uint16_t pc, size_t maxResults) const override;
+    void clearRasterEvents() override;
+
     // -- IDebugBackend: palette ---------------------------------------------
 
     PaletteSnapshot paletteSnapshot() const override;

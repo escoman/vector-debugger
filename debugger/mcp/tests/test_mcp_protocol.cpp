@@ -120,15 +120,22 @@ static mcp::json parseTextAsJson(const mcp::json &result) {
 // ---------------------------------------------------------------------------
 
 void test_all_tools_registered() {
-    TEST_BEGIN("all 70 tools registered");
+    TEST_BEGIN("all 73 tools registered");
     Fixture f;
     auto names = f.mcp.registeredToolNames();
-    // Stage 6.26: 64 (through Stage 6.25) + 6 batch analysis tools = 70
-    CHECK_EQ(static_cast<int>(names.size()), 70, "should have 70 tools");
+    // Stage 6.26: 70, + Stage 6.27 raster/beam (beam_state, screen_snapshot,
+    // raster_events) = 73
+    CHECK_EQ(static_cast<int>(names.size()), 73, "should have 73 tools");
     // tools/list must reflect reality: no duplicates in registration
     std::set<std::string> unique(names.begin(), names.end());
     CHECK_EQ(static_cast<int>(unique.size()), static_cast<int>(names.size()),
              "tool names must be unique");
+    // Stage 6.27: the three raster/beam tools must be registered
+    for (const char *t : {"debug_get_beam_state",
+                          "debug_get_screen_snapshot",
+                          "debug_get_raster_events"}) {
+        CHECK(unique.count(t) == 1, std::string("registered: ") + t);
+    }
     TEST_END();
 }
 

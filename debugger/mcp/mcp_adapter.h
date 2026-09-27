@@ -68,6 +68,7 @@ private:
     void registerRdbTools();
     void registerRuntimeAnalysisTools();  // Stage 6.20
     void registerBatchAnalysisTools();    // Stage 6.26
+    void registerRasterTools();           // Stage 6.27: beam / raster
 
     // Register a tool with both cpp-mcp server and local handler map.
     void registerTool(const mcp::tool &tool, mcp::tool_handler handler);

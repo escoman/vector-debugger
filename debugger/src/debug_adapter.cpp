@@ -121,6 +121,7 @@ DebugAdapter::DebugAdapter()
     , io(memory, keyboard, timer, fdc, ay, tape_player)
     , filler(memory, io, tv)
     , board(memory, io, filler, soundnik, tv, tape_player)
+    , rasterEvents_(50000)
 {
 }
 
@@ -167,6 +168,21 @@ void DebugAdapter::init()
     // The io.onwrite hook fires BEFORE the actual write, giving us raw
     // port/value pairs.  We interpret the i8253/PIA protocol here.
     io.onwrite = [this](uint32_t port, uint8_t value) -> void {
+        // Stage 6.27 P2: record every OUT with its exact beam position.
+        // Runs on the emulation thread, so filler.* and i8080_pc() are live
+        // right here — this is the accurate mid-frame correlation.
+        {
+            RasterEvent ev;
+            ev.frame         = static_cast<uint64_t>(board.get_frame_no());
+            ev.rasterLine    = static_cast<uint32_t>(filler.rasterLine());
+            ev.vCycleInLine  = static_cast<uint32_t>(filler.rasterPixel());
+            ev.vCycle        = ev.rasterLine * VideoTiming::lineVCycles + ev.vCycleInLine;
+            ev.pc            = static_cast<uint16_t>(i8080_pc());
+            ev.port          = static_cast<uint8_t>(port);
+            ev.value         = value;
+            rasterEvents_.push(ev);
+        }
+
         // Track AY writes (ports 0x14 = data, 0x15 = latch).
         // AY activity must never touch the standard noise counter below.
         if (port == 0x14 || port == 0x15) {
@@ -449,6 +465,99 @@ ScreenData DebugAdapter::screenSnapshot()
     size_t total = static_cast<size_t>(data.width) * data.height;
     data.pixels.assign(pixels, pixels + total);
     return data;
+}
+
+// ---------------------------------------------------------------------------
+// Stage 6.27: Beam / raster state (racing-the-beam debugging)
+//
+// Pure read-only snapshot. Reads ONLY state the video path has already
+// computed (PixelFiller debugger accessors, Board frame counter, IO palette).
+// Never pauses, steps, re-renders or mutates anything.
+// ---------------------------------------------------------------------------
+
+BeamState DebugAdapter::getBeamState()
+{
+    BeamState s;
+    s.available = true;
+
+    // Raw beam position straight from the emulator's own video model.
+    const int  rline   = filler.rasterLine();     // 0 .. 311 (wraps at 312)
+    const int  rpixelP = filler.rasterPixel();     // 0 .. 767 pixel-times
+    const bool vborder = filler.vBorder();
+
+    s.frame         = static_cast<uint64_t>(board.get_frame_no());
+    s.rasterLine    = static_cast<uint32_t>(rline);
+    s.vCycleInLine  = static_cast<uint32_t>(rpixelP);
+    s.rpixel        = static_cast<uint32_t>(rpixelP - 24); // internal coord
+    s.vCycleInFrame = static_cast<uint32_t>(rline) * VideoTiming::lineVCycles
+                    + static_cast<uint32_t>(rpixelP);
+
+    s.frameVCycles = VideoTiming::frameVCycles;
+    s.lineVCycles  = VideoTiming::lineVCycles;
+    s.frameLines   = VideoTiming::frameLines;
+
+    // Visible-area coordinates: same geometry the filler uses for the TV
+    // framebuffer (bmp_x = raster_pixel - center_offset). Border is NOT
+    // visible (ТЗ §8): vertical border or horizontally outside the picture.
+    const int bmpX = rpixelP - filler.centerOffset();
+    const int bmpY = rline   - filler.firstVisibleLine();
+    s.visible = filler.isVisible() && !vborder &&
+                bmpX >= 0 && bmpX < filler.scrWidth() && bmpY >= 0;
+    if (s.visible) {
+        s.visibleX = bmpX;
+        s.visibleY = bmpY;
+    } else {
+        s.visibleX = -1;
+        s.visibleY = -1;
+    }
+
+    // CPU currently executing "next to" the beam.
+    CpuState cpu = getCpuState();
+    s.cpuPc      = cpu.pc;
+    s.cpuOpcode  = peekMemory(cpu.pc);
+
+    // Palette entry the video path is shifting out at the current beam
+    // position — i.e. the entry an OUT 0Ch committing now would rewrite.
+    // In border/blanking there is no picture palette index under the beam;
+    // the border index is reported separately (ТЗ §12: don't conflate).
+    if (!vborder) {
+        s.hasPaletteIndex = true;
+        s.paletteIndex    = filler.currentColorIndex();
+        s.paletteValue    = io.RawPaletteByte(s.paletteIndex);
+    } else {
+        s.hasPaletteIndex = false;
+        s.paletteIndex    = -1;
+        s.paletteValue    = 0;
+    }
+    s.borderIndex = io.BorderIndex();
+
+    return s; // 'running' is filled in by DebugBackend (it owns the state machine)
+}
+
+std::vector<RasterEvent> DebugAdapter::getRasterEvents(
+    uint64_t frame, uint32_t vCycleStart, uint32_t vCycleEnd,
+    int port, uint16_t pc, size_t maxResults)
+{
+    std::vector<RasterEvent> all = rasterEvents_.snapshot();  // logical (oldest->newest)
+    std::vector<RasterEvent> out;
+    out.reserve(all.size());
+    for (const auto &ev : all) {
+        if (frame != 0 && ev.frame != frame) continue;
+        if (ev.vCycle < vCycleStart || ev.vCycle > vCycleEnd) continue;
+        if (port >= 0 && ev.port != static_cast<uint8_t>(port)) continue;
+        if (pc != 0xFFFF && ev.pc != pc) continue;
+        out.push_back(ev);
+    }
+    // Cap to the most recent maxResults entries (tail).
+    if (maxResults != static_cast<size_t>(-1) && out.size() > maxResults) {
+        out.erase(out.begin(), out.begin() + (out.size() - maxResults));
+    }
+    return out;
+}
+
+void DebugAdapter::clearRasterEvents()
+{
+    rasterEvents_.clear();
 }
 
 PaletteSnapshot DebugAdapter::paletteSnapshot() const

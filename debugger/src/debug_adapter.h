@@ -1,6 +1,7 @@
 #pragma once
 
 #include "debug_target.h"
+#include "ring_buffer.h"
 #include "memory.h"
 #include "vio.h"
 #include "tv.h"
@@ -62,6 +63,11 @@ public:
     void syncBreakpoints(const DebuggerBreakpoint *bps, size_t count) override;
 
     ScreenData screenSnapshot() override;
+    BeamState  getBeamState() override;
+    std::vector<RasterEvent> getRasterEvents(
+        uint64_t frame, uint32_t vCycleStart, uint32_t vCycleEnd,
+        int port, uint16_t pc, size_t maxResults) override;
+    void clearRasterEvents() override;
     PaletteSnapshot paletteSnapshot() const override;
     SoundSnapshot soundSnapshot() const override;
     void setMuted(bool muted) override;
@@ -93,6 +99,21 @@ public:
     static Board*  halBoard()  { return s_board; }
 
 private:
+    // -- Video timing constants (Stage 6.27) --------------------------------
+    // Declared ONCE here, in the adapter layer — the only Vector-specific
+    // access point. Agent API / MCP read them from the BeamState JSON and
+    // never compute timing themselves.
+    //
+    // Source of truth: src/filler.cpp — one pixel-time per iteration, line
+    // ends at raster_pixel == 768, frame wraps at raster_line == 312
+    // (22 vsync + 18 border + 256 picture + 16 border lines).
+    struct VideoTiming
+    {
+        static constexpr uint32_t lineVCycles  = 768;
+        static constexpr uint32_t frameLines   = 312;
+        static constexpr uint32_t frameVCycles = lineVCycles * frameLines; // 239616
+    };
+
     // -- Emulator components (hidden from outside) ----------------------------
 
     Memory memory;
@@ -144,6 +165,10 @@ private:
 
     MemoryReadCallback  memReadCb_;
     MemoryWriteCallback memWriteCb_;
+
+    // Stage 6.27 P2: OUT-with-beam-position events, recorded on the emulation
+    // thread (io.onwrite) and read from the query thread via RingBuffer.
+    RingBuffer<RasterEvent> rasterEvents_;
     std::function<void(uint32_t,uint32_t,bool,uint8_t)> prevMemOnRead_;
     std::function<void(uint32_t,uint32_t,bool,uint8_t)> prevMemOnWrite_;
 

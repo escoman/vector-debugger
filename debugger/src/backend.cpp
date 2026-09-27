@@ -1514,6 +1514,36 @@ DebugBackend::ScreenSnapshot DebugBackend::screenSnapshot() const
 }
 
 // ---------------------------------------------------------------------------
+// Stage 6.27: Beam / raster state facade
+// ---------------------------------------------------------------------------
+
+BeamState DebugBackend::beamState() const
+{
+    // Read-only: never pauses/steps/re-renders. The adapter reads state the
+    // video path has already computed; we only stamp whether the emulator was
+    // running at snapshot time (the backend owns the state machine).
+    BeamState s = target_->getBeamState();
+    s.running = (getState() == DebuggerState::Running);
+    return s;
+}
+
+// ---------------------------------------------------------------------------
+// Stage 6.27 P2: raster events facade (OUT-with-beam-position ring)
+// ---------------------------------------------------------------------------
+
+std::vector<RasterEvent> DebugBackend::rasterEvents(
+    uint64_t frame, uint32_t vCycleStart, uint32_t vCycleEnd,
+    int port, uint16_t pc, size_t maxResults) const
+{
+    return target_->getRasterEvents(frame, vCycleStart, vCycleEnd, port, pc, maxResults);
+}
+
+void DebugBackend::clearRasterEvents()
+{
+    target_->clearRasterEvents();
+}
+
+// ---------------------------------------------------------------------------
 // Palette snapshot
 // ---------------------------------------------------------------------------
 

@@ -593,6 +593,7 @@ if(ENABLE_AI_AGENT)
     add_library(debugger_agent STATIC
         ${AGENT_DIR}/agent_api.cpp
         ${AGENT_DIR}/agent_log.cpp
+        ${AGENT_DIR}/png_encoder.cpp
     )
 
     target_include_directories(debugger_agent PUBLIC
@@ -647,6 +648,7 @@ if(ENABLE_AI_AGENT)
         ${AGENT_DIR}/tests/test_agent_mock.cpp
         ${AGENT_DIR}/agent_api.cpp
         ${AGENT_DIR}/agent_log.cpp
+        ${AGENT_DIR}/png_encoder.cpp
         ${BINARY_RESOURCES}
     )
 

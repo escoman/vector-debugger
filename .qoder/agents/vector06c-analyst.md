@@ -134,7 +134,7 @@ ROM mapping незавершён без:
 
 ## MCP Tools
 
-Сервер `vector-debugger` предоставляет 70 инструментов `debug_*` (актуальный список — всегда через `tools/list`):
+Сервер `vector-debugger` предоставляет 73 инструмента `debug_*` (актуальный список — всегда через `tools/list`):
 
 - **Execution**: `debug_run`, `debug_pause`, `debug_step`, `debug_reset`, `debug_is_running`
 - **CPU**: `debug_get_cpu_state`, `debug_get_registers`, `debug_set_register`
@@ -154,6 +154,7 @@ ROM mapping незавершён без:
 - **RDB Links**: `debug_add_rdb_link`, `debug_remove_rdb_link`, `debug_get_rdb_links`
 - **Runtime Memory Analysis**: `debug_clear_memory_access_map`, `debug_get_memory_access_map`, `debug_get_memory_access_log`, `debug_create_memory_snapshot`, `debug_compare_memory_snapshots`
 - **Batch Analysis (Stage 6.26)**: `debug_disassemble_image`, `debug_coverage_report`, `debug_diff_memory`, `debug_find_bytecode_sequence`, `debug_find_immediate_in_range`, `debug_get_vram_bytes` — пакетные операции для уменьшения числа round-trip; семантическую классификацию выполняет клиент, MCP только отдаёт данные
+- **Raster / Beam (Stage 6.27)**: `debug_get_beam_state`, `debug_get_raster_events`, `debug_get_screen_snapshot` — живой видеолуч (racing-the-beam). **Один только VRAM недостаточен для растровых эффектов**: если ROM меняет палитру (`OUT 0x0C–0x0F`) посреди кадра, статический дамп VRAM этого не покажет. Цепочка: `debug_get_beam_state` (где луч + палитра под ним) → `debug_get_raster_events` (OUT-события с привязкой к `frame/v_cycle/raster_line/pc`) → `debug_get_screen_snapshot` (реальный собранный кадр TV как PNG). Все три read-only: не останавливают/не шагают/не перерисовывают эмуляцию
 
 ## Правила
 
