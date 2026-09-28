@@ -34,6 +34,35 @@ static RdbObjectType indexToType(int idx)
     }
 }
 
+// Copy `src` into a fixed GUI text buffer, never splitting a UTF-8 code point.
+// snprintf("%s") truncates on a byte boundary, so a Cyrillic comment (2 bytes
+// per letter) that overflows the buffer can leave a dangling continuation byte
+// at the end and render as garbage. This helper stops at the last whole
+// code point instead.
+static void copyTextUtf8Safe(char *dst, size_t dstCap, const std::string &src)
+{
+    if (dstCap == 0) return;
+    size_t n = std::min(src.size(), dstCap - 1);
+    std::memcpy(dst, src.data(), n);
+
+    if (n < src.size()) {           // we truncated — drop a trailing partial sequence
+        size_t i = n;               // i points just past the last copied byte
+        while (i > 0 && (static_cast<unsigned char>(dst[i - 1]) & 0xC0) == 0x80)
+            --i;                    // walk back over continuation bytes (10xxxxxx)
+        if (i > 0) {
+            unsigned char lead = static_cast<unsigned char>(dst[i - 1]);
+            size_t need;
+            if      ((lead & 0x80) == 0x00) need = 1;
+            else if ((lead & 0xE0) == 0xC0) need = 2;
+            else if ((lead & 0xF0) == 0xE0) need = 3;
+            else if ((lead & 0xF8) == 0xF0) need = 4;
+            else                            need = 1;   // invalid lead, treat as opaque
+            if ((n - i) + 1 < need)         n = i - 1;  // incomplete -> cut before the lead
+        }
+    }
+    dst[n] = '\0';
+}
+
 // ---------------------------------------------------------------------------
 // Cache refresh
 // ---------------------------------------------------------------------------
@@ -274,7 +303,7 @@ void RomDatabaseWindow::render(IDebugBackend &backend)
                 if (ImGui::MenuItem("Edit Comment")) {
                     editingComment_ = true;
                     editingAddress_ = contextAddress_;
-                    snprintf(editCommentBuffer_, sizeof(editCommentBuffer_), "%s", obj->comment.c_str());
+                    copyTextUtf8Safe(editCommentBuffer_, sizeof(editCommentBuffer_), obj->comment);
                 }
                 ImGui::Separator();
                 if (ImGui::MenuItem("Go to Disassembly")) {
@@ -399,7 +428,7 @@ void RomDatabaseWindow::openObjectDialog(const RdbController &rdb, uint16_t addr
         objDlgHasSize_ = false;
         objDlgSizeBuffer_[0] = '\0';
     }
-    snprintf(objDlgCommentBuffer_, sizeof(objDlgCommentBuffer_), "%s", obj->comment.c_str());
+    copyTextUtf8Safe(objDlgCommentBuffer_, sizeof(objDlgCommentBuffer_), obj->comment);
     showObjectDialog_ = true;
 }
 

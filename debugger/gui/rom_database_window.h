@@ -57,7 +57,7 @@ private:
     char editNameBuffer_[128] = "";
 
     bool editingComment_ = false;
-    char editCommentBuffer_[256] = "";
+    char editCommentBuffer_[4096] = "";
 
     // Add object dialog
     bool showAddDialog_ = false;
@@ -72,7 +72,7 @@ private:
     int objDlgTypeIndex_ = 0;
     char objDlgSizeBuffer_[16] = "";
     bool objDlgHasSize_ = false;
-    char objDlgCommentBuffer_[256] = "";
+    char objDlgCommentBuffer_[4096] = "";
 
     // Context menu state
     uint16_t contextAddress_ = 0;
