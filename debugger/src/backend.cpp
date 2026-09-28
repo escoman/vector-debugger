@@ -168,6 +168,11 @@ bool DebugBackend::loadRom(const std::string &path, uint32_t org)
         }
     }
 
+    // The xref / call-graph cache is a derived view of the loaded ROM image.
+    // Invalidate it so the next getXrefs()/getCallGraph()/getFunctionContext()
+    // rebuilds against this ROM instead of returning stale or empty results.
+    symbols_.invalidateXrefs();
+
     return true;
 }
 

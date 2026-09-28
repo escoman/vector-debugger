@@ -4,6 +4,10 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <map>
+#include <set>
+#include <utility>
+#include <vector>
 
 // ---------------------------------------------------------------------------
 // Symbols
@@ -19,12 +23,15 @@ bool SymbolDatabase::addSymbol(uint16_t addr, const std::string &name, SymbolTyp
     sym.name = name;
     sym.type = type;
     symbols_[addr] = sym;
+    invalidateXrefs();
     return true;
 }
 
 bool SymbolDatabase::removeSymbol(uint16_t addr)
 {
-    return symbols_.erase(addr) > 0;
+    bool removed = symbols_.erase(addr) > 0;
+    if (removed) invalidateXrefs();
+    return removed;
 }
 
 bool SymbolDatabase::renameSymbol(uint16_t addr, const std::string &newName)
@@ -149,6 +156,7 @@ bool SymbolDatabase::setRegion(uint16_t start, uint16_t end, MemoryRegionType ty
               });
 
     regions_ = adjusted;
+    invalidateXrefs();
     return true;
 }
 
@@ -157,6 +165,7 @@ bool SymbolDatabase::removeRegion(uint16_t start)
     for (auto it = regions_.begin(); it != regions_.end(); ++it) {
         if (it->start == start) {
             regions_.erase(it);
+            invalidateXrefs();
             return true;
         }
     }
@@ -243,64 +252,109 @@ void SymbolDatabase::rebuildXrefs(std::function<uint8_t(uint16_t)> readByte)
     xrefs_.clear();
     callTargets_.clear();
 
-    // Determine scan ranges: use Code regions if any, otherwise scan all 64K
-    std::vector<std::pair<uint16_t, uint16_t>> scanRanges;
+    auto readWord = [&readByte](uint16_t a) -> uint16_t {
+        uint16_t hi = static_cast<uint16_t>(a + 1);  // wraps at 0xFFFF
+        uint8_t lo = readByte(a);
+        uint8_t hb = readByte(hi);
+        return static_cast<uint16_t>((hb << 8) | lo);
+    };
 
-    if (!regions_.empty()) {
-        for (const auto &r : regions_) {
-            if (r.type == MemoryRegionType::Code) {
-                scanRanges.push_back({r.start, r.end});
+    // Scan ranges: Code regions if any, otherwise the whole 64K space.
+    std::vector<std::pair<uint16_t, uint16_t>> scanRanges;
+    for (const auto &r : regions_) {
+        if (r.type == MemoryRegionType::Code)
+            scanRanges.push_back({r.start, r.end});
+    }
+    const bool haveCodeRegions = !scanRanges.empty();
+    if (scanRanges.empty())
+        scanRanges.push_back({0x0000, 0xFFFF});
+
+    // A source address is a single instruction, so record at most one xref
+    // per source. Call/RST sources additionally register their target.
+    std::set<uint16_t> seenFrom;
+    auto record = [&](uint16_t from, uint16_t to, bool isCall) {
+        if (seenFrom.insert(from).second) {
+            XrefEntry xref;
+            xref.from = from;
+            xref.to = to;
+            xrefs_.push_back(xref);
+        }
+        if (isCall) callTargets_[to] = true;
+    };
+
+    auto decodeAt = [&](uint16_t addr, uint8_t opcode, uint8_t len) {
+        if (isCallOpcode(opcode) && len == 3) {
+            record(addr, readWord(static_cast<uint16_t>(addr + 1)), true);
+        } else if (isJmpOpcode(opcode) && len == 3) {
+            record(addr, readWord(static_cast<uint16_t>(addr + 1)), false);
+        } else if (isRstOpcode(opcode)) {
+            record(addr, static_cast<uint16_t>(opcode & 0x38), true);
+        }
+    };
+
+    // ---- Pass 1: aligned linear decode, seeded at every region start and
+    // every known symbol address. Seeding restarts instruction alignment at
+    // each boundary, so embedded data no longer desynchronises the whole walk.
+    std::vector<uint16_t> seeds;
+    for (const auto &range : scanRanges) seeds.push_back(range.first);
+    for (const auto &kv : symbols_) seeds.push_back(kv.first);
+    std::sort(seeds.begin(), seeds.end());
+    seeds.erase(std::unique(seeds.begin(), seeds.end()), seeds.end());
+
+    for (uint16_t seed : seeds) {
+        const std::pair<uint16_t, uint16_t> *containing = nullptr;
+        for (const auto &range : scanRanges) {
+            if (seed >= range.first && seed <= range.second) {
+                containing = &range;
+                break;
             }
         }
-    }
+        if (!containing) continue;
 
-    if (scanRanges.empty()) {
-        // No Code regions — scan entire address space
-        scanRanges.push_back({0x0000, 0xFFFF});
-    }
-
-    for (const auto &range : scanRanges) {
-        uint16_t addr = range.first;
-        while (addr <= range.second) {
+        uint16_t addr = seed;
+        while (addr <= containing->second) {
             uint8_t opcode = readByte(addr);
             uint8_t len = opcode_info::get_length(opcode);
-
-            if (isCallOpcode(opcode) && len == 3) {
-                uint8_t lo = readByte(static_cast<uint16_t>(addr + 1));
-                uint8_t hi = readByte(static_cast<uint16_t>(addr + 2));
-                uint16_t target = static_cast<uint16_t>((hi << 8) | lo);
-
-                XrefEntry xref;
-                xref.from = addr;
-                xref.to = target;
-                xrefs_.push_back(xref);
-                callTargets_[target] = true;
-            }
-            else if (isJmpOpcode(opcode) && len == 3) {
-                uint8_t lo = readByte(static_cast<uint16_t>(addr + 1));
-                uint8_t hi = readByte(static_cast<uint16_t>(addr + 2));
-                uint16_t target = static_cast<uint16_t>((hi << 8) | lo);
-
-                XrefEntry xref;
-                xref.from = addr;
-                xref.to = target;
-                xrefs_.push_back(xref);
-            }
-            else if (isRstOpcode(opcode)) {
-                uint16_t target = static_cast<uint16_t>(opcode & 0x38);
-                XrefEntry xref;
-                xref.from = addr;
-                xref.to = target;
-                xrefs_.push_back(xref);
-                callTargets_[target] = true;
-            }
-
-            // Advance to next instruction
+            if (len == 0) len = 1;
+            decodeAt(addr, opcode, len);
             uint16_t next = static_cast<uint16_t>(addr + len);
-            if (next <= addr) break;  // wrapped around
+            if (next <= addr) break;  // wrapped
             addr = next;
         }
     }
+
+    // ---- Pass 2: exhaustive every-byte CALL/RST recovery, accepted only when
+    // the 16-bit target points to a known entity (symbol, existing call target,
+    // or inside a Code region). This recovers call sites Pass 1 desynchronised
+    // over, while the filter keeps data false-positives out of the graph.
+    // Skipped when nothing is known to filter against (honest full-scan default).
+    if (haveCodeRegions || !symbols_.empty()) {
+        auto targetIsPlausible = [&](uint16_t target) -> bool {
+            if (symbols_.count(target)) return true;
+            if (callTargets_.count(target)) return true;
+            for (const auto &r : regions_) {
+                if (r.type == MemoryRegionType::Code &&
+                    target >= r.start && target <= r.end) return true;
+            }
+            return false;
+        };
+
+        for (uint16_t addr = 0x0000; ; addr = static_cast<uint16_t>(addr + 1)) {
+            if (!seenFrom.count(addr)) {
+                uint8_t opcode = readByte(addr);
+                if (isCallOpcode(opcode)) {
+                    uint16_t target = readWord(static_cast<uint16_t>(addr + 1));
+                    if (targetIsPlausible(target)) record(addr, target, true);
+                } else if (isRstOpcode(opcode)) {
+                    uint16_t target = static_cast<uint16_t>(opcode & 0x38);
+                    if (targetIsPlausible(target)) record(addr, target, true);
+                }
+            }
+            if (addr == 0xFFFF) break;
+        }
+    }
+
+    xrefsDirty_ = false;
 }
 
 std::vector<XrefEntry> SymbolDatabase::xrefsTo(uint16_t addr) const
@@ -363,6 +417,7 @@ void SymbolDatabase::clear()
     regions_.clear();
     xrefs_.clear();
     callTargets_.clear();
+    xrefsDirty_ = true;
 }
 
 // ---------------------------------------------------------------------------

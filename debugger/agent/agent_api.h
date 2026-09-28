@@ -302,6 +302,12 @@ private:
     DisassembleRangeResult
     linearDisassemble(uint16_t address, uint32_t size);
 
+    // Stage: fix empty callers/xrefs — rebuild the SymbolDatabase xref/call
+    // graph lazily (only when its cache is dirty) from current memory +
+    // symbols, so getXrefs()/getCallGraph()/getFunctionContext() reflect the
+    // loaded ROM instead of always returning empty. Cheap: skipped when clean.
+    void ensureXrefsBuilt();
+
     // Disassemble a function starting at 'address' until RET/HLT/unconditional
     // JMP or the next known symbol.  Returns the instruction list.
     std::vector<FunctionContext::Instruction> disassembleFunction(uint16_t address);

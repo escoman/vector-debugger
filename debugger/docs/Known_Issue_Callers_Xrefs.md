@@ -1,7 +1,7 @@
 # Known Issue — пустые `callers` / `xrefs` / `call_graph` в v06c-mcp
 
-- **Статус:** Open (обнаружено Agent'ом при ROM-анализе; починка отложена по решению —
-  зафиксировано как TODO, код не менялся)
+- **Статус:** Resolved (исправлено: `rebuildXrefs` подключён к реальному потоку
+  лениво по dirty-флагу + усилен скан; см. раздел «Resolution» ниже)
 - **Обнаружено:** Stage 4 ROM-анализ (отчёт `Stage3.md`, func `render_glyph_vram @0x0551`)
 - **Влияние:** `debug_get_xrefs`, `debug_get_call_graph` и поле `callers` в
   `debug_get_function_context` возвращают пустые списки для всех функций.
@@ -69,3 +69,32 @@
 Места вызова восстанавливали полным дизассемблированием `0x0100..0x50FE` + побайтовым
 поиском `CD <lo> <hi>` по каждой функции на клиенте (`abi_scan.py`) — независимо от
 сломанного `debug_get_xrefs`.
+
+## Resolution (как исправлено)
+
+1. **Ленивая привязка скана.** `SymbolDatabase` получил флаг `xrefsDirty_`
+   (`invalidateXrefs()` / `xrefsAreDirty()`). Инвалидация на `clear()`, `addSymbol`,
+   `removeSymbol`, `setRegion`, `removeRegion` и в `DebugBackend::loadRom()`.
+   `AgentApi::ensureXrefsBuilt()` перестраивает граф только когда флаг грязный, и
+   вызывается в начале `getXrefs()` / `getCallGraph()` / `getFunctionContext()` через
+   `readByte = backend_.readMemory` (peek, без мутаций). Запросы остались read-only.
+2. **Устойчивый скан.** `rebuildXrefs` теперь двухпроходный:
+   - Pass 1 — выровненная линейная декодировка, **посеваемая с каждой границы
+     Code-региона и каждого известного символа** (рассинхрон на вкраплениях данных
+     больше не «съедает» весь проход);
+   - Pass 2 — исчерпывающий попиксельный поиск CALL/RST, принимающий кандидата только
+     если цель — известный символ / call-target / внутри Code-региона (режет ложные
+     срабатывания от данных). При отсутствии символов/регионов Pass 2 не запускается —
+     честный дефолт (линейный проход по всему 64K).
+   Дедуп по адресу источника (`seenFrom`).
+3. **Регресс-тесты.** `test_symbol_database`: восстановление рассинхронизированного
+   CALL (`test_xrefs_misaligned_call_recovered`) и подавление ложного (`
+   test_xrefs_data_false_positive_suppressed`). `test_agent_api`: `getXrefs`
+   строится лениво без ручного `rebuildXrefs` (`test_get_xrefs_lazy_rebuild`) и
+   `getFunctionContext().callers` непустой (`test_get_function_context_callers`).
+   Итог: `test_symbol_database` 24/24, `test_agent_api` 117/117, `test_backend`
+   121/121, `test_agent_contract` 49/49, `test_agent_integration` 51/51,
+   `test_mcp_protocol` 60/60 — все зелёные.
+
+Правки — только в `debugger/` (`src/symbol_database.*`, `agent/agent_api.*`,
+`src/backend.cpp`, тесты); `src/` ядра не тронуты.

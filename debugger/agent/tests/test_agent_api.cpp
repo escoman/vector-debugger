@@ -1347,13 +1347,55 @@ static void test_get_function_not_found()
 
 static void test_get_xrefs_empty()
 {
-    TEST_BEGIN("getXrefs with no xrefs");
+    TEST_BEGIN("getXrefs returns empty for an unreferenced address");
     MockAgentBackend mock;
     AgentApi api(mock);
 
+    // The mock's default ROM has CALL 0x0200 at 0x0105, so 0x0200 is NOT a
+    // valid "empty" target once xrefs are actually built. Query an address no
+    // instruction references and that itself references nothing.
+    auto r = api.getXrefs(0x3FFF);
+    CHECK(r.success, "succeeds");
+    CHECK_EQ(0u, (unsigned)r.value.size(), "0 xrefs for unreferenced address");
+    TEST_END();
+}
+
+// Regression: xrefs must be built lazily by the query itself (no explicit
+// rebuildXrefs call). This is the actual bug — the server never wired the scan
+// into the real flow, so debug_get_xrefs / callers were always empty.
+static void test_get_xrefs_lazy_rebuild()
+{
+    TEST_BEGIN("getXrefs builds xref graph lazily without explicit rebuild");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    // Fresh query with no manual rebuildXrefs(): the dirty cache must be
+    // recomputed from the mock ROM (CALL 0x0200 @ 0x0105).
     auto r = api.getXrefs(0x0200);
     CHECK(r.success, "succeeds");
-    CHECK_EQ(0u, (unsigned)r.value.size(), "0 xrefs");
+    CHECK(r.value.size() > 0, "lazy scan found the caller");
+    bool found = false;
+    for (const auto &x : r.value)
+        if (x.from == 0x0105 && x.to == 0x0200) found = true;
+    CHECK(found, "caller 0x0105 -> 0x0200 present");
+    TEST_END();
+}
+
+// Regression: getFunctionContext().callers must be populated via the same lazy
+// xref build (this was always empty before the fix).
+static void test_get_function_context_callers()
+{
+    TEST_BEGIN("getFunctionContext reports callers via lazy xref build");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    auto ctxResult = api.getFunctionContext(0x0200);
+    CHECK(ctxResult.success, "succeeds");
+    const FunctionContext &ctx = ctxResult.value;
+    bool found = false;
+    for (uint16_t c : ctx.callers)
+        if (c == 0x0105) found = true;
+    CHECK(found, "callers contains 0x0105");
     TEST_END();
 }
 
@@ -2402,6 +2444,8 @@ int main()
 
     // Stage 6.1 Iteration 2 — getXrefs (§16)
     test_get_xrefs_empty();
+    test_get_xrefs_lazy_rebuild();
+    test_get_function_context_callers();
     test_get_xrefs_with_data();
 
     // Stage 6.1 Iteration 2 — getCallGraph (§17)

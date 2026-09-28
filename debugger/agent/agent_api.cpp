@@ -2236,10 +2236,24 @@ AgentApiResult<SymbolInfo> AgentApi::getFunction(uint16_t address)
 // Xrefs (Stage 6.1 §16)
 // ---------------------------------------------------------------------------
 
+void AgentApi::ensureXrefsBuilt()
+{
+    // Rebuild the xref / call-target scan only when the cache is stale (ROM
+    // load, symbol or region change). readMemory is a non-mutating peek, so
+    // this stays a read-only query and never perturbs the emulation.
+    SymbolDatabase &db = backend_.symbolDatabase();
+    if (!db.xrefsAreDirty()) return;
+    auto readByte = [this](uint16_t addr) -> uint8_t {
+        return backend_.readMemory(addr);
+    };
+    db.rebuildXrefs(readByte);
+}
+
 AgentApiResult<std::vector<XrefResult>>
 AgentApi::getXrefs(uint16_t address)
 {
     auto t0 = std::chrono::steady_clock::now();
+    ensureXrefsBuilt();
     const auto &db = backend_.symbolDatabase();
 
     auto toXrefs = db.xrefsTo(address);
@@ -2279,6 +2293,7 @@ AgentApiResult<std::vector<CallGraphEdge>>
 AgentApi::getCallGraph(std::optional<uint16_t> address, size_t limit)
 {
     auto t0 = std::chrono::steady_clock::now();
+    ensureXrefsBuilt();
     const auto &db = backend_.symbolDatabase();
     auto allEdges = db.callGraph();
 
@@ -2923,6 +2938,7 @@ void AgentApi::collectTraceEvents(
 AgentApiResult<FunctionContext> AgentApi::getFunctionContext(uint16_t address)
 {
     auto t0 = std::chrono::steady_clock::now();
+    ensureXrefsBuilt();
     FunctionContext ctx;
     ctx.address = address;
 

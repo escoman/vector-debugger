@@ -416,6 +416,66 @@ static void test_xrefs_rst()
     TEST_END();
 }
 
+// Regression for the callers/xrefs fix: a CALL that the aligned Pass-1 linear
+// walk steps over (because a preceding MVI consumes its opcode byte) must still
+// be recovered by the exhaustive Pass-2, provided the target is a known symbol.
+static void test_xrefs_misaligned_call_recovered()
+{
+    TEST_BEGIN("xrefs: misaligned CALL recovered by exhaustive pass");
+    SymbolDatabase db;
+    std::vector<uint8_t> mem;
+    mem.resize(0x0300, 0x00);
+
+    // 0x0100: MVI B,d (length 2) -> aligned walk jumps 0x0100 -> 0x0102,
+    // skipping the CALL opcode that actually lives at 0x0101.
+    mem[0x0100] = 0x06;
+    mem[0x0101] = 0xCD;  // CALL 0x0220 (misaligned on purpose)
+    mem[0x0102] = 0x20;
+    mem[0x0103] = 0x02;
+
+    db.addSymbol(0x0220, "sub_0220", SymbolType::Function);
+
+    auto readByte = [&mem](uint16_t addr) -> uint8_t {
+        return (addr < mem.size()) ? mem[addr] : 0x00;
+    };
+    db.rebuildXrefs(readByte);
+
+    auto refs = db.xrefsTo(0x0220);
+    bool found = false;
+    for (const auto &x : refs)
+        if (x.from == 0x0101 && x.to == 0x0220) found = true;
+    CHECK(found, "exhaustive pass recovered the misaligned CALL at 0x0101");
+    TEST_END();
+}
+
+// The exhaustive pass must NOT fabricate xrefs from data bytes: a CALL-shaped
+// sequence whose target is neither a symbol nor a Code region is rejected.
+static void test_xrefs_data_false_positive_suppressed()
+{
+    TEST_BEGIN("xrefs: implausible target suppressed (no data false positive)");
+    SymbolDatabase db;
+    std::vector<uint8_t> mem;
+    mem.resize(0x0300, 0x00);
+
+    mem[0x0100] = 0x06;
+    mem[0x0101] = 0xCD;  // CALL 0x0900 (misaligned, target is undefined)
+    mem[0x0102] = 0x00;
+    mem[0x0103] = 0x09;
+
+    // A known symbol elsewhere enables the exhaustive pass, but 0x0900 is not
+    // a symbol and not in any Code region -> the candidate must be dropped.
+    db.addSymbol(0x0220, "sub_0220", SymbolType::Function);
+
+    auto readByte = [&mem](uint16_t addr) -> uint8_t {
+        return (addr < mem.size()) ? mem[addr] : 0x00;
+    };
+    db.rebuildXrefs(readByte);
+
+    auto refs = db.xrefsTo(0x0900);
+    CHECK_EQ(0u, (unsigned)refs.size(), "no xref fabricated for undefined target");
+    TEST_END();
+}
+
 static void test_xrefs_from()
 {
     TEST_BEGIN("xrefs: xrefsFrom");
@@ -613,6 +673,8 @@ int main()
     test_xrefs_call();
     test_xrefs_jmp();
     test_xrefs_rst();
+    test_xrefs_misaligned_call_recovered();
+    test_xrefs_data_false_positive_suppressed();
     test_xrefs_from();
     test_xrefs_multiple();
 

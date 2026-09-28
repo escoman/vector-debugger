@@ -136,6 +136,14 @@ public:
     // Only scans regions classified as Code (or all memory if none classified).
     void rebuildXrefs(std::function<uint8_t(uint16_t)> readByte);
 
+    // Invalidate the cached xref / call-target scan so the next rebuildXrefs()
+    // recomputes from current memory + symbols. Called on ROM load, clear() and
+    // whenever symbols/regions change (createFunction, analyzeCode, setRegion).
+    void invalidateXrefs() { xrefsDirty_ = true; }
+
+    // Whether the cached xrefs are stale and must be rebuilt before querying.
+    bool xrefsAreDirty() const { return xrefsDirty_; }
+
     // All references TO a given address.
     std::vector<XrefEntry> xrefsTo(uint16_t addr) const;
 
@@ -178,6 +186,10 @@ private:
 
     // Known call targets (for auto-name generation)
     std::map<uint16_t, bool> callTargets_;
+
+    // Cached xref scan validity. Starts dirty (nothing scanned yet) and is
+    // cleared by rebuildXrefs(); set again by invalidateXrefs()/clear().
+    bool xrefsDirty_ = true;
 
     // Helper: check if opcode is CALL
     static bool isCallOpcode(uint8_t opcode);
