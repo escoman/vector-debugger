@@ -2190,7 +2190,7 @@ AgentApi::getSymbols(size_t limit)
         SymbolInfo info;
         info.address = all[i].address;
         info.name = all[i].name;
-        info.comment = all[i].comment;
+        info.comment = normalizeRdbText(all[i].comment);   // R2
         info.type = (all[i].type == SymbolType::Function)
             ? SymbolInfo::Type::Function
             : SymbolInfo::Type::Label;
@@ -2220,7 +2220,7 @@ AgentApiResult<SymbolInfo> AgentApi::getFunction(uint16_t address)
     SymbolInfo info;
     info.address = sym->address;
     info.name = sym->name;
-    info.comment = sym->comment;
+    info.comment = normalizeRdbText(sym->comment);   // R2
     info.type = (sym->type == SymbolType::Function)
         ? SymbolInfo::Type::Function
         : SymbolInfo::Type::Label;
@@ -2391,13 +2391,13 @@ RdbObjectResult rdbObjectToResult(const RdbObject &obj)
     r.name    = obj.name;
     r.size    = obj.size;
     r.hasSize = obj.hasSize;
-    r.comment = obj.comment;
+    r.comment = normalizeRdbText(obj.comment);   // R2: never emit a break into tool output
     r.links   = obj.links;
     // Flatten typed properties to string representation.
     for (const auto &kv : obj.properties) {
         switch (kv.second.type) {
             case RdbPropertyValue::Type::String:
-                r.properties[kv.first] = kv.second.stringValue;
+                r.properties[kv.first] = normalizeRdbText(kv.second.stringValue);
                 break;
             case RdbPropertyValue::Type::Integer:
                 r.properties[kv.first] = std::to_string(kv.second.intValue);
@@ -2947,7 +2947,7 @@ AgentApiResult<FunctionContext> AgentApi::getFunctionContext(uint16_t address)
     const DebugSymbol *sym = db.findSymbol(address);
     if (sym) {
         ctx.name = sym->name;
-        ctx.comment = sym->comment;
+        ctx.comment = normalizeRdbText(sym->comment);   // R2
     } else {
         ctx.name = SymbolDatabase::autoName(address);
     }

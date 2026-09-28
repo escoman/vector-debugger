@@ -308,6 +308,127 @@ TEST(property_nonexistent_object_fails)
 }
 
 // ---------------------------------------------------------------------------
+// Line-break normalization tests (RDB comment/property round-trip contract)
+// ---------------------------------------------------------------------------
+
+TEST(normalize_text_idempotent_and_basic)
+{
+    // §6.1 / §6.3
+    ASSERT_EQ(normalizeRdbText("a\nb"), std::string("a b"));
+    ASSERT_EQ(normalizeRdbText(std::string("\xd0\xb5\xd0\xb7 \xd0\xbf\xd0\xb5\xd1\x80\xd0\xb5\xd0\xbd\xd0\xbe\xd1\x81\xd0\xb0")),
+              std::string("\xd0\xb5\xd0\xb7 \xd0\xbf\xd0\xb5\xd1\x80\xd0\xb5\xd0\xbd\xd0\xbe\xd1\x81\xd0\xb0"));
+    std::string once = normalizeRdbText("a\n\n  b\r\n   c");
+    ASSERT_EQ(normalizeRdbText(once), once);          // idempotent
+    ASSERT(once.find('\n') == std::string::npos);
+    ASSERT(once.find('\r') == std::string::npos);
+    ASSERT_EQ(normalizeRdbText(std::string()), std::string());
+}
+
+TEST(normalize_text_crlf_and_indent)
+{
+    // §6.2: newline + hugging whitespace collapses to a single space
+    ASSERT_EQ(normalizeRdbText("a\r\n   b"), std::string("a b"));
+    ASSERT_EQ(normalizeRdbText("a \t\n\t b"), std::string("a b"));
+    ASSERT_EQ(normalizeRdbText("line1\nline2\nline3"), std::string("line1 line2 line3"));
+}
+
+TEST(normalize_text_unicode_breaks)
+{
+    // §6.4: U+2028, U+2029 and U+0085 are treated as line breaks
+    std::string in = std::string("a") + "\xE2\x80\xA8" + "b" + "\xE2\x80\xA9" + "c";
+    ASSERT_EQ(normalizeRdbText(in), std::string("a b c"));
+    std::string nel = std::string("x") + "\xC2\x85" + "y";
+    ASSERT_EQ(normalizeRdbText(nel), std::string("x y"));
+}
+
+TEST(normalize_text_preserves_meaningful_chars)
+{
+    // Cyrillic, ';', U+2192 arrow, U+00D7 times, U+2116 numero all survive verbatim
+    std::string in = std::string("\xD0\x9F\xD1\x80\xD0\xB8\xD0\xBC\xD0\xB5\xD1\x80; \xE2\x86\x92 \xC3\x97 \xE2\x84\x96 42");
+    ASSERT_EQ(normalizeRdbText(in), in);
+}
+
+TEST(set_rdb_comment_normalizes)
+{
+    // §6.1 end-to-end through the controller store
+    RdbController ctrl;
+    ctrl.initialize("vector06c", RdbRomIdentity());
+    ctrl.addObject(makeTestObject(0x1000, "foo"));
+    ctrl.setComment(0x1000, "a\nb");
+    ASSERT_EQ(ctrl.getComment(0x1000), std::string("a b"));
+}
+
+TEST(set_rdb_property_normalizes)
+{
+    // §6.5: string property values are normalized too
+    RdbController ctrl;
+    ctrl.initialize("vector06c", RdbRomIdentity());
+    ctrl.addObject(makeTestObject(0x1000, "foo"));
+    ctrl.setProperty(0x1000, "note", RdbPropertyValue::fromString("v1\nv2"));
+    const RdbPropertyValue *v = ctrl.getProperty(0x1000, "note");
+    ASSERT(v != nullptr);
+    ASSERT_EQ(v->stringValue, std::string("v1 v2"));
+}
+
+TEST(add_update_object_normalizes)
+{
+    RdbController ctrl;
+    ctrl.initialize("vector06c", RdbRomIdentity());
+
+    RdbObject obj = makeTestObject(0x1000, "foo");
+    obj.comment = "x\ny";
+    obj.properties["p"] = RdbPropertyValue::fromString("q\r\nz");
+    ctrl.addObject(obj);
+    ASSERT_EQ(ctrl.getObject(0x1000)->comment, std::string("x y"));
+    ASSERT_EQ(ctrl.getObject(0x1000)->properties.at("p").stringValue, std::string("q z"));
+
+    RdbObject upd = *ctrl.getObject(0x1000);
+    upd.comment = "1\n2\n3";
+    ctrl.updateObject(upd);
+    ASSERT_EQ(ctrl.getComment(0x1000), std::string("1 2 3"));
+}
+
+TEST(legacy_rdb_load_and_save_have_no_breaks)
+{
+    // §6.6: a legacy .rdb with a literal \n inside a comment/property must load
+    // normalized and must never write that break back to disk.
+    cleanupTestFiles();
+    {
+        std::ofstream f(TEST_RDB_PATH);
+        f << "{\n"
+          << "  \"format\": \"rdb\",\n"
+          << "  \"platform\": \"vector06c\",\n"
+          << "  \"version\": 1,\n"
+          << "  \"objects\": [\n"
+          << "    { \"address\": \"0x0100\", \"type\": \"function\", \"name\": \"foo\",\n"
+          << "      \"comment\": \"line1\\nline2\",\n"
+          << "      \"properties\": { \"note\": \"p1\\np2\" } }\n"
+          << "  ]\n"
+          << "}\n";
+    }
+
+    RdbController ctrl;
+    ASSERT(ctrl.load(TEST_RDB_PATH));
+    ASSERT_EQ(ctrl.getComment(0x0100), std::string("line1 line2"));
+    const RdbObject *o = ctrl.getObject(0x0100);
+    ASSERT(o != nullptr);
+    ASSERT(o->comment.find('\n') == std::string::npos);
+    ASSERT(o->properties.at("note").stringValue.find('\n') == std::string::npos);
+
+    // Force a re-save (mark dirty) and inspect the raw bytes on disk.
+    ctrl.setComment(0x0100, "trigger");
+    ASSERT(ctrl.saveAs(TEST_RDB_PATH));
+
+    std::ifstream rf(TEST_RDB_PATH);
+    std::string disk((std::istreambuf_iterator<char>(rf)), std::istreambuf_iterator<char>());
+    ASSERT(disk.find("line1\\nline2") == std::string::npos);
+    ASSERT(disk.find("p1\\np2") == std::string::npos);
+
+    cleanupTestFiles();
+}
+
+
+// ---------------------------------------------------------------------------
 // Link tests
 // ---------------------------------------------------------------------------
 

@@ -158,6 +158,24 @@ static void test_comment()
     TEST_END();
 }
 
+static void test_comment_normalizes_breaks()
+{
+    TEST_BEGIN("setComment strips line breaks");
+    SymbolDatabase db;
+
+    db.addSymbol(0x0345, "DRAW_SPRITE", SymbolType::Function);
+    CHECK(db.setComment(0x0345, "line1\nline2"), "set multiline comment");
+    CHECK_STR("line1 line2", db.findSymbol(0x0345)->comment, "newline -> single space");
+
+    db.setComment(0x0345, "a\r\n   b");
+    CHECK_STR("a b", db.findSymbol(0x0345)->comment, "crlf+indent -> one space");
+
+    // Idempotent: text without a break is untouched.
+    db.setComment(0x0345, "plain text");
+    CHECK_STR("plain text", db.findSymbol(0x0345)->comment, "no break preserved");
+    TEST_END();
+}
+
 static void test_find_by_name()
 {
     TEST_BEGIN("find symbol by name");
@@ -656,6 +674,7 @@ int main()
     test_rename_symbol();
     test_remove_symbol();
     test_comment();
+    test_comment_normalizes_breaks();
     test_find_by_name();
     test_all_symbols_sorted();
 

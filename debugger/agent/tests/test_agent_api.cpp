@@ -1744,6 +1744,31 @@ static void test_rdb_set_comment()
     TEST_END();
 }
 
+// Regression for the RDB line-break contract: a comment/property set through
+// the MCP surface must never retain a newline, so it is safe to splice verbatim
+// into layout.asm.
+static void test_rdb_comment_property_normalization()
+{
+    TEST_BEGIN("RDB comment/property line-break normalization");
+    MockAgentBackend mock;
+    AgentApi api(mock);
+
+    api.addRdbObject(0x0100, "foo", "Label");
+    auto r = api.setRdbComment(0x0100, "first\nsecond");
+    CHECK(r.success, "set multiline comment succeeds");
+
+    auto obj = api.getRdbObject(0x0100);
+    CHECK_STR("first second", obj.value.comment.c_str(), "newline collapsed to space");
+    CHECK(obj.value.comment.find('\n') == std::string::npos, "no newline in output");
+
+    auto pr = api.setRdbProperty(0x0100, "note", "v1\r\nv2");
+    CHECK(pr.success, "set multiline property succeeds");
+    auto obj2 = api.getRdbObject(0x0100);
+    CHECK(obj2.value.properties.count("note") > 0, "property present");
+    CHECK_STR("v1 v2", obj2.value.properties["note"].c_str(), "property newline collapsed");
+    TEST_END();
+}
+
 static void test_rdb_set_property()
 {
     TEST_BEGIN("setRdbProperty");
@@ -2473,6 +2498,7 @@ int main()
     test_rdb_update_not_found();
     test_rdb_remove_object();
     test_rdb_set_comment();
+    test_rdb_comment_property_normalization();
     test_rdb_set_property();
     test_rdb_get_not_found();
 

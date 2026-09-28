@@ -1,5 +1,6 @@
 #include "symbol_database.h"
 #include "opcode_info.h"
+#include "rdb_types.h"   // normalizeRdbText — shared text sanitizer (header-only)
 
 #include <algorithm>
 #include <cstdio>
@@ -46,7 +47,7 @@ bool SymbolDatabase::setComment(uint16_t addr, const std::string &comment)
 {
     auto it = symbols_.find(addr);
     if (it == symbols_.end()) return false;
-    it->second.comment = comment;
+    it->second.comment = normalizeRdbText(comment);   // R1: no line breaks in comments
     return true;
 }
 

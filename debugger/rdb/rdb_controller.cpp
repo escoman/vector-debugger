@@ -53,6 +53,17 @@ static bool hexToAddr(const std::string &s, uint16_t &addr)
     return true;
 }
 
+// Strip line breaks from an object's free-form text: the comment and every
+// string-typed property value. Names / addresses / sizes / links are untouched.
+static void normalizeObjectText(RdbObject &obj)
+{
+    obj.comment = normalizeRdbText(obj.comment);
+    for (auto &kv : obj.properties) {
+        if (kv.second.type == RdbPropertyValue::Type::String)
+            kv.second.stringValue = normalizeRdbText(kv.second.stringValue);
+    }
+}
+
 // Serialize a single RdbObject to JSON
 static json objectToJson(const RdbObject &obj)
 {
@@ -66,15 +77,18 @@ static json objectToJson(const RdbObject &obj)
     if (obj.hasSize) {
         j["size"] = obj.size;
     }
-    if (!obj.comment.empty()) {
-        j["comment"] = obj.comment;
+    // R4: normalize at the last gate before bytes hit disk, so the .rdb is
+    // guaranteed break-free even if some path bypassed the in-memory setters.
+    std::string comment = normalizeRdbText(obj.comment);
+    if (!comment.empty()) {
+        j["comment"] = comment;
     }
     if (!obj.properties.empty()) {
         json props = json::object();
         for (const auto &kv : obj.properties) {
             switch (kv.second.type) {
                 case RdbPropertyValue::Type::String:
-                    props[kv.first] = kv.second.stringValue;
+                    props[kv.first] = normalizeRdbText(kv.second.stringValue);
                     break;
                 case RdbPropertyValue::Type::Integer:
                     props[kv.first] = kv.second.intValue;
@@ -123,7 +137,9 @@ static RdbObject objectFromJson(const json &j)
     }
 
     if (j.contains("comment") && j["comment"].is_string()) {
-        obj.comment = j["comment"].get<std::string>();
+        // R3: sanitize legacy .rdb files on ingest so an old multi-line
+        // comment can never survive into memory (and a later save).
+        obj.comment = normalizeRdbText(j["comment"].get<std::string>());
     }
 
     if (j.contains("properties") && j["properties"].is_object()) {
@@ -132,7 +148,7 @@ static RdbObject objectFromJson(const json &j)
             const auto &val = it.value();
             if (val.is_string()) {
                 pv.type = RdbPropertyValue::Type::String;
-                pv.stringValue = val.get<std::string>();
+                pv.stringValue = normalizeRdbText(val.get<std::string>());
             } else if (val.is_boolean()) {
                 pv.type = RdbPropertyValue::Type::Boolean;
                 pv.boolValue = val.get<bool>();
@@ -412,7 +428,9 @@ bool RdbController::addObject(const RdbObject &object)
     if (impl_->objects.count(object.address)) {
         return false;  // already exists
     }
-    impl_->objects[object.address] = object;
+    RdbObject stored = object;
+    normalizeObjectText(stored);              // R1: sanitize whole-object write
+    impl_->objects[object.address] = stored;
     impl_->dirty = true;
     return true;
 }
@@ -424,9 +442,12 @@ bool RdbController::updateObject(const RdbObject &object)
         return false;
     }
 
+    RdbObject stored = object;
+    normalizeObjectText(stored);              // R1: sanitize whole-object write
+
     // Only set dirty if data actually changed
-    if (it->second != object) {
-        it->second = object;
+    if (it->second != stored) {
+        it->second = stored;
         impl_->dirty = true;
     }
     return true;
@@ -454,8 +475,9 @@ bool RdbController::setComment(uint16_t address, const std::string &comment)
         return false;
     }
 
-    if (it->second.comment != comment) {
-        it->second.comment = comment;
+    const std::string normalized = normalizeRdbText(comment);   // R1
+    if (it->second.comment != normalized) {
+        it->second.comment = normalized;
         impl_->dirty = true;
     }
     return true;
@@ -465,7 +487,7 @@ std::string RdbController::getComment(uint16_t address) const
 {
     auto it = impl_->objects.find(address);
     if (it == impl_->objects.end()) return "";
-    return it->second.comment;
+    return normalizeRdbText(it->second.comment);   // R2: belt-and-braces on read
 }
 
 // ---------------------------------------------------------------------------
@@ -480,12 +502,16 @@ bool RdbController::setProperty(uint16_t address, const std::string &name,
         return false;
     }
 
+    RdbPropertyValue storedValue = value;                       // R1
+    if (storedValue.type == RdbPropertyValue::Type::String)
+        storedValue.stringValue = normalizeRdbText(storedValue.stringValue);
+
     auto propIt = it->second.properties.find(name);
-    if (propIt != it->second.properties.end() && propIt->second == value) {
+    if (propIt != it->second.properties.end() && propIt->second == storedValue) {
         return true;  // no change
     }
 
-    it->second.properties[name] = value;
+    it->second.properties[name] = storedValue;
     impl_->dirty = true;
     return true;
 }
