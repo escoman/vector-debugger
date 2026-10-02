@@ -241,6 +241,8 @@ public:
     enum class CommandType {
         // Execution state
         Run, Pause, Step, Reset, Restart, Quit,
+        // Machine replacement (ROM load) — runs on the emulation thread
+        LoadRom,
         // Memory/Register
         MemoryWrite, RegisterWrite,
         // Breakpoints
@@ -271,6 +273,8 @@ public:
         uint16_t regValue = 0;
         // I/O write (Stage 6.1 Iteration 3)
         uint8_t ioValue = 0;
+        // LoadRom: ROM load address (name carries the path)
+        uint32_t org = 0;
         // Trace
         TraceExecutionParams traceParams;
         std::shared_ptr<std::promise<TraceExecutionResult>> tracePromise;

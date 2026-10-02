@@ -2,6 +2,8 @@
 
 #include "debug_target.h"
 
+#include <thread>
+
 class Memory;
 
 // ---------------------------------------------------------------------------
@@ -60,11 +62,17 @@ public:
     const std::vector<bool> &audioGateLog() const { return audioGateLog_; }
     void clearAudioGateLog() { audioGateLog_.clear(); }
 
+    // Thread that last executed loadRom() — a ROM load mutates the whole
+    // machine, so it must happen on the emulation thread, never on the
+    // thread that asked for it.
+    std::thread::id loadRomThread() const { return loadRomThread_; }
+
 private:
     Memory &memory_;
     bool    cpuInitialized_ = false;
     bool    audioActive_ = false;
     std::vector<bool> audioGateLog_;
+    std::thread::id loadRomThread_{};
 
     // prevOnRead_/prevOnWrite_ chain the RAW Memory::onread/onwrite type
     // (4-parameter). Stage 6.24: MemoryReadCallback grew a 5th pc param, but

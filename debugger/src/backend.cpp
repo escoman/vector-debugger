@@ -105,8 +105,28 @@ bool DebugBackend::loadRom(const std::string &path, uint32_t org)
 {
     if (!target_) return false;
 
-    // Delegate ROM loading to target (handles memory + CPU/board init)
-    if (!target_->loadRom(path, org)) {
+    // Replacing the machine is handed to the emulation thread: a frame of the
+    // previous ROM may still be running when the user loads a new one, because
+    // the pause flag is only sampled once per frame (poll_debugger), and the
+    // load zeroes all 64 KiB under the CPU's feet.
+    auto cmd = std::make_unique<Command>();
+    cmd->type = CommandType::LoadRom;
+    cmd->name = path;
+    cmd->org = org;
+
+    CommandResult loadResult;
+    if (!testSynchronous_ && !emulationLoopRunning_.load(std::memory_order_acquire)) {
+        // gui/main.cpp loads the command-line ROM before the emulation thread
+        // exists: nothing can race with us, and there is nobody to wait for.
+        auto future = cmd->promise.get_future();
+        cmd->state.store(CommandState::Executing, std::memory_order_release);
+        executeCommand(*cmd);
+        loadResult = future.get();
+    } else {
+        loadResult = submitAndWait(std::move(cmd));
+    }
+
+    if (!loadResult.success) {
         printf("DebugBackend::loadRom(): failed to load %s\n", path.c_str());
         return false;
     }
@@ -1310,6 +1330,20 @@ void DebugBackend::executeCommand(Command &cmd)
     case CommandType::Restart: {
         running_.store(false, std::memory_order_release);
         restart();
+        break;
+    }
+    case CommandType::LoadRom: {
+        // Runs on the emulation thread (see DebugBackend::loadRom). Stop the
+        // loop first so no frame executes after the machine is replaced —
+        // otherwise the new ROM would already have run a few frames by the
+        // time the caller gets its result back and sets state_ to Paused.
+        running_.store(false, std::memory_order_release);
+        bool ok = target_->loadRom(cmd.name, cmd.org);
+        result.success = ok;
+        if (!ok) {
+            result.error = "failed to load ROM: " + cmd.name;
+            result.status = CommandResult::Failed;
+        }
         break;
     }
     case CommandType::MemoryWrite: {

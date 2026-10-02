@@ -15,6 +15,8 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include <chrono>
+#include <thread>
 
 #include "memory.h"
 #include "i8080.h"
@@ -465,6 +467,49 @@ static void test_backend_reset_preserves_rom()
 }
 
 // ---------------------------------------------------------------------------
+// Test: replacing the machine belongs to the emulation thread. Loading a ROM
+// while frames of the previous one still run used to zero 64 KiB under the
+// CPU's feet — the pause flag is only sampled once per frame.
+// ---------------------------------------------------------------------------
+
+static void test_backend_loadrom_runs_on_emulation_thread()
+{
+    TEST_BEGIN("DebugBackend: loadRom executes on the emulation thread");
+
+    Memory mem;
+    test_memory = &mem;
+    NoBoardTarget target(mem);
+    DebugBackend backend(target);
+
+    std::vector<uint8_t> rom_data = { 0xC9 };   // RET
+    std::string path = write_temp_rom("thread_test.rom", rom_data);
+
+    // No emulation thread yet (the gui/main.cpp command-line ROM case): the
+    // load runs on the calling thread, there is nobody to hand it to.
+    CHECK(backend.loadRom(path, 0), "loadRom without an emulation loop succeeded");
+    CHECK(target.loadRomThread() == std::this_thread::get_id(),
+          "no loop → machine replaced by the calling thread");
+
+    std::thread emu([&]() { backend.runUntilPause(); });
+    for (int i = 0; i < 200 && !backend.isEmulationLoopRunning(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(backend.isEmulationLoopRunning(), "emulation loop is up");
+
+    CHECK(backend.loadRom(path, 0), "loadRom with an emulation loop succeeded");
+    CHECK(target.loadRomThread() == emu.get_id(),
+          "machine replaced on the emulation thread");
+    CHECK(target.loadRomThread() != std::this_thread::get_id(),
+          "not on the thread that asked for the load");
+    CHECK(backend.isPaused(), "load left the machine paused");
+
+    backend.requestQuit();
+    emu.join();
+    cleanup_temp_file(path);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -481,6 +526,7 @@ int main()
     test_explicit_org_override();
     test_backend_loadrom_paused();
     test_backend_reset_preserves_rom();
+    test_backend_loadrom_runs_on_emulation_thread();
 
     printf("\n=== Results: %d passed, %d failed (of %d) ===\n",
            tests_passed, tests_failed, tests_run);

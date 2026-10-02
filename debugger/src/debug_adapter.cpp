@@ -714,6 +714,19 @@ bool DebugAdapter::loadRom(const std::string &path, uint32_t org)
     board.reset(Board::ResetMode::LOADROM);
     // LOADROM sets SP=0xc300 and i8080_init() sets PC=0.
 
+    // i8080_init() clears only the flags and PC: IFF and the EI hold-off of
+    // the program that was running survive, and Board::reset() drops `irq`
+    // but leaves the `inte` pin high. init_from_vector() has just zeroed all
+    // 64 KiB, so the first vblank of the new ROM would fire RST 7 -> CALL
+    // 0038 into a field of NOPs and drown it in pushed return addresses (SP
+    // walks down by 2 per frame; the ROM never really starts). DI is the only
+    // public way to clear all three at once: it zeroes IFF and EI_PENDING and
+    // calls i8080_hal_iff(0) -> Board::interrupt(false) -> inte + irq.
+    // The opcode is passed directly, so nothing is fetched from memory and no
+    // video cycles are consumed; DI leaves PC=0001, restored right below.
+    i8080_execute(0xF3);   // DI
+    i8080_jump(0);         // a loaded ROM always starts at PC=0000
+
     // The bootloader is skipped when a ROM is loaded directly, but on a
     // real machine it is the one that re-initializes the sound hardware
     // after БЛК+ВВОД. Without this, state left by the previous ROM — an

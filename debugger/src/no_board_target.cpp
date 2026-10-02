@@ -161,6 +161,8 @@ void NoBoardTarget::reset(bool attachBoot)
 
 bool NoBoardTarget::loadRom(const std::string &path, uint32_t org)
 {
+    loadRomThread_ = std::this_thread::get_id();
+
     // Load ROM file using standard C++ I/O (no dependency on util.cpp)
     std::ifstream file(path, std::ios::binary | std::ios::ate);
     if (!file.is_open()) {

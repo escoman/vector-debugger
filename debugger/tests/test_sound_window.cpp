@@ -20,7 +20,11 @@
 #include "options.h"
 #include "debugger_types.h"
 #include "debug_adapter.h"
+#include "i8080.h"
 #include "sound_window.h"
+
+// CPU accessors (i8080_iff/i8080_pc/i8080_regs_sp) live in this namespace.
+using namespace i8080cpu;
 
 // Defined by the application layer; debug_adapter.cpp HAL references it.
 class DebugBackend;
@@ -511,6 +515,54 @@ static void test_loadrom_silences_stuck_note(DebugAdapter &adapter)
 }
 
 // ---------------------------------------------------------------------------
+// Regression: loading a ROM while the previous program sits with interrupts
+// enabled must not hand them to the new one. i8080_init() (called by
+// Board::reset) clears only flags and PC, so IFF, the EI hold-off and the
+// inte pin used to survive — with page 0 freshly zeroed, every vblank then
+// pushed RST 7's return address and the new ROM drowned (SP walking down).
+// ---------------------------------------------------------------------------
+
+static void test_loadrom_disables_inherited_interrupts(DebugAdapter &adapter)
+{
+    TEST_BEGIN("DebugAdapter: loadRom clears inherited IFF/INTE (no RST 7 storm)");
+
+    // Old program: EI at 0000 followed by NOPs. The EI hold-off expires two
+    // instructions later, which is exactly the state a ROM is in when the user
+    // loads another one on top of it.
+    adapter.reset(false);                 // BLKSBR: detach boot ROM, PC=0
+    adapter.writeMemory(0x0000, 0xFB);    // EI
+    for (int i = 1; i <= 4; ++i) adapter.writeMemory(static_cast<uint16_t>(i), 0x00);
+    for (int i = 0; i < 3; ++i) adapter.stepInstruction();
+    CHECK(i8080_iff(), "old program brought IFF up");
+
+    const std::string rom = "/tmp/v06c_test_inherited_interrupts.rom";
+    {
+        std::ofstream f(rom, std::ios::binary);
+        // JMP 0100 — a self-loop the NOP slide from 0000 lands in. It touches
+        // no stack, so SP must not move unless something else pushes into it.
+        const uint8_t spin[] = { 0xC3, 0x00, 0x01 };
+        f.write(reinterpret_cast<const char*>(spin), sizeof(spin));
+    }
+    CHECK(adapter.loadRom(rom, 0), "ROM loaded over the EI-ing program");
+
+    CHECK(!i8080_iff(), "load cleared IFF");
+    CHECK_EQ(0x0000, i8080_pc(), "PC=0000 (the DI in loadRom did not move it)");
+    uint16_t spAfterLoad = static_cast<uint16_t>(i8080_regs_sp());
+    CHECK_EQ(0xc300, spAfterLoad, "SP=0xc300 after load");
+
+    // With IFF or inte left inherited, each of these frames fires RST 7 ->
+    // CALL 0038 into the zeroed page 0 and pushes two bytes; ten frames walk
+    // SP down to 0xc2e8 while the spin loop itself never touches the stack.
+    for (int i = 0; i < 10; ++i) adapter.executeFrame();
+    CHECK_EQ(spAfterLoad, i8080_regs_sp(),
+             "10 frames of the spin loop pushed nothing — no interrupt storm");
+
+    std::remove(rom.c_str());
+    adapter.reset(false);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // Audio output gating: the device is silent unless BOTH the frame loop is
 // producing samples and the user has not muted the machine. Options.nosound
 // (set in main) keeps Soundnik::pause() away from SDL, so this exercises the
@@ -581,6 +633,7 @@ int main()
     test_adapter_ay_independent_from_standard_noise(adapter);
     test_adapter_i8253_port_mapping(adapter);
     test_loadrom_silences_stuck_note(adapter);
+    test_loadrom_disables_inherited_interrupts(adapter);
     test_audio_output_gate(adapter);
 
     adapter.shutdown();
