@@ -50,9 +50,21 @@ public:
 
     bool framePacingEnabled() const override { return false; }
 
+    // Audio gate — recorded so tests can assert that the backend opens and
+    // closes the output around the frame loop.
+    void setAudioEmulationActive(bool active) override {
+        audioGateLog_.push_back(active);
+        audioActive_ = active;
+    }
+    bool audioEmulationActive() const { return audioActive_; }
+    const std::vector<bool> &audioGateLog() const { return audioGateLog_; }
+    void clearAudioGateLog() { audioGateLog_.clear(); }
+
 private:
     Memory &memory_;
     bool    cpuInitialized_ = false;
+    bool    audioActive_ = false;
+    std::vector<bool> audioGateLog_;
 
     // prevOnRead_/prevOnWrite_ chain the RAW Memory::onread/onwrite type
     // (4-parameter). Stage 6.24: MemoryReadCallback grew a 5th pc param, but

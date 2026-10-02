@@ -99,6 +99,13 @@ public:
     virtual SoundSnapshot soundSnapshot() const { return {}; }
     virtual void setMuted(bool muted) { (void)muted; }
 
+    // Audio output gate: true only while the emulation loop is executing
+    // frames. Sound samples are produced by the frame loop, but the SDL
+    // audio callback drains the sample ring on its own thread, so without
+    // this the speaker keeps playing after the CPU has been paused.
+    // Called from the emulation thread only.
+    virtual void setAudioEmulationActive(bool active) { (void)active; }
+
     // -- Keyboard injection -------------------------------------------------
 
     virtual void pressKey(int scancode) {}

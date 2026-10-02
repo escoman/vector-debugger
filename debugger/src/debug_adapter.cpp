@@ -150,8 +150,10 @@ void DebugAdapter::init()
     // SDL audio callback.
     board.onframetimer = []() { /* no-op in debugger */ };
 
-    // Unpause SDL audio device to start receiving callbacks
-    soundnik.pause(0);
+    // The audio device starts out silent; the gate opens when the emulation
+    // loop begins producing frames (DebugBackend::executeFramesTarget_ ->
+    // setAudioEmulationActive(true)).
+    updateAudioPause();
 
     keyboard.onreset = [this](bool blkvvod) {
         board.reset(blkvvod ?
@@ -642,7 +644,31 @@ void DebugAdapter::setMuted(bool muted)
 {
     // Use soundnik.pause() to mute/unmute audio output
     // pause(1) = paused (muted), pause(0) = playing
-    soundnik.pause(muted ? 1 : 0);
+    // Mute is only one half of the condition — the frame loop has to be
+    // active as well, see setAudioEmulationActive().
+    audioMuted_ = muted;
+    updateAudioPause();
+}
+
+void DebugAdapter::setAudioEmulationActive(bool active)
+{
+    audioEmulationActive_ = active;
+    updateAudioPause();
+}
+
+// Sound samples are produced exclusively by the frame loop
+// (Board::execute_frame -> Soundnik::soundSteps -> sample()), but they are
+// consumed by the SDL audio callback on its own thread, out of an 8-buffer
+// ring (8 * 20 ms). Left alone, that ring keeps playing after the emulation
+// is paused, and once it runs dry the callback replays a half-written buffer
+// and pads with the last sample value (a DC level, not silence) — the
+// crackling heard around Pause/Resume. Soundnik::pause() both stops the
+// device (SDL waits for the running callback) and resets the read/write
+// cursors, so gating it on the frame loop drains the backlog on Pause and
+// starts Resume from an empty ring.
+void DebugAdapter::updateAudioPause()
+{
+    soundnik.pause(isAudioOutputPaused() ? 1 : 0);
 }
 
 // ---------------------------------------------------------------------------

@@ -1915,6 +1915,21 @@ void DebugBackend::executeFramesTarget_()
         stepInstruction();
     }
 
+    // Sound follows the frame loop: the audio device is opened here and shut
+    // again on every exit path, including the early quit return. Without this
+    // the SDL callback keeps draining the sample ring after a Pause and then
+    // degenerates into replaying half-written buffers (crackle). Single steps
+    // stay outside the scope on purpose — they would otherwise emit one 20 ms
+    // burst of sound each.
+    struct AudioScope
+    {
+        IDebugTarget *t;
+        explicit AudioScope(IDebugTarget *target) : t(target) {
+            t->setAudioEmulationActive(true);
+        }
+        ~AudioScope() { t->setAudioEmulationActive(false); }
+    } audioScope(target_);
+
     // Reset frame pacing timer — avoids a huge delta after pause/resume
     bool paceFrames = target_->framePacingEnabled();
     if (paceFrames) {

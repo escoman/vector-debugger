@@ -71,6 +71,12 @@ public:
     PaletteSnapshot paletteSnapshot() const override;
     SoundSnapshot soundSnapshot() const override;
     void setMuted(bool muted) override;
+    void setAudioEmulationActive(bool active) override;
+
+    // True when the audio device must stay silent: either the user muted the
+    // machine or the emulation loop is not producing frames. Diagnostic and
+    // test hook — the real effect happens in updateAudioPause().
+    bool isAudioOutputPaused() const { return audioMuted_ || !audioEmulationActive_; }
 
     void pressKey(int scancode) override;
     void releaseKey(int scancode) override;
@@ -135,6 +141,14 @@ private:
 
     // РУС/LAT LED state — updated by io.onruslat callback
     bool ruslatState_ = false;
+
+    // Audio output gating (see setAudioEmulationActive()). Both flags are
+    // written from the emulation/GUI threads and only ever funnel into
+    // Soundnik::pause(), which is the SDL-sanctioned way to stop the callback
+    // thread — it waits for the running callback to finish.
+    bool audioMuted_ = false;             // user's Mute toggle
+    bool audioEmulationActive_ = false;   // frame loop is running
+    void updateAudioPause();
 
     // Timer write tracking (i8253 counter ports 0x09-0x0B, control port 0x08)
     // Interprets the i8253 write protocol to extract counter load values.

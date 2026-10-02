@@ -511,6 +511,46 @@ static void test_loadrom_silences_stuck_note(DebugAdapter &adapter)
 }
 
 // ---------------------------------------------------------------------------
+// Audio output gating: the device is silent unless BOTH the frame loop is
+// producing samples and the user has not muted the machine. Options.nosound
+// (set in main) keeps Soundnik::pause() away from SDL, so this exercises the
+// state machine only.
+// ---------------------------------------------------------------------------
+
+static void test_audio_output_gate(DebugAdapter &adapter)
+{
+    TEST_BEGIN("DebugAdapter: audio output paused = muted || !frameLoopActive");
+
+    adapter.setMuted(false);
+    adapter.setAudioEmulationActive(false);
+    CHECK(adapter.isAudioOutputPaused(), "paused machine is silent");
+
+    adapter.setAudioEmulationActive(true);
+    CHECK(!adapter.isAudioOutputPaused(), "running machine with sound on is audible");
+
+    adapter.setMuted(true);
+    CHECK(adapter.isAudioOutputPaused(), "mute wins over a running machine");
+
+    adapter.setAudioEmulationActive(false);
+    adapter.setMuted(false);
+    CHECK(adapter.isAudioOutputPaused(),
+          "unmute must not resurrect audio while paused");
+
+    // Both inputs are remembered now, so a transition of one never silently
+    // drops the other (the previous setMuted() forwarded straight to SDL).
+    adapter.setAudioEmulationActive(true);
+    CHECK(!adapter.isAudioOutputPaused(), "gate reopens with the frame loop");
+    adapter.setMuted(true);
+    adapter.setAudioEmulationActive(false);
+    adapter.setAudioEmulationActive(true);
+    CHECK(adapter.isAudioOutputPaused(), "mute survives gate toggles");
+
+    adapter.setMuted(false);
+    adapter.setAudioEmulationActive(false);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -541,6 +581,7 @@ int main()
     test_adapter_ay_independent_from_standard_noise(adapter);
     test_adapter_i8253_port_mapping(adapter);
     test_loadrom_silences_stuck_note(adapter);
+    test_audio_output_gate(adapter);
 
     adapter.shutdown();
 

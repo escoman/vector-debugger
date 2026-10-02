@@ -4424,6 +4424,53 @@ static void test_step_after_pause()
 }
 
 // ---------------------------------------------------------------------------
+// Stage 5 — audio output gate
+//
+// Sound is produced by the frame loop but consumed by the SDL audio callback
+// on its own thread, so the backend has to close the output as soon as it
+// stops executing frames. NoBoardTarget records the gate transitions.
+// ---------------------------------------------------------------------------
+
+static void test_run_audio_gate_follows_frame_loop()
+{
+    TEST_BEGIN("S5: audio gate opens only while frames execute");
+
+    Memory mem;
+    DebugBackend *dbg;
+    setup(mem, dbg);
+    load_test_rom(mem);
+    dbg->reset();
+
+    CHECK(!test_target->audioEmulationActive(), "gate closed while paused");
+    CHECK(test_target->audioGateLog().empty(), "no gate changes during reset");
+
+    dbg->requestRun();
+    std::thread th([&]() { dbg->runUntilPause(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    dbg->requestPause();
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+    const auto &log = test_target->audioGateLog();
+    CHECK(!log.empty(), "gate was toggled by the frame loop");
+    CHECK(log.front(), "gate opened when the frame loop started");
+    CHECK(!log.back(), "gate closed when the frame loop ended");
+    CHECK(!test_target->audioEmulationActive(), "gate closed after pause");
+
+    // Stepping while paused must not open the gate — each step would
+    // otherwise push a 20 ms burst of sound into the device.
+    test_target->clearAudioGateLog();
+    dbg->requestStep();
+    CHECK(test_target->audioGateLog().empty(), "single step leaves the gate alone");
+
+    dbg->requestQuit();
+    th.join();
+    CHECK(!test_target->audioEmulationActive(), "gate closed after quit");
+
+    teardown(dbg);
+    TEST_END();
+}
+
+// ---------------------------------------------------------------------------
 // Stage 6.2 — Functions → Breakpoint tests
 //
 // These tests verify the breakpoint mechanism that the Functions window uses:
@@ -4772,6 +4819,7 @@ int main()
     test_quit_while_running_v2();
     test_rapid_run_pause();
     test_step_after_pause();
+    test_run_audio_gate_follows_frame_loop();
 
     // Stage 6.2 — Functions → Breakpoint tests
     test_func_bp_set();
