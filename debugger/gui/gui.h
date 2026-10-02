@@ -88,6 +88,9 @@ private:
     void renderInstructionHistory(IDebugBackend &backend);
     void renderStatusBar(IDebugBackend &backend);
     void renderControls(IDebugBackend &backend);
+    //! Ask every view to re-read its state after a machine reset
+    //! (F11/F12 hotkeys or a virtual ВВОД/СБР click).
+    void refreshAfterReset();
     void layoutCascade();
     void layoutTile();
     void applyCascade();

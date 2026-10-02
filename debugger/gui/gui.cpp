@@ -220,6 +220,25 @@ void DebuggerGui::gotoStack(uint16_t address)
 }
 
 // ---------------------------------------------------------------------------
+// Post-reset refresh — every view re-reads the machine state
+// ---------------------------------------------------------------------------
+
+void DebuggerGui::refreshAfterReset()
+{
+    memoryInspector_.requestRefresh();
+    stackView_.requestRefresh();
+    disassemblyView_.requestRefresh();
+    executionTrace_.requestRefresh();
+    ioInspector_.requestRefresh();
+    vectorScreen_.requestRefresh();
+    functionsWindow_.requestRefresh();
+    romDatabaseWindow_.requestRefresh();
+    xrefsWindow_.requestRefresh();
+    callGraphWindow_.markOutdated();
+    histNeedsRefresh_ = true;
+}
+
+// ---------------------------------------------------------------------------
 // Main render — assembles all panels
 // ---------------------------------------------------------------------------
 
@@ -255,17 +274,7 @@ void DebuggerGui::render(IDebugBackend &backend)
         }
 
         if (hotkeyPressed) {
-            memoryInspector_.requestRefresh();
-            stackView_.requestRefresh();
-            disassemblyView_.requestRefresh();
-            executionTrace_.requestRefresh();
-            ioInspector_.requestRefresh();
-            vectorScreen_.requestRefresh();
-            functionsWindow_.requestRefresh();
-            romDatabaseWindow_.requestRefresh();
-            xrefsWindow_.requestRefresh();
-            callGraphWindow_.markOutdated();
-            histNeedsRefresh_ = true;
+            refreshAfterReset();
         }
     }
 
@@ -469,6 +478,12 @@ void DebuggerGui::render(IDebugBackend &backend)
     callGraphWindow_.render(backend);
     searchWindow_.render(backend);
     keyboardWindow_.render(backend);
+    // A virtual ВВОД/СБР key resets the machine — same follow-up as the
+    // F11/F12 hotkeys.
+    if (keyboardWindow_.consumeResetPerformed()) {
+        currentRomName_ = "BOOT";
+        refreshAfterReset();
+    }
     soundWindow_.render(backend);
     planeScreen_.render(backend);
 

@@ -37,16 +37,19 @@ enum {
     SC_PERIOD    = 55,
     SC_SLASH     = 56,
     SC_F1 = 58, SC_F2 = 59, SC_F3 = 60, SC_F4 = 61, SC_F5 = 62,
-    SC_F6 = 63, SC_F7 = 64,
-    SC_HOME  = 106,
+    SC_F6 = 63, SC_F7 = 64, SC_F8 = 65,
+    SC_F11 = 68, SC_F12 = 69,
     SC_UP    = 82,
-    SC_END   = 107,
     SC_LEFT  = 80,
     SC_RIGHT = 79,
     SC_DOWN  = 81,
     SC_LSHIFT = 225,
     SC_LCTRL  = 224,
     SC_LALT   = 226,
+    // БЛК is a system key: on a real Vector it is wired to the reset circuit
+    // together with ВВОД/СБР and has no keyboard-matrix line of its own. The
+    // virtual key only latches host-side, so it never reaches the emulator.
+    SC_BLK    = -100,
 };
 
 // ---------------------------------------------------------------------------
@@ -130,10 +133,13 @@ const std::vector<KeyboardWindow::KeyDef> &KeyboardWindow::getKeyLayout()
         // --- Numpad (3 columns, offset 14.5u) ---
         // Single centered label (label_ru = nullptr)
 
-        // Row 0: VVOD BLK SBR
-        {14.5f, 0, 1, 1, SC_END,        "\xd0\x92\xd0\x92\xd0\x9e\xd0\x94", nullptr, KC_BROWN},  // ВВОД
-        {15.5f, 0, 1, 1, SC_F7,         "\xd0\x91\xd0\x9b\xd0\x9a", nullptr, KC_BROWN},  // БЛК
-        {16.5f, 0, 1, 1, SC_HOME,       "\xd0\xa1\xd0\x91\xd0\xa0", nullptr, KC_BROWN},  // СБР
+        // Row 0: ВВОД БЛК СБР
+        //   Three system keys — harmless on their own. The Vector resets only
+        //   on БЛК+ВВОД (attach boot ROM) or БЛК+СБР (detach boot ROM), so БЛК
+        //   latches like СС/УС and ВВОД/СБР fire the request while it is held.
+        {14.5f, 0, 1, 1, SC_F11,       "\xd0\x92\xd0\x92\xd0\x9e\xd0\x94", nullptr, KC_BROWN},  // ВВОД
+        {15.5f, 0, 1, 1, SC_BLK,       "\xd0\x91\xd0\x9b\xd0\x9a", nullptr, KC_BROWN},  // БЛК
+        {16.5f, 0, 1, 1, SC_F12,       "\xd0\xa1\xd0\x91\xd0\xa0", nullptr, KC_BROWN},  // СБР
 
         // Row 1: F1 F2 F3
         {14.5f, 1, 1, 1, SC_F1,        "F1",  nullptr, KC_FN},
@@ -146,9 +152,11 @@ const std::vector<KeyboardWindow::KeyDef> &KeyboardWindow::getKeyLayout()
         {16.5f, 2, 1, 1, SC_ESCAPE,    "\xd0\x90\xd0\xa0\x32", nullptr, KC_BROWN},  // АР2
 
         // Row 3: ↖ ↑ СТР
-        {14.5f, 3, 1, 1, SC_HOME,      "\xe2\x86\x96", nullptr, KC_ALPHA},  // ↖
+        //   ↖ = matrix col 1 bit 0x01 (the "^\" legend is the arrow glyph),
+        //   СТР = matrix col 1 bit 0x02 — both are host scancodes F7/F8.
+        {14.5f, 3, 1, 1, SC_F7,        "\xe2\x86\x96", nullptr, KC_ALPHA},  // ↖
         {15.5f, 3, 1, 1, SC_UP,        "\xe2\x96\xb2", nullptr, KC_ALPHA},  // ▲
-        {16.5f, 3, 1, 1, SC_END,       "\xd0\xa1\xd0\xa2\xd0\xa0", nullptr, KC_ALPHA},  // СТР
+        {16.5f, 3, 1, 1, SC_F8,        "\xd0\xa1\xd0\xa2\xd0\xa0", nullptr, KC_ALPHA},  // СТР
 
         // Row 4: ← ↓ →
         {14.5f, 4, 1, 1, SC_LEFT,      "\xe2\x97\x80", nullptr, KC_ALPHA},  // ◀
@@ -163,6 +171,32 @@ const std::vector<KeyboardWindow::KeyDef> &KeyboardWindow::getKeyLayout()
 // ---------------------------------------------------------------------------
 
 ImFont *KeyboardWindow::sSmallFont = nullptr;
+
+// ---------------------------------------------------------------------------
+// ВВОД / СБР — machine reset, not matrix keys
+// ---------------------------------------------------------------------------
+
+bool KeyboardWindow::isResetKey(int scancode)
+{
+    return scancode == SC_F11 || scancode == SC_F12;
+}
+
+bool KeyboardWindow::isBlkLatched() const
+{
+    return stickyKeys_.count(SC_BLK) > 0;
+}
+
+void KeyboardWindow::applyResetKey(int scancode, IDebugBackend &backend)
+{
+    if (scancode == SC_F11) {
+        backend.requestReset();      // БЛК+ВВОД: attach boot ROM, PC=0
+    } else if (scancode == SC_F12) {
+        backend.requestRestart();    // БЛК+СБР: detach boot ROM, PC=0
+    } else {
+        return;
+    }
+    resetPerformed_ = true;
+}
 
 // ---------------------------------------------------------------------------
 // Construction
@@ -182,6 +216,14 @@ bool KeyboardWindow::handleSdlEvent(const SDL_Event &event, IDebugBackend &backe
 
     if (event.type == SDL_KEYDOWN && !event.key.repeat) {
         int sc = event.key.keysym.scancode;
+        if (isResetKey(sc)) {
+            // Host F11/F12 already stand for the whole БЛК+ВВОД / БЛК+СБР
+            // combo — the core does the same in Keyboard::key_down(). The
+            // injection path goes straight to apply_key(), which has no
+            // matrix entry for them, so map them here instead.
+            applyResetKey(sc, backend);
+            return true;
+        }
         if (activeKeys_.insert(sc).second) {
             backend.pressKey(sc);
         }
@@ -217,6 +259,7 @@ void KeyboardWindow::render(IDebugBackend &backend)
     static bool wasVisible = visible_;
     if (!visible_ && wasVisible) {
         releaseAllKeys(backend);
+        stickyKeys_.erase(SC_BLK);  // never leave БЛК armed out of sight
     }
     wasVisible = visible_;
 
@@ -287,7 +330,16 @@ void KeyboardWindow::render(IDebugBackend &backend)
         bool isSticky = (hoveredScancode == SC_LSHIFT ||
                          hoveredScancode == SC_LCTRL);
         bool isRuslat = (hoveredScancode == SC_F6);
-        if (isSticky) {
+        bool isBlk = (hoveredScancode == SC_BLK);
+        if (isBlk) {
+            // БЛК: latches like СС/УС, but is a pure system key — nothing is
+            // sent to the matrix, it only arms the ВВОД/СБР resets.
+            if (isBlkLatched()) {
+                stickyKeys_.erase(SC_BLK);
+            } else {
+                stickyKeys_.insert(SC_BLK);
+            }
+        } else if (isSticky) {
             auto it = stickyKeys_.find(hoveredScancode);
             if (it != stickyKeys_.end()) {
                 stickyKeys_.erase(it);
@@ -303,6 +355,12 @@ void KeyboardWindow::render(IDebugBackend &backend)
             if (ruslatHoldTimer_ <= 0.0f) {
                 backend.pressKey(SC_F6);
                 ruslatHoldTimer_ = 0.15f; // ~8 frames at 50 Hz
+            }
+        } else if (isResetKey(hoveredScancode)) {
+            // ВВОД/СБР alone do nothing on a real Vector — they reset the
+            // machine only while БЛК is held down.
+            if (isBlkLatched()) {
+                applyResetKey(hoveredScancode, backend);
             }
         } else {
             // Release previous momentary key

@@ -38,6 +38,10 @@ public:
     bool isLocked() const { return keyboardLock_; }
     void requestRefresh() {}
 
+    //! True if the user clicked a virtual ВВОД/СБР key (machine reset) since
+    //! the last call — the GUI uses it to refresh all views and the ROM label.
+    bool consumeResetPerformed() { bool v = resetPerformed_; resetPerformed_ = false; return v; }
+
 private:
     enum KeyColor {
         KC_ALPHA,    // beige — letter/number keys
@@ -69,6 +73,12 @@ private:
     int selectedScancode_ = 0;         // last clicked (for visual feedback)
     float selectionTimer_ = 0.0f;
     float ruslatHoldTimer_ = 0.0f;     // hold F6 for several frames so ROM detects it
+    bool resetPerformed_ = false;      // ВВОД/СБР clicked → GUI refresh pending
+
+    // ВВОД/СБР: system keys — they reset the machine only while БЛК is latched
+    static bool isResetKey(int scancode);
+    bool isBlkLatched() const;
+    void applyResetKey(int scancode, IDebugBackend &backend);
 
     // Physical keyboard passthrough state
     std::set<int> activeKeys_;         // scancodes currently held on host keyboard
